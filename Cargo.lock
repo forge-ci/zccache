@@ -4049,6 +4049,7 @@ dependencies = [
  "console-subscriber",
  "dashmap",
  "kernal-api",
+ "memchr",
  "prost",
  "rayon",
  "regex",

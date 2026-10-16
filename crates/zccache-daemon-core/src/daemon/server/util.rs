@@ -221,10 +221,10 @@ pub(super) fn context_env_deps_fresh(
         .load()
         .get_includes(context_key)
         .unwrap_or_default();
+    let recorded_out_dir = recorded_root_relative_out_dir(state, context_key, client_env);
     deps.iter().all(|(name, recorded_hash)| {
         let current = rustc_env_dep_lookup_value(
-            state,
-            context_key,
+            recorded_out_dir.as_deref(),
             client_env,
             name,
             source_path,

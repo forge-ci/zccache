@@ -192,10 +192,12 @@ pub(super) fn hash_and_verify(input: HashVerifyInput<'_>) -> HashSourceOutcome {
         // Fast path: recompute artifact key from fresh hashes and compare
         // with the stored key.  Skips redundant journal freshness checks
         // and path clones that check_diagnostic performs.
+        // Resolved before the depgraph check: its callbacks run under a held
+        // context guard, and a graph read from there deadlocks (zccache#1955).
+        let recorded_out_dir = recorded_root_relative_out_dir(state, &context_key, client_env);
         let env_value = |name: &str| -> Option<String> {
             rustc_env_dep_lookup_value(
-                state,
-                &context_key,
+                recorded_out_dir.as_deref(),
                 client_env,
                 name,
                 source_path,
@@ -230,8 +232,7 @@ pub(super) fn hash_and_verify(input: HashVerifyInput<'_>) -> HashSourceOutcome {
                     get_hash,
                     |name| {
                         rustc_env_dep_lookup_value(
-                            state,
-                            &context_key,
+                            recorded_out_dir.as_deref(),
                             client_env,
                             name,
                             source_path,

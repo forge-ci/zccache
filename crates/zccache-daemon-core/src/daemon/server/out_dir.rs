@@ -8,7 +8,7 @@
 //!
 //! * a narrow per-release certificate (below), kept for entries recorded
 //!   before the general rule existed;
-//! * the general rule (soldr#3820): `OUT_DIR` lies under the context's
+//! * the general rule (zccache#1955): `OUT_DIR` lies under the context's
 //!   path-remapped worktree root and no compiler output contains the absolute
 //!   `OUT_DIR` text. The output bytes are the ground truth for "the path was
 //!   only used to find inputs" -- a crate that embeds `env!("OUT_DIR")` keeps
@@ -143,26 +143,30 @@ pub(super) fn rustc_env_dep_store_value(
 
 /// Value used for artifact identity when an existing entry is checked.
 ///
-/// The root-relative `OUT_DIR` is used only when the entry recorded exactly
-/// it, i.e. a prior compile proved the path absent from its outputs; every
-/// other entry keeps its certificate or physical value.
+/// `recorded_out_dir` is [`recorded_root_relative_out_dir`], resolved by the
+/// caller *before* it enters the depgraph: the check paths invoke this from
+/// inside a held context guard, and reading the graph again from there
+/// deadlocks the compile. The root-relative `OUT_DIR` is used only when the
+/// entry recorded exactly it, i.e. a prior compile proved the path absent from
+/// its outputs; every other entry keeps its certificate or physical value.
 pub(super) fn rustc_env_dep_lookup_value(
-    state: &SharedState,
-    context_key: &ContextKey,
+    recorded_out_dir: Option<&str>,
     client_env: Option<&[(String, String)]>,
     name: &str,
     source_path: &Path,
     resolved_includes: &[NormalizedPath],
 ) -> Option<String> {
     if name == "OUT_DIR" {
-        if let Some(candidate) = recorded_root_relative_out_dir(state, context_key, client_env) {
-            return Some(candidate);
+        if let Some(candidate) = recorded_out_dir {
+            return Some(candidate.to_owned());
         }
     }
     rustc_env_dep_cache_value(client_env, name, source_path, resolved_includes)
 }
 
-fn recorded_root_relative_out_dir(
+/// The root-relative `OUT_DIR` this context's entry recorded, if any. Reads
+/// the depgraph, so never call it while holding a graph guard.
+pub(super) fn recorded_root_relative_out_dir(
     state: &SharedState,
     context_key: &ContextKey,
     client_env: Option<&[(String, String)]>,
@@ -727,5 +731,113 @@ mod tests {
             ),
             CacheVerdict::HeadersChanged { .. }
         ));
+    }
+
+    fn remap_env(out_dir: &Path) -> Vec<(String, String)> {
+        vec![
+            ("ZCCACHE_PATH_REMAP".to_string(), "auto".to_string()),
+            ("OUT_DIR".to_string(), out_dir.to_string_lossy().into_owned()),
+        ]
+    }
+
+    fn output(path: &Path, bytes: &[u8]) -> RustcOutputFile {
+        write(path, std::str::from_utf8(bytes).unwrap_or_default());
+        RustcOutputFile {
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            path: NormalizedPath::new(path),
+            size: bytes.len() as u64,
+        }
+    }
+
+    /// zccache#1955: two worktrees whose OUT_DIRs differ only by their root
+    /// share one identity, as long as the outputs never contain the path.
+    #[test]
+    fn include_only_out_dir_is_root_relative_across_worktrees() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut values = Vec::new();
+        for name in ["a", "b"] {
+            let root = temp.path().join(name);
+            let out_dir = root.join("target/debug/build/dep-0123/out");
+            let rmeta = output(&root.join("target/debug/deps/libdep.rmeta"), b"no paths here");
+            let depinfo = output(
+                &root.join("target/debug/deps/dep.d"),
+                format!("# env-dep:OUT_DIR={}\n", out_dir.display()).as_bytes(),
+            );
+            let env = remap_env(&out_dir);
+            values.push(rustc_env_dep_store_value(
+                Some(&env),
+                "OUT_DIR",
+                &root.join("src/lib.rs"),
+                &[],
+                Some(&root),
+                &[rmeta, depinfo],
+            ));
+        }
+        assert_eq!(values[0], values[1], "{values:?}");
+        assert_eq!(
+            values[0].as_deref(),
+            Some("zccache:root-relative-out-dir:v1:target/debug/build/dep-0123/out")
+        );
+    }
+
+    /// A crate that embeds `env!("OUT_DIR")` keeps the physical value, so it
+    /// can never be served to another worktree.
+    #[test]
+    fn embedded_out_dir_keeps_the_physical_value() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("a");
+        let out_dir = root.join("target/debug/build/dep-0123/out");
+        let rmeta = output(
+            &root.join("target/debug/deps/libdep.rmeta"),
+            format!("const P: &str = \"{}\";", out_dir.display()).as_bytes(),
+        );
+        let env = remap_env(&out_dir);
+        let value = rustc_env_dep_store_value(
+            Some(&env),
+            "OUT_DIR",
+            &root.join("src/lib.rs"),
+            &[],
+            Some(&root),
+            &[rmeta],
+        );
+        assert_eq!(value.as_deref(), Some(out_dir.to_str().unwrap()));
+    }
+
+    /// Fail closed: remap off, OUT_DIR outside the root, or an unreadable
+    /// output all keep the physical value.
+    #[test]
+    fn root_relative_out_dir_requires_remap_root_and_readable_outputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("a");
+        let out_dir = root.join("target/out");
+        let rmeta = output(&root.join("target/libdep.rmeta"), b"clean");
+        let physical = Some(out_dir.to_string_lossy().into_owned());
+
+        let remap_off = vec![(
+            "OUT_DIR".to_string(),
+            out_dir.to_string_lossy().into_owned(),
+        )];
+        let store = |env: &[(String, String)], key_root: &Path, outputs: &[RustcOutputFile]| {
+            rustc_env_dep_store_value(
+                Some(env),
+                "OUT_DIR",
+                &root.join("src/lib.rs"),
+                &[],
+                Some(key_root),
+                outputs,
+            )
+        };
+        assert_eq!(store(&remap_off, &root, std::slice::from_ref(&rmeta)), physical);
+        let elsewhere = temp.path().join("elsewhere");
+        assert_eq!(
+            store(&remap_env(&out_dir), &elsewhere, std::slice::from_ref(&rmeta)),
+            physical
+        );
+        let missing = RustcOutputFile {
+            name: "libgone.rmeta".to_string(),
+            path: NormalizedPath::new(root.join("target/libgone.rmeta")),
+            size: 0,
+        };
+        assert_eq!(store(&remap_env(&out_dir), &root, &[rmeta, missing]), physical);
     }
 }
