@@ -222,7 +222,14 @@ pub(super) fn context_env_deps_fresh(
         .get_includes(context_key)
         .unwrap_or_default();
     deps.iter().all(|(name, recorded_hash)| {
-        let current = rustc_env_dep_cache_value(client_env, name, source_path, &includes);
+        let current = rustc_env_dep_lookup_value(
+            state,
+            context_key,
+            client_env,
+            name,
+            source_path,
+            &includes,
+        );
         crate::depgraph::hash_env_dep_value(current.as_deref()) == *recorded_hash
     })
 }

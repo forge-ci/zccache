@@ -207,7 +207,7 @@ pub(in crate::daemon::server) fn rehydrate_logical_depfile(
 pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
     path: &Path,
     current_out_dir: &Path,
-    generated_name: &str,
+    generated_name: Option<&str>,
 ) -> io::Result<()> {
     const PREFIX: &[u8] = b"# env-dep:OUT_DIR=";
     let bytes = std::fs::read(path)?;
@@ -241,10 +241,22 @@ pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
     if old_out_dir == current {
         return Ok(());
     }
-    let old_generated = Path::new(old_out_dir).join(generated_name);
-    let new_generated = current_out_dir.join(generated_name);
-    let old_generated = old_generated.to_string_lossy();
-    let new_generated = new_generated.to_string_lossy();
+    // A certificate names its one generated input; the root-relative rule
+    // (soldr#3820) rebases every path beneath OUT_DIR, so match the
+    // directory with a trailing separator.
+    let (old_generated, new_generated) = match generated_name {
+        Some(name) => (
+            Path::new(old_out_dir).join(name).to_string_lossy().into_owned(),
+            current_out_dir.join(name).to_string_lossy().into_owned(),
+        ),
+        None => {
+            let separator = std::path::MAIN_SEPARATOR;
+            (
+                format!("{old_out_dir}{separator}"),
+                format!("{current}{separator}"),
+            )
+        }
+    };
     let mut rewritten = Vec::with_capacity(bytes.len() + current.len());
     let mut saw_generated_path = false;
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {

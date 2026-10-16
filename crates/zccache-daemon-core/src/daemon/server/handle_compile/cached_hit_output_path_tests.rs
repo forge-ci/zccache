@@ -181,7 +181,7 @@ async fn perf_rustc_out_dir_hit_materializes_b_depinfo_without_a_paths() {
         current_depfile_dest: Some(depfile_dest.clone()),
         current_rustc_out_dir: Some(CertifiedOutDir {
             path: b_out.to_string_lossy().into_owned(),
-            generated_name: "bindgen.rs",
+            generated_name: Some("bindgen.rs"),
         }),
         depfile_key_root: None,
         compile_start: Instant::now(),

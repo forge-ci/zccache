@@ -320,6 +320,14 @@ impl DepGraph {
             .and_then(|key| self.rustc_env_dep_inputs(&key))
     }
 
+    /// Get the worktree root a context's key paths are normalized against.
+    /// `None` when the context is unknown or registered without a root.
+    #[must_use]
+    pub fn get_key_root(&self, key: &ContextKey) -> Option<NormalizedPath> {
+        self.resolve_instance_key(key)
+            .and_then(|key| self.contexts.get(&key).and_then(|e| e.key_root.clone()))
+    }
+
     /// Replace the recorded rustc env-dep snapshot for a context
     /// (zccache#1021).
     pub fn set_rustc_env_deps(&self, key: ContextKey, deps: Vec<(String, Option<ContentHash>)>) {
