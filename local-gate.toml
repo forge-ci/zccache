@@ -3,7 +3,7 @@
 #
 # Before every push, from a clean, committed tree:
 #
-#   uvx --from git+https://github.com/zackees/ci.yml@365508627edb8130e2c5615338b00bf02a069fa7 ci-lint local-gate run
+#   uvx --from git+https://github.com/zackees/ci.yml@41fcbca60a7901c8707411c4abf4d0b41dd71426 ci-lint local-gate run
 #
 # runs `run` below and, on success, stamps HEAD with a tree-bound
 # `Local-Gate:` trailer and one `Ci-Attestation:` trailer per gate of each

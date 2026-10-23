@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # The zackees/ci.yml commit whose ci_lint this repository uses. The `ci-mode`
 # jobs in ci.yml and integration.yml check out the same SHA;
 # ci/tests/test_local_gate.py keeps them in step.
-CI_LINT_REF = "365508627edb8130e2c5615338b00bf02a069fa7"
+CI_LINT_REF = "41fcbca60a7901c8707411c4abf4d0b41dd71426"
 LANES = ("lint", "py-tests", "check", "docs", "dylint", "tests")
 PY = ("uv", "run", "--no-project", "--python", "3.13")
 # ci.yml's and integration.yml's workflow-level env: warnings are errors. It
