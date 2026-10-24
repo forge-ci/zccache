@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/reader_sweep.rs:9:5
+   |
+LL |     cleanup(retired);
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/reader_sweep.rs:13:5
+   |
+LL |     cleanup(retired);
+   |     ^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

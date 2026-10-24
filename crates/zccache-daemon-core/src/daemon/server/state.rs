@@ -225,7 +225,7 @@ pub(super) struct SharedState {
     pub(super) depgraph_persistence: Arc<Gate>,
     /// Shared by publishers and exclusively owned by maintenance/Clear from
     /// cache-file mutation through index/live-map mutation.
-    pub(super) artifact_publication: Arc<crate::core::sync::Barrier>,
+    pub(super) artifact_publication: Arc<crate::core::sync::PublicationBarrier>,
     /// Reuses one shared OS staged-store lock for all active staged deliveries
     /// in this daemon and cache root. The final lease drop releases it, letting
     /// cross-process maintenance acquire the exclusive lock.
@@ -404,8 +404,11 @@ pub(super) struct SharedState {
 }
 
 impl SharedState {
-    pub(super) fn launch_blocking<F, R>(
+    /// Keep native root ownership through the tracked activity's final state
+    /// destruction, including cleanup that happens after the operation returns.
+    pub(super) fn launch_blocking_with_root<F, R>(
         self: &Arc<Self>,
+        root: crate::core::cache_root_lock::CacheRootWriterLease,
         operation: F,
     ) -> kernal_api::async_engine::Task<R>
     where
@@ -418,6 +421,11 @@ impl SharedState {
             state: Arc::clone(self),
         };
         let operation = move || {
+            // Queued cancellation destroys the callback and activity before
+            // the owner; execution/unwind uses the reverse local drop order.
+            let _ = &operation;
+            let _ = &activity;
+            let _root = root;
             let _activity = activity;
             crate::daemon::staged_stats::scope_blocking_request_profile(request_profile, operation)
         };
@@ -504,6 +512,47 @@ mod cache_root_writer_tests {
     /// refused, and refused distinguishably — `cache_root_error` preserves the
     /// `ErrorKind`, so `WouldBlock` is what tells contention apart from a real
     /// filesystem fault.
+    #[test]
+    fn released_root_stays_owned_until_every_background_lease_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let one = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        let two = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        first.release();
+        assert!(first.lease_for(std::time::Duration::ZERO).is_none());
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(one);
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(two);
+        let _next = CacheRootWriterLock::acquire(temp.path()).unwrap();
+    }
+
+    #[test]
+    fn dropping_the_server_claim_does_not_revoke_a_background_root_lease() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let job = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        drop(first);
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(job);
+        let _next = CacheRootWriterLock::acquire(temp.path()).unwrap();
+    }
+
     #[test]
     fn a_second_writer_is_refused_while_the_first_holds_the_root() {
         let temp = tempfile::tempdir().unwrap();

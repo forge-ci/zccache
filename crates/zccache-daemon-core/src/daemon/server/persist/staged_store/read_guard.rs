@@ -1,6 +1,8 @@
 //! Shared staged-generation ownership for cache-hit materialization.
 
-use super::{is_staged_link_or_reparse, open_store_lock, pointer_path, staged_root, STAGED_ROOT};
+#[cfg(test)]
+use super::staged_root;
+use super::{is_staged_link_or_reparse, pointer_path, StagedReadGuard, STAGED_ROOT};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -99,16 +101,6 @@ pub(in crate::daemon::server) fn is_staged_artifact_path(path: &Path) -> bool {
     root_matches && key_matches && generation_matches && output_matches
 }
 
-pub(in crate::daemon::server) fn is_staged_artifact_root(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| {
-        if crate::platform::host::is_windows() {
-            name.to_string_lossy().eq_ignore_ascii_case(STAGED_ROOT)
-        } else {
-            name == STAGED_ROOT
-        }
-    })
-}
-
 pub(super) fn validate_key(key_hex: &str) -> io::Result<()> {
     if !staged_key_supported(key_hex) {
         return Err(io::Error::new(
@@ -130,7 +122,7 @@ pub(in crate::daemon::server) struct StagedMaterializationLock {
     // Owns the handle: this lock is shared through an `Arc` and outlives the
     // call that took it, so a borrowing guard cannot express it. Under `fs2`
     // the open `File` was itself the token.
-    _store_lock: kernal_api::platform::fs::OwnedFileLock,
+    _store_lock: StagedReadGuard,
 }
 
 /// Shared ownership of the staged store while resolved generation paths are
@@ -177,10 +169,7 @@ fn acquire_staged_materialization_guard_from(
     wait_started: Instant,
 ) -> io::Result<StagedMaterializationGuard> {
     let root = staged_root(artifact_dir);
-    let store_lock = crate::core::wait::lock_shared_owned_for(
-        || open_store_lock(&root),
-        crate::core::wait::PROBE,
-    )?;
+    let store_lock = StagedReadGuard::acquire_for(artifact_dir, crate::core::wait::PROBE)?;
     #[cfg(test)]
     record_test_shared_lock_acquisition(&root);
     let wait_ns = wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -277,18 +266,14 @@ fn acquire_staged_materialization_guard_for_state_from(
     if let Some(existing) = cached_staged_materialization_lock(state) {
         return Ok(delivery(existing));
     }
-    let root = staged_root(artifact_dir);
     #[cfg(test)]
     super::hook::pause(
         artifact_dir,
         super::hook::StagedHookPoint::MaterializationStoreLockPending,
     );
-    let store_lock = crate::core::wait::lock_shared_owned_for(
-        || open_store_lock(&root),
-        crate::core::wait::PROBE,
-    )?;
+    let store_lock = StagedReadGuard::acquire_for(artifact_dir, crate::core::wait::PROBE)?;
     #[cfg(test)]
-    record_test_shared_lock_acquisition(&root);
+    record_test_shared_lock_acquisition(&staged_root(artifact_dir));
     let store_lock = Arc::new(StagedMaterializationLock {
         _store_lock: store_lock,
     });

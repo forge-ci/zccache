@@ -16,6 +16,7 @@ async fn rustc_index_commit_merges_verdicts_for_shared_artifact_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let server = crate::daemon::server::tests::bind_isolated_server(temp.path());
     let mut meta = ArtifactIndex::new(vec![], vec![], vec![], vec![], 0);
+    let mut retired = Vec::new();
     for key in ["plain", "dylint"] {
         meta.rustc_verdicts.insert(
             key.to_string(),
@@ -25,7 +26,14 @@ async fn rustc_index_commit_merges_verdicts_for_shared_artifact_bytes() {
                 exit_code: 0,
             },
         );
-        commit_rustc_artifact_index(&server.state, "artifact".to_string(), meta, false).unwrap();
+        commit_rustc_artifact_index(
+            &server.state,
+            "artifact".to_string(),
+            meta,
+            false,
+            &mut retired,
+        )
+        .unwrap();
         meta = ArtifactIndex::new(vec![], vec![], vec![], vec![], 0);
     }
     let cached = server.state.artifacts.get("artifact").unwrap();
@@ -410,4 +418,85 @@ fn staged_depfile_persistence_source_survives_plan_cleanup() {
     );
     drop(guard);
     assert!(!preserved.as_path().exists());
+}
+
+#[tokio::test]
+async fn rustc_replacement_releases_publication_before_private_cleanup() {
+    crate::test_support::test_timeout(async {
+        use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+        let directory = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
+        let private = server.state.cache_dir.join("replaced-private-plan");
+        std::fs::create_dir_all(&private).unwrap();
+        let output = private.join("old.rlib");
+        std::fs::write(&output, b"private").unwrap();
+        let key = "c".repeat(64);
+        server.state.artifacts.insert(
+            key.clone(),
+            CachedArtifact::from_provisional_staged(
+                ArtifactIndex::new(vec!["old.rlib".into()], vec![7], vec![], vec![], 0),
+                vec![output],
+                Arc::new(StagedCompilePlan::for_test(private.clone(), Vec::new())),
+            ),
+        );
+        let hook = StagedHookGuard::arm(&private, StagedHookPoint::PrivatePlanCleanup);
+        let state = Arc::clone(&server.state);
+        let replacement_key = key.clone();
+        let replacement = tokio::task::spawn_blocking(move || {
+            let mut retired = Vec::new();
+            let publication = state
+                .artifact_publication
+                .blocking_read_for(Duration::from_secs(5));
+            let result = commit_rustc_artifact_index(
+                &state,
+                replacement_key,
+                ArtifactIndex::new(vec!["new.rlib".into()], vec![11], vec![], vec![], 0),
+                false,
+                &mut retired,
+            );
+            drop(publication);
+            drop(retired);
+            result
+        });
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        let writer = tokio::time::timeout(
+            Duration::from_millis(100),
+            server
+                .state
+                .artifact_publication
+                .drain_for(Duration::from_secs(5)),
+        )
+        .await;
+        let writer_proceeded = writer.is_ok();
+        drop(writer);
+        // Old code still owns the map shard at the hook. Query only after
+        // proving exclusion was released, so RED always terminates.
+        let replacement_visible = writer_proceeded
+            && server
+                .state
+                .artifacts
+                .get(&key)
+                .is_some_and(|entry| entry.meta.output_sizes == [11]);
+        hook.resume();
+        tokio::time::timeout(Duration::from_secs(10), replacement)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            writer_proceeded,
+            "replacement destructor retained publication exclusion"
+        );
+        assert!(
+            replacement_visible,
+            "replacement was not visible before private cleanup"
+        );
+        assert!(!private.exists());
+    })
+    .await;
 }

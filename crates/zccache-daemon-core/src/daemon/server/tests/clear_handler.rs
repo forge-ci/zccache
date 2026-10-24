@@ -9,6 +9,193 @@
 
 use super::super::*;
 
+#[path = "clear_handler_provisional.rs"]
+mod provisional;
+#[path = "clear_handler_recovery.rs"]
+mod recovery;
+
+#[tokio::test]
+async fn handle_clear_releases_publication_before_kv_sweep() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = NormalizedPath::new(directory.path());
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let index_writer = tokio::spawn(run_index_writer(
+            server.index_writer_rx.take().unwrap(),
+            Arc::clone(&server.state.artifact_store),
+            Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
+        ));
+        let old_key = crate::artifact::Key::from_hex(&"a".repeat(64)).unwrap();
+        server
+            .state
+            .exec_store
+            .put_async(
+                handle_exec_probe::EXEC_PROBE_NAMESPACE,
+                &old_key,
+                b"old before Clear",
+            )
+            .await
+            .unwrap();
+        let hook = StagedHookGuard::arm(cache_dir.as_path(), StagedHookPoint::KvNamespaceSweep);
+        let state = Arc::clone(&server.state);
+        let clear =
+            tokio::spawn(async move { super::super::handle_clear::handle_clear(&state).await });
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(std::time::Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        let read = server.state.artifact_publication.try_read_owned();
+        let publication_permitted = read.is_ok();
+        if let Ok(_lease) = read {
+            let key = crate::artifact::Key::from_hex(&"c".repeat(64)).unwrap();
+            server
+                .state
+                .exec_store
+                .put_async(
+                    handle_exec_probe::EXEC_PROBE_NAMESPACE,
+                    &key,
+                    b"new after Clear",
+                )
+                .await
+                .unwrap();
+        }
+        hook.resume();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), clear)
+            .await
+            .unwrap()
+            .unwrap();
+        server.state.index_writer_shutdown.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), index_writer)
+            .await
+            .expect("index writer must drain after shutdown")
+            .unwrap();
+        assert!(matches!(response, Response::Cleared { .. }));
+        assert!(server
+            .state
+            .exec_store
+            .get_async(handle_exec_probe::EXEC_PROBE_NAMESPACE, &old_key,)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            publication_permitted,
+            "Clear retained the publication writer during recursive KV cleanup"
+        );
+        let key = crate::artifact::Key::from_hex(&"c".repeat(64)).unwrap();
+        assert_eq!(
+            server
+                .state
+                .exec_store
+                .get_async(handle_exec_probe::EXEC_PROBE_NAMESPACE, &key)
+                .await
+                .unwrap()
+                .unwrap(),
+            b"new after Clear"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn cancelled_clear_keeps_its_worker_owned_until_cleanup_finishes() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = NormalizedPath::new(directory.path());
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let index_writer = tokio::spawn(run_index_writer(
+            server.index_writer_rx.take().unwrap(),
+            Arc::clone(&server.state.artifact_store),
+            Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
+        ));
+        let old_key = crate::artifact::Key::from_hex(&"a".repeat(64)).unwrap();
+        server
+            .state
+            .exec_store
+            .put_async(
+                handle_exec_probe::EXEC_PROBE_NAMESPACE,
+                &old_key,
+                b"old before Clear",
+            )
+            .await
+            .unwrap();
+        let hook = StagedHookGuard::arm(cache_dir.as_path(), StagedHookPoint::KvNamespaceSweep);
+        let state = Arc::clone(&server.state);
+        let clear =
+            tokio::spawn(async move { super::super::handle_clear::handle_clear(&state).await });
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(std::time::Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        clear.abort();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), clear)
+                .await
+                .expect("Clear cancellation must return")
+                .unwrap_err()
+                .is_cancelled()
+        );
+        let cleanup_is_owned = server.state.disk_maintenance.try_acquire().is_err();
+        let publication_is_released = server.state.artifact_publication.try_read_owned().is_ok();
+        // Finish the WAL actor so only the cleanup worker can retain this claim.
+        server.state.index_writer_shutdown.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), index_writer)
+            .await
+            .expect("index writer must drain after shutdown")
+            .unwrap();
+        server.state.cache_root_lock.release();
+        let root = cache_dir.as_path().to_path_buf();
+        let root_is_owned = tokio::task::spawn_blocking(move || {
+            match crate::core::cache_root_lock::CacheRootWriterLock::acquire(&root) {
+                Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+                Ok(contender) => {
+                    drop(contender);
+                    false
+                }
+            }
+        })
+        .await
+        .unwrap();
+        hook.resume();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while server.state.disk_maintenance.try_acquire().is_err() {
+            assert!(
+                std::time::Instant::now() < until,
+                "cancelled Clear did not finish owned cleanup"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            root_is_owned,
+            "explicit daemon release let a new native writer enter during owned cleanup"
+        );
+        assert!(
+            cleanup_is_owned,
+            "cancelling Clear released its maintenance permit before the blocking worker finished"
+        );
+        assert!(
+            publication_is_released,
+            "recursive cleanup retained publication exclusion"
+        );
+    })
+    .await;
+}
+
 /// Unit-level invariant: an entry stored in `SystemIncludeCache` survives
 /// being "skipped by Clear" cleanly. The follow-up `get` stat-verifies the
 /// compiler binary; an unchanged binary returns the cached entry, and any
@@ -80,6 +267,11 @@ async fn handle_clear_preserves_system_includes() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
 
         let fake_compiler = tmp.path().join("fake-clang");
@@ -101,7 +293,7 @@ async fn handle_clear_preserves_system_includes() {
         // Drive handle_clear via the same internal call site that the
         // request handler uses. This bypasses IPC so we retain access
         // to the server to observe state after Clear.
-        let response = super::super::handle_clear::handle_clear(server.test_state()).await;
+        let response = super::super::handle_clear::handle_clear(&server.test_state_arc()).await;
         assert!(
             matches!(response, Response::Cleared { .. }),
             "expected Cleared response, got: {response:?}"
@@ -133,6 +325,11 @@ async fn handle_clear_preserves_in_flight_private_staging() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let staged = server.test_state().staging.path().join("active-output.o");
         std::fs::write(&staged, b"compiler result").unwrap();
@@ -159,7 +356,7 @@ async fn handle_clear_preserves_in_flight_private_staging() {
         )
         .unwrap();
 
-        let response = super::super::handle_clear::handle_clear(server.test_state()).await;
+        let response = super::super::handle_clear::handle_clear(&server.test_state_arc()).await;
         assert!(matches!(
             response,
             Response::Cleared {
@@ -198,6 +395,11 @@ async fn handle_clear_cannot_be_overtaken_by_delayed_startup_hydration() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let key = "3".repeat(64);
         let meta = ArtifactIndex::new(
@@ -260,6 +462,11 @@ async fn handle_clear_waits_for_owned_cache_lookup_lease() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let key = "7".repeat(64);
         let meta = ArtifactIndex::new(

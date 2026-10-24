@@ -1,0 +1,10 @@
+error: short publication or store exclusion must not cross suspension
+  --> $DIR/async_commit_await.rs:4:34
+   |
+LL |     std::future::pending::<()>().await;
+   |                                  ^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: aborting due to 1 previous error
+

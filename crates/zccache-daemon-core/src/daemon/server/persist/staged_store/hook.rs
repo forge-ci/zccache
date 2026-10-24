@@ -15,6 +15,10 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaterializePublish,
     MaintenanceStoreLockPending,
     MaterializationStoreLockPending,
+    TreeSweep,
+    PrivatePlanCleanup,
+    KvNamespaceSweep,
+    IndexFlush,
 }
 
 struct ActiveHook {
@@ -39,6 +43,33 @@ pub(in crate::daemon::server) struct StagedHookGuard {
 }
 
 impl StagedHookGuard {
+    // Identify the actual store allocation: independent WALs must not consume
+    // one another's hook while tests execute concurrently.
+    fn index_scope(store: &crate::artifact::ArtifactStore) -> PathBuf {
+        PathBuf::from(format!("wal-store-{store:p}"))
+    }
+
+    pub(in crate::daemon::server) fn arm_index_flush(
+        store: &crate::artifact::ArtifactStore,
+    ) -> Self {
+        Self::arm(&Self::index_scope(store), StagedHookPoint::IndexFlush)
+    }
+
+    pub(in crate::daemon::server) fn pause_index_flush(store: &crate::artifact::ArtifactStore) {
+        pause(&Self::index_scope(store), StagedHookPoint::IndexFlush);
+    }
+
+    pub(in crate::daemon::server) fn pause_private_plan_cleanup(scope: &Path) {
+        pause(scope, StagedHookPoint::PrivatePlanCleanup);
+    }
+    pub(in crate::daemon::server) fn pause_kv_sweep(scope: &Path) {
+        pause(scope, StagedHookPoint::KvNamespaceSweep);
+    }
+    pub(in crate::daemon::server) fn wait_until_reached_for(&self, timeout: std::time::Duration) {
+        crate::core::wait::recv_for(&self.reached, timeout)
+            .expect("staged operation did not reach its pause point within the test budget");
+    }
+
     pub(in crate::daemon::server) fn arm(scope: &Path, point: StagedHookPoint) -> Self {
         let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         let (reached_tx, reached) = mpsc::sync_channel(1);

@@ -1,0 +1,16 @@
+error: immediate detach enumeration belongs to the bounded Clear detach owners
+  --> $DIR/shallow_wrong_owner.rs:8:13
+   |
+LL |     let _ = Cursor::open_for(Path::new("cache"), Duration::from_secs(1));
+   |             ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: immediate detach enumeration belongs to the bounded Clear detach owners
+  --> $DIR/shallow_wrong_owner.rs:11:13
+   |
+LL |     let _ = Cursor::open_for;
+   |             ^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

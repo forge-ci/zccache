@@ -1,0 +1,52 @@
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:5:5
+   |
+LL |     std::mem::forget(permit);
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:9:13
+   |
+LL |     let _ = std::mem::forget::<Commit>;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:12:10
+   |
+LL |     drop(ManuallyDrop::new(permit));
+   |          ^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:16:13
+   |
+LL |     let _ = Box::into_raw(Box::new(permit));
+   |             ^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:20:32
+   |
+LL |     let erased: Box<dyn Any> = Box::new(permit);
+   |                                ^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:25:10
+   |
+LL |     drop(std::mem::MaybeUninit::new(permit));
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:29:13
+   |
+LL |     let _ = Box::leak(Box::new(permit));
+   |             ^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/guard_escapes.rs:33:27
+   |
+LL |     let manual = unsafe { std::mem::transmute::<Commit, ManuallyDrop<Commit>>(permit) };
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 8 previous errors
+

@@ -1,6 +1,8 @@
 //! Exclusive cache-root writer ownership shared by daemons and offline operations.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Lock file naming the single live writer of a cache root (#1162).
 const CACHE_ROOT_WRITER_LOCK_FILE: &str = ".writer.lock";
@@ -28,9 +30,21 @@ const CACHE_ROOT_WRITER_LOCK_FILE: &str = ".writer.lock";
 /// writing, and a sequential restart on the same root — which is legitimate,
 /// and which the integration suite does — would be refused. `Drop` remains as
 /// the crash backstop.
+/// Background filesystem jobs use separate [`CacheRootWriterLease`] values so
+/// they keep the native claim through actual completion after server release.
 #[derive(Debug)]
 pub struct CacheRootWriterLock {
-    lock: crate::blocking_sync::Mutex<Option<kernal_api::platform::fs::OwnedFileLock>>,
+    lock: crate::blocking_sync::Mutex<Option<Arc<kernal_api::platform::fs::OwnedFileLock>>>,
+}
+
+/// Data-free root ownership for one background filesystem job.
+///
+/// Release of the server's claim closes admission for new leases. Existing
+/// jobs retain native exclusion until they finish and drop their leases.
+#[derive(Debug)]
+#[must_use = "retain root ownership through the background filesystem job"]
+pub struct CacheRootWriterLease {
+    _lock: Arc<kernal_api::platform::fs::OwnedFileLock>,
 }
 
 impl CacheRootWriterLock {
@@ -80,26 +94,38 @@ impl CacheRootWriterLock {
             tracing::debug!(%error, cache_root = %cache_dir.display(), "failed to stamp store activity marker");
         }
         Ok(Self {
-            lock: crate::blocking_sync::Mutex::new(Some(lock)),
+            lock: crate::blocking_sync::Mutex::new(Some(Arc::new(lock))),
         })
     }
 
-    /// Give up the claim, so the next daemon on this root can take it.
+    /// Retain an active writer claim within an explicit acquisition budget.
+    /// Returns `None` after shutdown has released the server's claim.
+    pub fn lease_for(&self, bound: Duration) -> Option<CacheRootWriterLease> {
+        self.lock
+            .lock_for(bound)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|lock| CacheRootWriterLease {
+                _lock: Arc::clone(lock),
+            })
+    }
+
+    /// Close new job admission and release the server's claim.
     ///
     /// Call this once the daemon has finished its shutdown persistence — that
     /// is the moment it stops writing, which is what the claim actually
     /// guards. Idempotent, so the `Drop` backstop after an explicit release is
-    /// a no-op.
+    /// a no-op. Outstanding job leases retain the native claim until their
+    /// filesystem work finishes; new leases are refused after this call.
     pub fn release(&self) {
-        let mut guard = self
-            .lock
-            .lock_for(crate::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(lock) = guard.take() {
-            // Dropping releases; `unlock` would too, but the handle is not
-            // wanted back here.
-            drop(lock);
-        }
+        let lock = {
+            let mut guard = self
+                .lock
+                .lock_for(crate::sync::STATE_TIMEOUT)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.take()
+        };
+        drop(lock);
     }
 }
 

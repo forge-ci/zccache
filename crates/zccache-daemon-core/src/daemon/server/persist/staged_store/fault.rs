@@ -25,6 +25,7 @@ pub(in crate::daemon::server) enum StagedFaultPoint {
     MaterializeHardlink,
     MaterializeHardlinkRegistration,
     MaterializeCopy,
+    TrashDelete,
 }
 
 struct ActiveFaults {

@@ -18,9 +18,8 @@ use super::*;
 #[cfg(target_os = "linux")]
 #[test]
 fn concurrent_real_cache_hits_leave_embedded_control_plane_responsive() {
-    let Some(compiler) = crate::test_support::find_rustc() else {
-        return;
-    };
+    let compiler = crate::test_support::find_rustc()
+        .expect("the staged-store control-plane regression requires rustc on PATH");
     let host_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -94,11 +93,9 @@ fn concurrent_real_cache_hits_leave_embedded_control_plane_responsive() {
     let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
     let lock_holder = std::thread::spawn(move || {
-        let root = zccache_artifact::staged_lock::staged_root(&artifact_dir);
-        let file =
-            zccache_artifact::staged_lock::open_store_lock(&root).expect("open staged-store lock");
         let lock =
-            kernal_api::platform::fs::lock_exclusive_owned(file).expect("hold staged-store lock");
+            zccache_artifact::StagedCommitGuard::acquire_for(&artifact_dir, Duration::from_secs(5))
+                .expect("hold staged-store lock");
         locked_tx.send(()).expect("announce held lock");
         // Keep the lock until the test explicitly releases it. A disconnected
         // sender also releases it if an assertion unwinds; a wall-clock

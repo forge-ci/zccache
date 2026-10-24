@@ -15,7 +15,9 @@ Custom Rust lints used by this workspace.
 
 - `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
 
-All eleven libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
+- `ban_sweep_under_exclusion`: confines raw tree deletion to approved cleanup owners (#1964; guard lifetime enforcement is in progress).
+
+All twelve libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

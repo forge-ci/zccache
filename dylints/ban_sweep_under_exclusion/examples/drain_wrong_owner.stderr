@@ -1,0 +1,22 @@
+error: publication drains belong only to bounded checkpoint and shutdown owners
+  --> $DIR/drain_wrong_owner.rs:5:18
+   |
+LL |     let permit = barrier.drain_for(Duration::from_secs(1)).await;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: publication drains belong only to bounded checkpoint and shutdown owners
+  --> $DIR/drain_wrong_owner.rs:9:18
+   |
+LL |     let _drain = Coordinator::drain_for;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^
+
+error: publication drains belong only to bounded checkpoint and shutdown owners
+  --> $DIR/drain_wrong_owner.rs:12:18
+   |
+LL |     let permit = Coordinator::drain_for(barrier, Duration::from_secs(1)).await;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
+

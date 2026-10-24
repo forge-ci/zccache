@@ -180,3 +180,59 @@ fn synthetic_index_entry(total_size: u64) -> crate::artifact::ArtifactIndex {
         output_modes: Vec::new(),
     }
 }
+
+#[tokio::test]
+async fn lookup_drop_releases_publication_before_private_cleanup() {
+    crate::test_support::test_timeout(async {
+        use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+        use std::time::Duration;
+        let directory = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
+        let private = server.state.cache_dir.join("lookup-private-plan");
+        std::fs::create_dir_all(&private).unwrap();
+        let output = private.join("old.rlib");
+        std::fs::write(&output, b"private").unwrap();
+        let key = "b".repeat(64);
+        server.state.artifacts.insert(
+            key.clone(),
+            CachedArtifact::from_provisional_staged(
+                ArtifactIndex::new(vec!["old.rlib".into()], vec![7], vec![], vec![], 0),
+                vec![output],
+                Arc::new(StagedCompilePlan::for_test(private.clone(), Vec::new())),
+            ),
+        );
+        let lookup = lookup_artifact_with_disk_fallback(&server.state, &key).unwrap();
+        // Keep the lookup as the sole cached-record owner, as can happen
+        // after a concurrent publication replaces the live-map entry.
+        server.state.artifacts.remove(&key);
+        let hook = StagedHookGuard::arm(&private, StagedHookPoint::PrivatePlanCleanup);
+        let cleanup = tokio::task::spawn_blocking(move || drop(lookup));
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        let writer = tokio::time::timeout(
+            Duration::from_millis(100),
+            server
+                .state
+                .artifact_publication
+                .drain_for(Duration::from_secs(5)),
+        )
+        .await;
+        let writer_proceeded = writer.is_ok();
+        drop(writer);
+        hook.resume();
+        tokio::time::timeout(Duration::from_secs(10), cleanup)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            writer_proceeded,
+            "lookup drop retained publication during private cleanup"
+        );
+        assert!(!private.exists());
+    })
+    .await;
+}

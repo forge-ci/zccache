@@ -400,6 +400,9 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
     })
     .await
     .ok()?;
+    if matches!(response, Response::Error { .. }) {
+        return Some(response);
+    }
 
     let rfp = request_fingerprint(
         compiler_path,
@@ -562,6 +565,9 @@ pub(super) async fn try_depgraph_cached_hit(
         },
     })
     .await?;
+    if matches!(response, Response::Error { .. }) {
+        return Ok(response);
+    }
 
     if !worktree_equivalent_context {
         state.cache_system.register_tracked(&input_paths);

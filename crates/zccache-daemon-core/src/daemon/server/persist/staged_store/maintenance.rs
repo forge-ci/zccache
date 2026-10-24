@@ -1,15 +1,47 @@
 //! Disk-budget scanning and eviction for staged v2 artifact generations.
 
 use super::{
-    is_staged_link_or_reparse, open_store_lock, pointer_path, remove_registered_blob,
-    remove_staged_link_or_reparse, staged_key_supported, staged_root,
-    validate_staged_artifact_root, STORE_LOCK,
+    is_staged_link_or_reparse, pointer_path, staged_key_supported, staged_root,
+    validate_staged_artifact_root, StagedCommitGuard, STORE_LOCK,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::time::SystemTime;
+
+// A pointer is control metadata (one digest), never an artifact payload.
+// Bound both allocation and loop work while revalidating under exclusion.
+// The deadline cannot interrupt a single kernel filesystem syscall.
+fn read_generation_pointer_for(path: &Path, bound: std::time::Duration) -> io::Result<String> {
+    let started = std::time::Instant::now();
+    let mut file = fs::File::open(path)?;
+    let mut bytes = [0u8; 129];
+    let mut length = 0;
+    while length < bytes.len() {
+        if started.elapsed() >= bound {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "staged pointer read expired",
+            ));
+        }
+        match file.read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(read) => length += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    if length > 128 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "oversized staged pointer",
+        ));
+    }
+    let value = std::str::from_utf8(&bytes[..length])
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(value.trim().to_owned())
+}
 
 pub(crate) struct StagedDiskArtifact {
     pub(crate) key: String,
@@ -50,13 +82,12 @@ pub(crate) fn scan_staged_disk_artifacts(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(Vec::new());
     }
-    let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard =
-        crate::core::wait::lock_shared_for(&store_lock, crate::core::wait::PROBE)?;
-    scan_staged_disk_artifacts_locked(artifact_dir, root.as_path())
+    // Planning observes names without retaining store exclusion through a
+    // recursive scan. Destructive commits revalidate the generation later.
+    scan_staged_disk_artifacts_observed(artifact_dir, root.as_path())
 }
 
-fn scan_staged_disk_artifacts_locked(
+fn scan_staged_disk_artifacts_observed(
     artifact_dir: &Path,
     root: &Path,
 ) -> io::Result<Vec<StagedDiskArtifact>> {
@@ -94,7 +125,7 @@ fn scan_staged_disk_artifacts_locked(
             }
             _total_size = _total_size.saturating_add(metadata.len());
             mtime = mtime.max(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
-            fs::read_to_string(&pointer)
+            read_generation_pointer_for(&pointer, crate::core::wait::PROBE)
                 .ok()
                 .map(|value| value.trim().to_string())
         } else {
@@ -123,27 +154,63 @@ pub(crate) fn evict_staged_artifact_keys(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(0);
     }
-    let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard =
-        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
-    evict_staged_artifact_keys_locked(artifact_dir, root.as_path(), keys)
+    let _store_lock_guard = StagedCommitGuard::acquire_for(artifact_dir, crate::core::wait::PROBE)?;
+    let mut detached = super::trash::DetachedStagedTrash::empty(artifact_dir);
+    for key in keys.iter().filter(|key| staged_key_supported(key)) {
+        detached.detach(&root.join(key))?;
+        detached.detach(&pointer_path(artifact_dir, key))?;
+    }
+    drop(_store_lock_guard);
+    Ok(detached
+        .sweep_for(crate::core::wait::PROBE)?
+        .reclaimed_bytes)
 }
 
 /// Delete only staged generations that still match the maintenance snapshot.
 /// The exclusive lock makes compare-and-delete atomic with respect to staged
 /// publication without blocking writers during legacy scans or planning.
+#[must_use = "release publication exclusion before sweeping the detached trash"]
+pub(crate) struct DetachedStagedEviction {
+    pub(crate) removed: HashSet<String>,
+    pub(crate) trash: super::trash::DetachedStagedTrash,
+}
+
+impl DetachedStagedEviction {
+    fn empty(artifact_dir: &Path) -> Self {
+        Self {
+            removed: HashSet::new(),
+            trash: super::trash::DetachedStagedTrash::empty(artifact_dir),
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn evict_staged_artifact_keys_if_unchanged(
     artifact_dir: &Path,
     expected: &HashMap<String, Option<String>>,
 ) -> io::Result<HashSet<String>> {
+    let detached = detach_staged_artifact_keys_if_unchanged(
+        artifact_dir,
+        expected,
+        std::time::Duration::from_secs(2),
+    )?;
+    detached.trash.sweep_for(crate::core::wait::PROBE)?;
+    Ok(detached.removed)
+}
+
+pub(crate) fn detach_staged_artifact_keys_if_unchanged(
+    artifact_dir: &Path,
+    expected: &HashMap<String, Option<String>>,
+    lock_budget: std::time::Duration,
+) -> io::Result<DetachedStagedEviction> {
+    let mut detached = DetachedStagedEviction::empty(artifact_dir);
     if expected.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(detached);
     }
     let root = staged_root(artifact_dir);
     if !validate_staged_artifact_root(artifact_dir)? {
-        return Ok(HashSet::new());
+        return Ok(detached);
     }
-    let store_lock = open_store_lock(&root)?;
     #[cfg(test)]
     super::hook::pause(
         artifact_dir,
@@ -152,17 +219,17 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
     // Maintenance holds publication exclusion here. A foreign warm/reader
     // may retain the store lock indefinitely; defer rather than queue all
     // compiles behind it (soldr#3843 / #3845).
-    let _store_lock_guard =
-        match crate::core::wait::lock_exclusive_for(&store_lock, std::time::Duration::from_secs(2))
-        {
-            Ok(guard) => guard,
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                tracing::warn!(root = %root.display(), "staged store busy; deferring eviction");
-                return Ok(HashSet::new());
-            }
-            Err(error) => return Err(error),
-        };
-    let mut removed = HashSet::new();
+    let _store_lock_guard = match StagedCommitGuard::acquire_for(
+        artifact_dir,
+        lock_budget.min(std::time::Duration::from_secs(2)),
+    ) {
+        Ok(guard) => guard,
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+            tracing::warn!(root = %root.display(), "staged store busy; deferring eviction");
+            return Ok(detached);
+        }
+        Err(error) => return Err(error),
+    };
     for (key, expected_generation) in expected.iter().filter(|(key, _)| staged_key_supported(key)) {
         let pointer = pointer_path(artifact_dir, key);
         let current = match fs::symlink_metadata(&pointer) {
@@ -175,7 +242,7 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
                     ),
                 ));
             }
-            Ok(_) => fs::read_to_string(&pointer)
+            Ok(_) => read_generation_pointer_for(&pointer, crate::core::wait::PROBE)
                 .ok()
                 .map(|value| value.trim().to_string()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -184,73 +251,149 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
         if &current != expected_generation {
             continue;
         }
-        remove_staged_tree(&root.join(key))?;
-        remove_staged_tree(&pointer_path(artifact_dir, key))?;
-        removed.insert(key.clone());
+        detached.trash.detach(&root.join(key))?;
+        detached.trash.detach(&pointer_path(artifact_dir, key))?;
+        detached.removed.insert(key.clone());
     }
-    Ok(removed)
+    Ok(detached)
 }
 
 #[cfg(test)]
-fn evict_staged_artifact_keys_locked(
-    artifact_dir: &Path,
-    root: &Path,
-    keys: &HashSet<String>,
-) -> io::Result<u64> {
-    let mut bytes_removed: u64 = 0;
-    for key in keys.iter().filter(|key| staged_key_supported(key)) {
-        bytes_removed = bytes_removed.saturating_add(remove_staged_tree(&root.join(key))?);
-        bytes_removed =
-            bytes_removed.saturating_add(remove_staged_tree(&pointer_path(artifact_dir, key))?);
-    }
-    Ok(bytes_removed)
-}
-
-pub(super) fn remove_staged_tree(path: &Path) -> io::Result<u64> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error),
-    };
-    if is_staged_link_or_reparse(path) {
-        remove_staged_link_or_reparse(path, &metadata)?;
-        return Ok(0);
-    }
-    if metadata.is_dir() {
-        let mut removed = 0;
-        for entry in fs::read_dir(path)?.flatten() {
-            removed += remove_staged_tree(&entry.path())?;
-        }
-        fs::remove_dir(path)?;
-        return Ok(removed);
-    }
-    let size = metadata.len();
-    remove_registered_blob(path)?;
-    Ok(size)
-}
-
 pub(in crate::daemon::server) fn clear_staged_artifacts(artifact_dir: &Path) -> io::Result<u64> {
+    let detached = detach_staged_artifacts_for_clear(artifact_dir, crate::core::wait::PROBE)?;
+    Ok(detached
+        .sweep_for(crate::core::wait::PROBE)?
+        .reclaimed_bytes)
+}
+
+pub(in crate::daemon::server) fn detach_staged_artifacts_for_clear(
+    artifact_dir: &Path,
+    lock_budget: std::time::Duration,
+) -> io::Result<super::trash::DetachedStagedTrash> {
+    let mut detached = super::trash::DetachedStagedTrash::empty(artifact_dir);
     let root = staged_root(artifact_dir);
     if !validate_staged_artifact_root(artifact_dir)? {
-        return Ok(0);
+        return Ok(detached);
     }
-    let store_lock = open_store_lock(&root)?;
     #[cfg(test)]
     super::hook::pause(
         artifact_dir,
         super::StagedHookPoint::MaintenanceStoreLockPending,
     );
     let _store_lock_guard =
-        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
-    let mut bytes_removed = 0;
-    for entry in fs::read_dir(&root)?.flatten() {
-        if entry.file_name() == STORE_LOCK {
+        StagedCommitGuard::acquire_for(artifact_dir, lock_budget.min(crate::core::wait::PROBE))?;
+    let mut children = super::immediate_children::ImmediateChildren::open_for(&root, lock_budget)?;
+    while let Some(entry) = children.next_entry()? {
+        if entry.file_name() == STORE_LOCK || entry.file_name() == super::trash::STAGED_TRASH {
             continue;
         }
-        bytes_removed += remove_staged_tree(&entry.path())?;
+        detached.detach(&entry.path())?;
     }
-    Ok(bytes_removed)
+    Ok(detached)
 }
+
+/// Publication has released its shared/key guards before trying this commit.
+/// A busy reader defers retirement; the current pointer is checked again so
+/// an intervening publication can safely reuse the same immutable generation.
+pub(super) fn detach_generation_if_unreferenced_for(
+    artifact_dir: &Path,
+    key: &str,
+    generation: &str,
+    lock_budget: std::time::Duration,
+) -> io::Result<super::trash::DetachedStagedTrash> {
+    super::validate_key(key)?;
+    super::validate_generation(generation)?;
+    let mut detached = super::trash::DetachedStagedTrash::empty(artifact_dir);
+    if !validate_staged_artifact_root(artifact_dir)? {
+        return Ok(detached);
+    }
+    let _guard = StagedCommitGuard::acquire_for(artifact_dir, lock_budget)?;
+    match read_generation_pointer_for(&pointer_path(artifact_dir, key), crate::core::wait::PROBE) {
+        Ok(current) if current.trim() == generation => return Ok(detached),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    detached.detach(&super::generation_dir(artifact_dir, key, generation))?;
+    Ok(detached)
+}
+
+/// Scan names without exclusion; revalidate current generations only during
+/// the short exclusive commit. No payload tree is walked under the lock.
+pub(crate) fn detach_orphaned_staged_paths_for(
+    artifact_dir: &Path,
+    lock_budget: std::time::Duration,
+) -> io::Result<(usize, super::trash::DetachedStagedTrash)> {
+    let root = staged_root(artifact_dir);
+    let mut detached = super::trash::DetachedStagedTrash::empty(artifact_dir);
+    if !validate_staged_artifact_root(artifact_dir)? {
+        return Ok((0, detached));
+    }
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == STORE_LOCK || name == super::trash::STAGED_TRASH {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path)?;
+        if is_staged_link_or_reparse(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "refusing orphan scan through linked/reparse key",
+            ));
+        }
+        if metadata.is_file() && name.starts_with('.') {
+            candidates.push((path, None));
+        } else if metadata.is_dir() && staged_key_supported(&name) {
+            for child in fs::read_dir(&path)? {
+                let child = child?;
+                let child_name = child.file_name().to_string_lossy().into_owned();
+                if child_name == super::PUBLISH_LOCK {
+                    continue;
+                }
+                let child_path = child.path();
+                let metadata = fs::symlink_metadata(&child_path)?;
+                if child_name.starts_with(".tmp-") || metadata.is_dir() {
+                    candidates.push((child_path, Some((name.clone(), child_name))));
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Ok((0, detached));
+    }
+    let _guard = StagedCommitGuard::acquire_for(artifact_dir, lock_budget)?;
+    let mut removed = 0;
+    for (path, generation) in candidates {
+        if let Some((key, name)) = generation {
+            let current = read_generation_pointer_for(
+                &pointer_path(artifact_dir, &key),
+                crate::core::wait::PROBE,
+            );
+            match current {
+                Ok(current) if current.trim() == name => continue,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                detached.detach(&path)?;
+                removed += 1;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((removed, detached))
+}
+
+#[cfg(test)]
+#[path = "sweep_tests.rs"]
+mod sweep_tests;
 
 #[cfg(test)]
 mod bounded_lock_tests {
@@ -262,8 +405,9 @@ mod bounded_lock_tests {
         let root = staged_root(directory.path());
         fs::create_dir_all(root.join("aa")).unwrap();
         fs::write(root.join("aa/payload"), b"preserve while in use").unwrap();
-        let file = open_store_lock(&root).unwrap();
-        let reader = kernal_api::platform::fs::try_lock_shared(&file).unwrap();
+        let reader =
+            super::super::StagedReadGuard::acquire_for(directory.path(), crate::core::wait::PROBE)
+                .unwrap();
         let expected = HashMap::from([("aa".to_string(), None)]);
         let (tx, rx) = std::sync::mpsc::channel();
         let artifact_dir = directory.path().to_owned();

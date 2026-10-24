@@ -7,19 +7,12 @@ fn check_probe_releases_admission(async_probe: bool) {
     let dir = tempfile::tempdir().unwrap();
     let ready = dir.path().join("ready");
     let release = dir.path().join("release");
-    let spec = if crate::platform::host::is_windows() {
-        kernal_api::SpawnSpec::new("powershell").args([
-            "-NoProfile", "-NonInteractive", "-Command",
-            "[IO.File]::WriteAllText($env:ZCCACHE_TEST_PROBE_READY, 'ready'); while (-not [IO.File]::Exists($env:ZCCACHE_TEST_PROBE_RELEASE)) { Start-Sleep -Milliseconds 20 }",
-        ])
-    } else {
-        kernal_api::SpawnSpec::new("sh").args([
-            "-c",
-            "printf ready > \"$ZCCACHE_TEST_PROBE_READY\"; while [ ! -f \"$ZCCACHE_TEST_PROBE_RELEASE\" ]; do sleep 0.02; done",
-        ])
-    }
-    .env("ZCCACHE_TEST_PROBE_READY", ready.as_os_str())
-    .env("ZCCACHE_TEST_PROBE_RELEASE", release.as_os_str());
+    // The test binary is its own child: a shell (PowerShell on Windows ARM)
+    // can take most of the probe budget just to start.
+    let spec = kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+        .args(["--exact", FIXTURE, "--nocapture"])
+        .env("ZCCACHE_TEST_PROBE_READY", ready.as_os_str())
+        .env("ZCCACHE_TEST_PROBE_RELEASE", release.as_os_str());
 
     let probe = std::thread::spawn(move || {
         if async_probe {
@@ -56,7 +49,36 @@ fn check_probe_releases_admission(async_probe: bool) {
         acquired_while_probe_waited,
         "probe held spawn admission while waiting for the child"
     );
-    assert!(matches!(outcome, ProbeOutcome::Completed(output) if output.success));
+    match outcome {
+        ProbeOutcome::Completed(output) => assert!(
+            output.success,
+            "probe child failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        ),
+        ProbeOutcome::TimedOut => panic!("probe child timed out"),
+        ProbeOutcome::SpawnFailed => panic!("probe child failed to spawn"),
+    }
+}
+
+const FIXTURE: &str = "daemon::server::compiler_hash::probe_spawn_guard_tests::probe_child_fixture";
+
+#[test]
+fn probe_child_fixture() {
+    let (Some(ready), Some(release)) = (
+        std::env::var_os("ZCCACHE_TEST_PROBE_READY"),
+        std::env::var_os("ZCCACHE_TEST_PROBE_RELEASE"),
+    ) else {
+        return;
+    };
+    std::fs::write(ready, b"ready").unwrap();
+    let started = Instant::now();
+    while !std::path::Path::new(&release).exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "probe child was never released"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

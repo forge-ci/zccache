@@ -405,8 +405,14 @@ fn concurrent_stores_over_one_dir_do_not_lock_each_other() {
 fn put_racing_clear_namespace_never_errors() {
     let (_d, s) = store();
     let stop = std::sync::atomic::AtomicBool::new(false);
-    // Errors are collected, not unwrapped in the loops: a panicking clearer
-    // would never raise `stop` and the scope would wait on the writers forever.
+    // Raise `stop` on every exit path: a panicking clearer must fail the test
+    // with its message, not leave the scope waiting on the writers forever.
+    struct StopOnDrop<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for StopOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     let (put_errors, clear_errors) = std::thread::scope(|scope| {
         let writers: Vec<_> = (0..4)
             .map(|w| {
@@ -415,7 +421,10 @@ fn put_racing_clear_namespace_never_errors() {
                 scope.spawn(move || {
                     let mut errors = Vec::new();
                     let mut i = 0u32;
-                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    // Cap the writes: clears sweep outside the gate, so
+                    // unthrottled writers outpace each sweep until every
+                    // clear spends its full budget (100 x 30 s on CI).
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) && i < 2_000 {
                         let k = key_from(format!("race-{w}-{i}").as_bytes());
                         if let Err(e) = s.put("ns", &k, b"v") {
                             errors.push(e.to_string());
@@ -426,10 +435,11 @@ fn put_racing_clear_namespace_never_errors() {
                 })
             })
             .collect();
+        let stop_writers = StopOnDrop(&stop);
         let clear_errors: Vec<String> = (0..100)
             .filter_map(|_| s.clear_namespace("ns").err().map(|e| e.to_string()))
             .collect();
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(stop_writers);
         let put_errors: Vec<String> = writers
             .into_iter()
             .flat_map(|writer| writer.join().unwrap())
@@ -446,4 +456,40 @@ fn put_racing_clear_namespace_never_errors() {
     s.clear_namespace("ns").unwrap();
     assert!(s.list_namespace("ns").unwrap().is_empty());
     assert_eq!(s.total_bytes().unwrap(), 0);
+}
+
+/// Restore owner write on every directory so the tempdir can be removed.
+#[cfg(unix)]
+fn make_tree_writable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if !path.is_dir() || path.is_symlink() {
+        return;
+    }
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        make_tree_writable(&entry.path());
+    }
+}
+
+// The detach is the clear (#1648, #1964): an unfinished sweep of the retired
+// tree, such as a racing put's file the sweep cannot unlink, stays retry work
+// and must not fail a clear that already emptied the live namespace.
+#[cfg(unix)]
+#[test]
+fn clear_namespace_succeeds_when_the_retired_tree_sweep_is_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let (d, s) = store();
+    let k = key_from(b"kept");
+    s.put("ns", &k, b"v").unwrap();
+    let stuck = d.path().join("kv").join("ns").join("stuck");
+    std::fs::create_dir(&stuck).unwrap();
+    std::fs::write(stuck.join("racing.tmp"), b"partial").unwrap();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let cleared = s.clear_namespace("ns");
+    make_tree_writable(d.path());
+
+    cleared.unwrap();
+    assert!(s.list_namespace("ns").unwrap().is_empty());
+    assert!(s.get("ns", &k).unwrap().is_none());
 }

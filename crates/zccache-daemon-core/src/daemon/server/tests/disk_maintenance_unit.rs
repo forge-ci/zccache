@@ -8,6 +8,8 @@ use super::*;
 // as a `#[path]`-loaded `mod tests`, not as a `tests/mod.rs`.
 #[path = "disk_maintenance_retired_stores.rs"]
 mod retired_stores;
+#[path = "disk_maintenance_trash.rs"]
+mod trash;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -209,7 +211,7 @@ fn read_only_maintenance_scan_does_not_exclude_cache_hit_leases() {
     let artifacts = DashMap::new();
     let store = ArtifactStore::open_empty(&root.path().join("index.bin"));
     let dep_graph = DepGraph::new();
-    let publication_barrier = Arc::new(crate::core::sync::Barrier::new());
+    let publication_barrier = Arc::new(crate::core::sync::PublicationBarrier::new());
     let environment = GatedScanEnvironment {
         now: SystemTime::UNIX_EPOCH + 100 * DAY,
         calls: std::sync::atomic::AtomicUsize::new(0),

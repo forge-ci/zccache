@@ -80,9 +80,14 @@ impl DaemonServer {
         if let Some(rx) = self.index_writer_rx.take() {
             let store = Arc::clone(&self.state.artifact_store);
             let shutdown = Arc::clone(&self.state.index_writer_shutdown);
+            let root = self
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .expect("index writer startup requires an owned cache root");
             let runtime = kernal_api::async_engine::RuntimeHandle::current()
                 .expect("daemon run requires an async runtime");
-            index_writer_handle = Some(runtime.launch(run_index_writer(rx, store, shutdown)));
+            index_writer_handle = Some(runtime.launch(run_index_writer(rx, store, shutdown, root)));
         }
 
         let cache_dir = self.state.cache_dir.clone();
@@ -271,7 +276,7 @@ impl DaemonServer {
                     // returned publication write guard stays held so no
                     // publisher can mutate the cache while the depgraph and
                     // metadata snapshots below are taken.
-                    let _publication_guard =
+                    let publication_guard =
                         drain_durable_state_for_shutdown(&self.state, index_writer_handle.take())
                             .await;
 
@@ -494,8 +499,14 @@ impl DaemonServer {
                         }
                     }
 
-                    // Clean up our own depfile temp directory.
-                    let _ = std::fs::remove_dir_all(&self.state.depfile_tmpdir);
+                    // Snapshots are done: release publication before sweeping
+                    // this instance's private depfile directory (#1964).
+                    drop(publication_guard);
+                    let depfile_tmpdir = self.state.depfile_tmpdir.clone();
+                    let _ = kernal_api::async_engine::launch_blocking(move || {
+                        std::fs::remove_dir_all(&depfile_tmpdir)
+                    })
+                    .await;
 
                     // #1162: everything durable is now on disk, so this daemon
                     // has stopped writing and the next one may claim the root.
@@ -967,56 +978,9 @@ fn forced_completion_stalled(
     items_removed == 0 && !completion_had_candidates && metadata_entries == 0
 }
 
-/// Start index hydration with publication ownership acquired before spawn.
-/// The optional gate is a deterministic test seam for Clear/startup races.
-pub(super) async fn spawn_artifact_loader(
-    state: Arc<SharedState>,
-    start_gate: Option<Arc<Notify>>,
-) -> kernal_api::async_engine::Task<()> {
-    // Acquire before spawning so Clear cannot overtake the startup loader and
-    // then have pre-Clear entries inserted afterward.
-    let publication_guard = Arc::clone(&state.artifact_publication)
-        .read_for(crate::core::sync::OPERATION_TIMEOUT)
-        .await;
-    kernal_api::async_engine::launch(async move {
-        if let Some(gate) = start_gate {
-            gate.notified().await;
-        }
-        let artifact_dir = state.artifact_dir.clone();
-        let state_ref = Arc::clone(&state);
-        let loaded = kernal_api::async_engine::launch_blocking(move || {
-            let _publication_guard = publication_guard;
-            // Load the in-memory index that `ArtifactStore::open` already
-            // hydrated from the on-disk blob.
-            let entries = state_ref.artifact_store.load_all();
-            if !entries.is_empty() {
-                let count = entries.len();
-                for (key, meta) in entries {
-                    state_ref
-                        .artifacts
-                        .entry(key)
-                        .or_insert_with(|| CachedArtifact::from_index(meta));
-                }
-                count
-            } else {
-                // Migration: legacy `.meta` files predate the current bincode
-                // index blob; populate the live store from them
-                // so the first session after upgrade still has its warm cache.
-                migrate_meta_files(
-                    &artifact_dir,
-                    &state_ref.artifacts,
-                    &state_ref.artifact_store,
-                )
-            }
-        })
-        .await
-        .unwrap_or(0);
-        if loaded > 0 {
-            tracing::info!(loaded, "background artifact loading complete");
-        }
-        state.artifacts_loaded.store(true, Ordering::Release);
-    })
-}
+#[path = "run_artifact_loader.rs"]
+mod artifact_loader;
+pub(super) use artifact_loader::spawn_artifact_loader;
 
 #[cfg(test)]
 mod memory_eviction_controller_tests {
@@ -1032,42 +996,5 @@ mod memory_eviction_controller_tests {
 }
 
 #[cfg(test)]
-mod accept_watchdog_tests {
-    use std::{sync::Arc, time::Duration};
-
-    use super::{wait_for_accept_or_shutdown, AcceptWait};
-    use tokio::sync::{oneshot, Notify};
-
-    #[tokio::test]
-    async fn watchdog_ticks_do_not_cancel_the_pending_accept() {
-        let (accepted_tx, accepted_rx) = oneshot::channel();
-        let waiter = tokio::spawn(wait_for_accept_or_shutdown(
-            async { accepted_rx.await.expect("accept sender remains live") },
-            std::future::pending(),
-            Duration::from_millis(5),
-        ));
-
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        accepted_tx
-            .send(7_u8)
-            .expect("watchdog must not drop the accept future");
-
-        assert!(matches!(waiter.await.unwrap(), AcceptWait::Accepted(7)));
-    }
-
-    #[tokio::test]
-    async fn watchdog_ticks_do_not_lose_the_shutdown_waiter() {
-        let shutdown = Arc::new(Notify::new());
-        let shutdown_wait = Arc::clone(&shutdown);
-        let waiter = tokio::spawn(wait_for_accept_or_shutdown(
-            std::future::pending::<()>(),
-            async move { shutdown_wait.notified().await },
-            Duration::from_millis(5),
-        ));
-
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        shutdown.notify_waiters();
-
-        assert!(matches!(waiter.await.unwrap(), AcceptWait::Shutdown));
-    }
-}
+#[path = "run_accept_tests.rs"]
+mod accept_watchdog_tests;

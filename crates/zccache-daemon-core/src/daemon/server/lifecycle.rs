@@ -308,7 +308,7 @@ pub(super) fn new_shared_state(
             )
             .0,
             depgraph_persistence: Arc::new(Gate::new()),
-            artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
+            artifact_publication: Arc::new(crate::core::sync::PublicationBarrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
             staged_materialization_init: Arc::new(Gate::new()),
             persist_semaphore: Arc::new(tokio::sync::Semaphore::new(persist_workers_default())),

@@ -904,19 +904,16 @@ impl StagedCompilePlan {
     }
 
     pub(in crate::daemon::server) fn cleanup(&self) -> io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+        crate::daemon::server::detach_private_root(self.root.as_path());
+        Ok(())
     }
 }
 
 impl Drop for StagedCompilePlan {
+    // Retire by rename only: the owner may drop under publication or store
+    // exclusion, so the staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        crate::daemon::server::detach_private_root(self.root.as_path());
     }
 }
 

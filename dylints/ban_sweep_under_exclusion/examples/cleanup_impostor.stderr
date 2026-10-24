@@ -1,0 +1,22 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/auxiliary/server/persist/staged_plan.rs:4:17
+   |
+LL |         let _ = std::fs::remove_dir_all("private-output");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/auxiliary/server/persist/staged_plan.rs:11:17
+   |
+LL |         let _ = std::fs::remove_dir_all("shared-cache");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/auxiliary/server/persist/staged_plan.rs:15:13
+   |
+LL |     let _ = std::fs::remove_dir_all("shared-cache");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
+

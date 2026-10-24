@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/borrowed_guard.rs:5:13
+   |
+LL |     let _ = std::fs::read_dir("owned-cache");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/borrowed_guard.rs:12:13
+   |
+LL |     let _ = std::fs::read_dir("owned-cache");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

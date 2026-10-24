@@ -674,17 +674,25 @@ fn live_tree_cpu_ticks(pid: u32) -> Option<u64> {
 /// live descendants: a driver that waits on its real compiler is not wedged.
 /// The live descendants' total drops when one exits (cc1plus hands over to
 /// `as`), so any change is progress; a wedged tree's total stays constant.
+/// When the session cannot account CPU (macOS), observable tree ticks decide
+/// alone rather than letting the unavailable sample assume progress forever.
 pub(super) fn stall_cpu_advanced(
     previous: Option<std::time::Duration>,
     current: Option<std::time::Duration>,
     previous_tree: Option<u64>,
     current_tree: Option<u64>,
 ) -> bool {
-    session_cpu_time_advanced(previous, current)
-        || matches!(
-            (previous_tree, current_tree),
-            (Some(previous), Some(current)) if current != previous
-        )
+    let tree = match (previous_tree, current_tree) {
+        (Some(previous), Some(current)) => Some(current != previous),
+        _ => None,
+    };
+    match (previous, current, tree) {
+        (Some(_), Some(_), tree) => {
+            session_cpu_time_advanced(previous, current) || tree.unwrap_or(false)
+        }
+        (_, _, Some(tree)) => tree,
+        _ => true,
+    }
 }
 
 /// Match the former watchdog's conservative platform policy: unavailable

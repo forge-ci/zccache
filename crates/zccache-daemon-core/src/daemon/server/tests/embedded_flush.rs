@@ -203,7 +203,7 @@ async fn publisher_queued_behind_shutdown_writer_rechecks_latched_flag() {
         .unwrap(),
     );
     let shutdown_writer = Arc::clone(&daemon.state.artifact_publication)
-        .write_for(crate::core::sync::OPERATION_TIMEOUT)
+        .drain_for(crate::core::sync::OPERATION_TIMEOUT)
         .await;
     let publisher_state = Arc::clone(&daemon.state);
     let mut publisher =

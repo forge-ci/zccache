@@ -25,6 +25,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 use zccache_core::NormalizedPath;
 
 /// The staged-v2 store directory name, relative to the artifact dir.
@@ -83,7 +84,7 @@ pub fn validate_staged_root_path(root: &Path) -> io::Result<bool> {
 }
 
 /// Open (creating if needed) the store lock file for an already-validated root.
-pub fn open_store_lock(root: &Path) -> io::Result<File> {
+fn open_store_lock(root: &Path) -> io::Result<File> {
     if !validate_staged_root_path(root)? {
         fs::create_dir_all(root)?;
         if !validate_staged_root_path(root)? {
@@ -108,6 +109,7 @@ pub fn open_store_lock(root: &Path) -> io::Result<File> {
 /// releases it — including on unwind, which is why this is an RAII type rather
 /// than a lock/unlock pair.
 #[derive(Debug)]
+#[must_use = "retain the store lease through resolution and materialization"]
 pub struct StagedReadGuard {
     // Owns the handle, because the lock outlives the call that took it. Under
     // `fs2` the open `File` was itself the token; `OwnedFileLock` names that.
@@ -117,14 +119,14 @@ pub struct StagedReadGuard {
 impl StagedReadGuard {
     /// Take the shared lock, creating the staged root if it does not exist.
     ///
-    /// Prefer [`StagedReadGuard::acquire_if_present`] for read-only callers:
+    /// Prefer [`StagedReadGuard::acquire_if_present_for`] for read-only callers:
     /// this variant will materialize an empty `.staged-v2` directory in a cache
     /// that has never staged anything.
-    pub fn acquire(artifact_dir: &Path) -> io::Result<Self> {
+    pub fn acquire_for(artifact_dir: &Path, bound: Duration) -> io::Result<Self> {
         Ok(Self {
             _store_lock: zccache_core::wait::lock_shared_owned_for(
                 || open_store_lock(staged_root(artifact_dir).as_path()),
-                zccache_core::wait::PROBE,
+                bound,
             )?,
         })
     }
@@ -134,12 +136,37 @@ impl StagedReadGuard {
     /// `Ok(None)` means there is no staged store, so no generation can be
     /// resolved and there is nothing for maintenance to delete out from under
     /// the caller — the unlocked path is safe rather than merely tolerated.
-    pub fn acquire_if_present(artifact_dir: &Path) -> io::Result<Option<Self>> {
+    pub fn acquire_if_present_for(
+        artifact_dir: &Path,
+        bound: Duration,
+    ) -> io::Result<Option<Self>> {
         let root = staged_root(artifact_dir);
         if !validate_staged_root_path(root.as_path())? {
             return Ok(None);
         }
-        Self::acquire(artifact_dir).map(Some)
+        Self::acquire_for(artifact_dir, bound).map(Some)
+    }
+}
+
+/// Short exclusive ownership for staged live-name commits.
+///
+/// The native handle stays private. Release this capability before recursive
+/// scans or sweeping retired generations. Acquisition is bounded between OS
+/// calls; an individual filesystem syscall cannot be interrupted by Duration.
+#[derive(Debug)]
+#[must_use = "retain the commit guard through live-name retirement only"]
+pub struct StagedCommitGuard {
+    _store_lock: kernal_api::platform::fs::OwnedFileLock,
+}
+impl StagedCommitGuard {
+    /// Acquire the canonical cross-process store lock with an explicit budget.
+    pub fn acquire_for(artifact_dir: &Path, bound: Duration) -> io::Result<Self> {
+        Ok(Self {
+            _store_lock: zccache_core::wait::lock_exclusive_owned_for(
+                || open_store_lock(staged_root(artifact_dir).as_path()),
+                bound,
+            )?,
+        })
     }
 }
 
@@ -148,10 +175,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_commit_and_reader_acquisition_require_explicit_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let commit =
+            StagedCommitGuard::acquire_for(dir.path(), std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            StagedReadGuard::acquire_for(dir.path(), std::time::Duration::ZERO)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(commit);
+        let reader =
+            StagedReadGuard::acquire_for(dir.path(), std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            StagedCommitGuard::acquire_for(dir.path(), std::time::Duration::ZERO)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(reader);
+        drop(StagedCommitGuard::acquire_for(dir.path(), std::time::Duration::ZERO).unwrap());
+    }
+
+    #[test]
     fn no_staged_root_means_no_guard_and_no_directory_is_created() {
         let dir = tempfile::tempdir().unwrap();
 
-        let guard = StagedReadGuard::acquire_if_present(dir.path()).unwrap();
+        let guard =
+            StagedReadGuard::acquire_if_present_for(dir.path(), zccache_core::wait::PROBE).unwrap();
 
         assert!(guard.is_none(), "absent staged root must not take a lock");
         assert!(
@@ -165,7 +217,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
-        let guard = StagedReadGuard::acquire_if_present(dir.path()).unwrap();
+        let guard =
+            StagedReadGuard::acquire_if_present_for(dir.path(), zccache_core::wait::PROBE).unwrap();
 
         assert!(guard.is_some(), "present staged root must be locked");
     }
@@ -177,8 +230,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
-        let first = StagedReadGuard::acquire(dir.path()).unwrap();
-        let second = StagedReadGuard::acquire(dir.path()).unwrap();
+        let first = StagedReadGuard::acquire_for(dir.path(), zccache_core::wait::PROBE).unwrap();
+        let second = StagedReadGuard::acquire_for(dir.path(), zccache_core::wait::PROBE).unwrap();
 
         drop((first, second));
     }
@@ -201,7 +254,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let path = dir.path().to_path_buf();
         let reader = std::thread::spawn(move || {
-            let guard = StagedReadGuard::acquire(&path).unwrap();
+            let guard = StagedReadGuard::acquire_for(&path, zccache_core::wait::PROBE).unwrap();
             tx.send(()).unwrap();
             drop(guard);
         });

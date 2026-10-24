@@ -11,7 +11,7 @@ use super::*;
 /// index task has stopped.
 pub(super) async fn begin_artifact_publication(
     state: &SharedState,
-) -> Option<crate::core::sync::ReadPermit> {
+) -> Option<crate::core::sync::PublicationReadPermit> {
     if state.shutdown_requested.load(Ordering::Acquire) {
         return None;
     }
@@ -28,7 +28,7 @@ pub(super) async fn begin_artifact_publication(
 /// Blocking-worker counterpart to [`begin_artifact_publication`].
 pub(super) fn begin_artifact_publication_blocking(
     state: &SharedState,
-) -> Option<crate::core::sync::ReadPermit> {
+) -> Option<crate::core::sync::PublicationReadPermit> {
     let guard = state
         .artifact_publication
         .blocking_read_for(crate::core::sync::OPERATION_TIMEOUT);
@@ -275,15 +275,26 @@ pub(super) fn context_env_deps_fresh(
 /// take the barrier's write side, so they cannot delete files or order an
 /// index removal ahead of an already-started hit.
 pub(super) struct CachedArtifactLookup {
+    // Field order releases publication before a last cached-record owner can
+    // recursively clean a private staging plan, including during unwind.
+    _publication_guard: crate::core::sync::PublicationReadPermit,
     cached: CachedArtifact,
-    _publication_guard: crate::core::sync::ReadPermit,
 }
 
 impl CachedArtifactLookup {
-    fn new(cached: CachedArtifact, publication_guard: crate::core::sync::ReadPermit) -> Self {
+    /// Separate publication from the owned record for delivery. Tuple field
+    /// order also releases publication first if the result is discarded.
+    pub(super) fn into_parts(self) -> (crate::core::sync::PublicationReadPermit, CachedArtifact) {
+        (self._publication_guard, self.cached)
+    }
+
+    fn new(
+        cached: CachedArtifact,
+        publication_guard: crate::core::sync::PublicationReadPermit,
+    ) -> Self {
         Self {
-            cached,
             _publication_guard: publication_guard,
+            cached,
         }
     }
 }

@@ -1,0 +1,16 @@
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/generic_escape.rs:7:5
+   |
+LL |     forget_value(permit);
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/generic_escape.rs:18:19
+   |
+LL |     let _erased = erase_value(permit);
+   |                   ^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

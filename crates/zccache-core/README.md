@@ -9,3 +9,7 @@ The root `zccache` facade is expected to re-export this crate as
 
 Synchronization and holder-watchdog contracts are documented in
 [runtime.md](../../docs/architecture/runtime.md#bounded-synchronization-and-async-state).
+
+Background filesystem work retains a `CacheRootWriterLease` from
+`CacheRootWriterLock::lease_for(Duration)`. Explicit server release closes new
+leases; each existing job keeps native writer ownership until it finishes.

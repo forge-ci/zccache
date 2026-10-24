@@ -17,6 +17,7 @@ pub mod mtime;
 pub mod path;
 pub mod sync;
 mod sync_barrier;
+mod sync_publication;
 mod sync_watchdog;
 pub mod version;
 pub mod wait;

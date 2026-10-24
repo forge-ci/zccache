@@ -66,7 +66,7 @@ fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
     Ok(*hasher.finalize().as_bytes())
 }
 
-fn digest_path(blob_path: &Path) -> NormalizedPath {
+pub(in crate::daemon::server) fn digest_path(blob_path: &Path) -> NormalizedPath {
     let name = blob_path.file_name().unwrap_or_default().to_string_lossy();
     let sidecar_name = format!(
         ".cowhash-{}",

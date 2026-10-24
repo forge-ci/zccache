@@ -1,5 +1,6 @@
 //! Rustc error-cache helpers for the compile pipeline.
 
+use super::super::cached_artifact_retirement::retire_for;
 use super::super::*;
 
 pub(super) fn compile_failure_stderr(message: String) -> Response {
@@ -61,6 +62,7 @@ fn commit_rustc_verdict(
     artifact_key_hex: &str,
     verdict_key_hex: String,
     verdict: ArtifactVerdict,
+    retired: &mut Vec<CachedArtifact>,
 ) {
     use dashmap::mapref::entry::Entry;
     let durable = super::rustc_index::durable_rustc_index(state, artifact_key_hex);
@@ -81,7 +83,7 @@ fn commit_rustc_verdict(
             let artifact_meta =
                 super::rustc_index::merge_rustc_index(incoming, entry.get().meta.clone());
             enqueue_index_insert(state, artifact_key_hex.to_string(), artifact_meta.clone());
-            entry.insert(CachedArtifact::from_index(artifact_meta));
+            retired.push(entry.insert(CachedArtifact::from_index(artifact_meta)));
         }
         Entry::Vacant(entry) => {
             enqueue_index_insert(state, artifact_key_hex.to_string(), incoming.clone());
@@ -111,7 +113,8 @@ pub(super) async fn maybe_store_rustc_error_artifact(
     // Error artifacts participate in the same Clear/GC barrier and ordered
     // index-writer WAL as successful artifacts. Sharing one writer prevents
     // an older queued success row from overwriting a newer error verdict.
-    let _publication_guard = begin_artifact_publication(state).await?;
+    let mut retired = Vec::new();
+    let publication_guard = begin_artifact_publication(state).await?;
 
     // Error-cache path ignores env-dep names: failed compiles are keyed
     // conservatively and re-validated on every replay (zccache#1021).
@@ -147,7 +150,15 @@ pub(super) async fn maybe_store_rustc_error_artifact(
         stderr: Arc::clone(stderr),
         exit_code,
     };
-    commit_rustc_verdict(state, &artifact_key_hex, verdict_key_hex, verdict);
+    commit_rustc_verdict(
+        state,
+        &artifact_key_hex,
+        verdict_key_hex,
+        verdict,
+        &mut retired,
+    );
+    drop(publication_guard);
+    retire_for(retired, crate::core::sync::OPERATION_TIMEOUT).await;
     Some(artifact_key_hex)
 }
 
@@ -177,6 +188,7 @@ mod tests {
         server.state.artifact_store.insert("artifact", &durable);
         assert!(!server.state.artifacts.contains_key("artifact"));
 
+        let mut retired = Vec::new();
         commit_rustc_verdict(
             &server.state,
             "artifact",
@@ -186,6 +198,7 @@ mod tests {
                 stderr: Arc::new(b"lint error".to_vec()),
                 exit_code: 1,
             },
+            &mut retired,
         );
 
         let cached = server.state.artifacts.get("artifact").unwrap();
@@ -226,6 +239,7 @@ mod tests {
             .artifacts
             .insert("artifact".to_string(), CachedArtifact::from_index(meta));
 
+        let mut retired = Vec::new();
         commit_rustc_verdict(
             &server.state,
             "artifact",
@@ -235,6 +249,7 @@ mod tests {
                 stderr: Arc::new(b"lint error".to_vec()),
                 exit_code: 1,
             },
+            &mut retired,
         );
 
         let cached = server.state.artifacts.get("artifact").unwrap();
@@ -292,7 +307,7 @@ mod tests {
                 .unwrap();
         let state = Arc::clone(&server.state);
         let publication_write = Arc::clone(&state.artifact_publication)
-            .write_for(crate::core::sync::OPERATION_TIMEOUT)
+            .drain_for(crate::core::sync::OPERATION_TIMEOUT)
             .await;
         let stdout = Arc::new(Vec::new());
         let stderr = Arc::new(b"cannot find function `missing`".to_vec());
@@ -397,5 +412,126 @@ mod tests {
             tmp.path(),
             b"boom"
         ));
+    }
+    #[tokio::test]
+    async fn verdict_replacement_releases_publication_before_private_cleanup() {
+        crate::test_support::test_timeout(async {
+            use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+            use std::time::Duration;
+            let directory = tempfile::tempdir().unwrap();
+            let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
+            let private = server.state.cache_dir.join("verdict-private-plan");
+            std::fs::create_dir_all(&private).unwrap();
+            let output = private.join("old.rlib");
+            std::fs::write(&output, b"private").unwrap();
+            let key = "c".repeat(64);
+            server.state.artifacts.insert(
+                key.clone(),
+                CachedArtifact::from_provisional_staged(
+                    ArtifactIndex::new(vec!["old.rlib".into()], vec![7], vec![], vec![], 0),
+                    vec![output],
+                    Arc::new(StagedCompilePlan::for_test(private.clone(), Vec::new())),
+                ),
+            );
+            let hook = StagedHookGuard::arm(&private, StagedHookPoint::PrivatePlanCleanup);
+            let state = Arc::clone(&server.state);
+            let replacement_key = key.clone();
+            let replacement = tokio::task::spawn_blocking(move || {
+                let mut retired = Vec::new();
+                let publication = state
+                    .artifact_publication
+                    .blocking_read_for(Duration::from_secs(5));
+                commit_rustc_verdict(
+                    &state,
+                    &replacement_key,
+                    "failed".to_string(),
+                    ArtifactVerdict {
+                        stdout: Arc::new(Vec::new()),
+                        stderr: Arc::new(b"diagnostic".to_vec()),
+                        exit_code: 1,
+                    },
+                    &mut retired,
+                );
+                drop(publication);
+                drop(retired);
+            });
+            let hook = tokio::task::spawn_blocking(move || {
+                hook.wait_until_reached_for(Duration::from_secs(10));
+                hook
+            })
+            .await
+            .unwrap();
+            let writer = tokio::time::timeout(
+                Duration::from_millis(100),
+                server
+                    .state
+                    .artifact_publication
+                    .drain_for(Duration::from_secs(5)),
+            )
+            .await;
+            let writer_proceeded = writer.is_ok();
+            drop(writer);
+            // Old code still owns the map shard at the hook. Query only after
+            // proving exclusion was released, so RED always terminates.
+            let replacement_visible = writer_proceeded
+                && server
+                    .state
+                    .artifacts
+                    .get(&key)
+                    .is_some_and(|entry| entry.meta.rustc_verdicts.contains_key("failed"));
+            hook.resume();
+            tokio::time::timeout(Duration::from_secs(10), replacement)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                writer_proceeded,
+                "replacement destructor retained publication exclusion"
+            );
+            assert!(
+                replacement_visible,
+                "replacement was not visible before private cleanup"
+            );
+            assert!(!private.exists());
+        })
+        .await;
+    }
+    #[tokio::test]
+    async fn unpolled_verdict_cleanup_waiter_keeps_owned_worker() {
+        crate::test_support::test_timeout(async {
+            use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+            use std::time::Duration;
+            let directory = tempfile::tempdir().unwrap();
+            let private: NormalizedPath = directory.path().join("owned-verdict-cleanup").into();
+            std::fs::create_dir_all(&private).unwrap();
+            let output = private.join("old.rlib");
+            std::fs::write(&output, b"private").unwrap();
+            let record = CachedArtifact::from_provisional_staged(
+                ArtifactIndex::new(vec!["old.rlib".into()], vec![7], vec![], vec![], 0),
+                vec![output],
+                Arc::new(StagedCompilePlan::for_test(private.clone(), Vec::new())),
+            );
+            let hook = StagedHookGuard::arm(&private, StagedHookPoint::PrivatePlanCleanup);
+            // Deliberately never poll this waiter. Scheduling owns the records
+            // immediately, rather than leaving them in an unpolled async frame.
+            let waiter = retire_for(vec![record], Duration::from_secs(5));
+            let hook = tokio::task::spawn_blocking(move || {
+                hook.wait_until_reached_for(Duration::from_secs(10));
+                hook
+            })
+            .await
+            .unwrap();
+            drop(waiter);
+            assert!(private.exists());
+            hook.resume();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while private.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("dropping the waiter must not cancel owned cleanup");
+        })
+        .await;
     }
 }

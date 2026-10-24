@@ -178,6 +178,14 @@ stopped writing, so an unlocked directory is reclaimed only after nothing
 beneath it has changed for an hour (#1796); a directory with no lock file at
 all (a daemon that died before writing one) needs only a 60 s age.
 
+A finished private plan root is never removed by the code that drops it,
+because that owner may still hold publication or store exclusion (#1964).
+Dropping or cleaning up a plan renames its root into the staging root's
+`.trash` in one call. The staging root's sweeper thread empties `.trash`
+every two seconds. When the daemon drops its staging root, the sweeper
+removes the whole root on its own; if the process exits first, the startup
+cleanup above reclaims it.
+
 Rust staging adds
 `--remap-path-prefix=<private-root>=/__zccache_staged_output_7b6d6f0c5a944e8ba1c7e9634b287d91__`,
 and depfiles

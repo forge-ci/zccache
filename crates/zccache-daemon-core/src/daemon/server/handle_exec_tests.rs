@@ -37,6 +37,11 @@ async fn detached_exec_publisher_cannot_resurrect_artifact_after_clear() {
         server.index_writer_rx.take().unwrap(),
         Arc::clone(&server.state.artifact_store),
         Arc::clone(&server.state.index_writer_shutdown),
+        server
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .unwrap(),
     ));
 
     let permit_count = server.state.persist_semaphore.available_permits() as u32;
@@ -92,6 +97,11 @@ async fn detached_exec_handoff_does_not_reacquire_behind_queued_clear() {
         server.index_writer_rx.take().unwrap(),
         Arc::clone(&server.state.artifact_store),
         Arc::clone(&server.state.index_writer_shutdown),
+        server
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .unwrap(),
     ));
     let permit_count = server.state.persist_semaphore.available_permits() as u32;
     let blocked_persist = Arc::clone(&server.state.persist_semaphore)
@@ -112,7 +122,14 @@ async fn detached_exec_handoff_does_not_reacquire_behind_queued_clear() {
     let publisher_state = Arc::clone(&server.state);
     let publisher_gate = Arc::clone(&gate);
     let mut publisher = tokio::spawn(async move {
-        store_exec_artifact_with_handoff_gate(&publisher_state, key, artifact, publisher_gate).await
+        store_exec_artifact_with_handoff_gate(
+            &publisher_state,
+            key,
+            artifact,
+            publisher_gate,
+            crate::core::sync::OPERATION_TIMEOUT,
+        )
+        .await
     });
     gate.wait_until_acquired().await;
 
@@ -581,4 +598,80 @@ fn exact_exec_disabled_lane_has_stable_reason() {
         ),
         StagedPlanOutcome::Unsupported(StagedPlanReason::LaneDisabled)
     ));
+}
+
+#[tokio::test]
+async fn direct_exec_persistence_admission_deadline_releases_publication() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
+        let permits = Arc::clone(&server.state.persist_semaphore)
+            .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
+            .await.unwrap();
+        let gate = PublicationHandoffGate::new();
+        let publisher_state = Arc::clone(&server.state);
+        let publisher_gate = Arc::clone(&gate);
+        let publisher = tokio::spawn(async move {
+            store_exec_artifact_with_handoff_gate(
+                &publisher_state, "d".repeat(64),
+                ArtifactData {
+                    outputs: vec![ArtifactOutput {
+                        name: "deadline.bin".into(),
+                        payload: ArtifactPayload::Bytes(Arc::new(b"deadline".to_vec())),
+                    }],
+                    stdout: Arc::new(Vec::new()), stderr: Arc::new(Vec::new()), exit_code: 0,
+                },
+                publisher_gate, Duration::from_millis(5),
+            ).await.unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_acquired()).await.unwrap();
+        gate.resume();
+        tokio::time::timeout(Duration::from_secs(5), publisher).await.unwrap().unwrap();
+        let writer = tokio::time::timeout(Duration::from_secs(1),
+            server.state.artifact_publication.drain_for(Duration::from_secs(5)),
+        ).await;
+        let deadline_released_publication = writer.is_ok();
+        drop(writer);
+        // Drain the baseline too: a failed assertion must leave no queued writer.
+        drop(permits);
+        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_persisted()).await.unwrap();
+        assert!(deadline_released_publication,
+            "expired direct exec admission retained publication while capacity remained unavailable");
+    }).await;
+}
+
+#[tokio::test]
+async fn released_root_declines_exec_hit_without_materializing_or_falling_back() {
+    crate::test_support::test_timeout(async {
+        let temp = tempdir().unwrap();
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let cache_dir = NormalizedPath::new(temp.path().join("cache"));
+        let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let key = "9".repeat(64);
+        let artifact = ArtifactData {
+            outputs: vec![ArtifactOutput {
+                name: "result.bin".into(),
+                payload: ArtifactPayload::Bytes(Arc::new(b"cached output".to_vec())),
+            }],
+            stdout: Arc::new(Vec::new()),
+            stderr: Arc::new(Vec::new()),
+            exit_code: 0,
+        };
+        server.state.artifacts.insert(key.clone(), CachedArtifact::from_artifact_data(&artifact));
+        server.state.cache_root_lock.release();
+        let response = try_exec_cache_hit(
+            &server.state,
+            &key,
+            temp.path(),
+            &[NormalizedPath::from("result.bin")],
+            ExecOutputStreams::default(),
+            MaterializationMode::Auto,
+        )
+        .await;
+        assert!(matches!(response, Some(Response::Error { ref message }) if message.contains("cache-root ownership")),
+            "released ownership must be a terminal response, not a hit or a soft miss");
+        assert!(!temp.path().join("result.bin").exists(), "closed-root work wrote the output");
+        assert_eq!(server.state.active_cache_requests(), 0);
+    })
+    .await;
 }

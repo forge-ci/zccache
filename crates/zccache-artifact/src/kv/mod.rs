@@ -37,6 +37,12 @@ use std::sync::Arc;
 
 use zccache_core::NormalizedPath;
 
+mod retirement;
+pub use retirement::{DetachedKvNamespace, KvSweepReport};
+
+#[cfg(test)]
+mod retirement_tests;
+
 /// Windows long-path (`\\?\`) helpers. On non-Windows platforms every entry
 /// point is a no-op pass-through.
 mod long_path {
@@ -290,16 +296,16 @@ fn rename_shard(dest: &Path) -> &'static zccache_core::blocking_sync::Mutex<()> 
 /// `NotFound` (#1648). Keyed by the namespace directory, so stores opened
 /// separately over one cache dir share a gate, and puts never exclude each
 /// other.
-fn namespace_gate(dir: &Path) -> &'static zccache_core::blocking_sync::RwLock<()> {
+fn namespace_gate(dir: &Path) -> &'static zccache_core::sync::PublicationBarrier {
     use std::hash::{Hash, Hasher};
 
     const SHARDS: usize = 16;
-    static GATES: std::sync::OnceLock<Vec<zccache_core::blocking_sync::RwLock<()>>> =
+    static GATES: std::sync::OnceLock<Vec<zccache_core::sync::PublicationBarrier>> =
         std::sync::OnceLock::new();
 
     let gates = GATES.get_or_init(|| {
         (0..SHARDS)
-            .map(|_| zccache_core::blocking_sync::RwLock::new(()))
+            .map(|_| zccache_core::sync::PublicationBarrier::new())
             .collect()
     });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -495,9 +501,8 @@ impl KvStore {
         }
         let path = self.value_path(namespace, key);
         let dir = self.namespace_dir(namespace);
-        let _gate = namespace_gate(dir.as_path())
-            .read_for(zccache_core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate =
+            namespace_gate(dir.as_path()).blocking_read_for(zccache_core::sync::STATE_TIMEOUT);
 
         let mut attempt = 1;
         loop {
@@ -547,34 +552,24 @@ impl KvStore {
             .map_err(|e| KvError::BlockingJoin(e.to_string()))?
     }
 
-    /// Drop every entry under `namespace`. Other namespaces are untouched.
-    ///
-    /// Holds the namespace gate exclusively, so no put from this process is
-    /// mid-write while the directory is removed. A put from another process
-    /// can still drop a file in during the walk, which makes the final
-    /// `rmdir` fail with `DirectoryNotEmpty`; the walk is retried (#1648).
+    /// Detach the namespace under its gate, then sweep its retired generation.
+    /// Concurrent puts after detachment create a fresh namespace.
     pub fn clear_namespace(&self, namespace: &str) -> KvResult<()> {
-        const ATTEMPTS: usize = 8;
-
-        check_namespace(namespace)?;
-        let dir = self.namespace_dir(namespace);
-        let _gate = namespace_gate(dir.as_path())
-            .write_for(zccache_core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let mut attempt = 1;
-        loop {
-            match std::fs::remove_dir_all(dir.as_path()) {
-                Ok(()) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::DirectoryNotEmpty && attempt < ATTEMPTS =>
-                {
-                    attempt += 1;
-                }
-                Err(e) => return Err(KvError::Io(e)),
-            }
+        let detached = self.detach_namespace_for(namespace, zccache_core::sync::STATE_TIMEOUT)?;
+        // The detach is the clear: the live namespace is already empty. A
+        // put racing the sweep can leave files in the retired tree; that
+        // tree stays durable retry work for `sweep_retired_namespaces_for`
+        // rather than failing a clear that has taken effect (#1648).
+        let report = detached.sweep_for(zccache_core::wait::PROBE)?;
+        if report.failures != 0 || report.deferred {
+            tracing::debug!(
+                namespace,
+                failures = report.failures,
+                deferred = report.deferred,
+                "namespace cleared; retired tree retained for retry"
+            );
         }
+        Ok(())
     }
 
     /// Async wrapper for [`Self::clear_namespace`] that runs the directory

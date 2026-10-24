@@ -32,7 +32,7 @@ struct PublishedMiss {
 
 fn insert_staged_multi_cache_visibility(
     state: &SharedState,
-    _publication_guard: &crate::core::sync::ReadPermit,
+    _publication_guard: &crate::core::sync::PublicationReadPermit,
     context_key: ContextKey,
     validation_clock: Clock,
     key: String,
@@ -715,6 +715,11 @@ mod tests {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let publication_guard = begin_artifact_publication(&server.state).await.unwrap();
         let clear_state = Arc::clone(&server.state);

@@ -32,7 +32,7 @@ pub fn export_snapshot(
     destination: &Path,
 ) -> io::Result<SnapshotReceipt> {
     validate_compatibility(compatibility)?;
-    let _guard = StagedReadGuard::acquire_if_present(artifact_dir)?;
+    let _guard = StagedReadGuard::acquire_if_present_for(artifact_dir, zccache_core::wait::PROBE)?;
     publish_snapshot(
         store,
         artifact_dir,

@@ -341,3 +341,29 @@ from a checker that recurses through local fields only. Test against the real
 consumer dependency and classify the wrapper by its resolved defining module
 and type. Include aliases, concrete wrappers and unit-valued native guards;
 only separately owned data-free operation permits may survive suspension.
+
+
+## #1964: cancellation ownership and retention fixtures
+
+- A blocking worker must own the operation permit for the entire native
+  transaction. Holding the permit only in its awaiting request releases it
+  immediately on cancellation while native cleanup continues. Return the permit
+  with the result if the caller must retain it through a final acknowledgement.
+- A staged generation's observed age includes directory mtimes. Retention
+  fixtures must age directories after their children as well as payload and
+  pointer files; aging only files never reaches expiration-based eviction.
+
+### Delivery ownership and destructor lifetimes (#1964)
+- Borrow delivery payloads from an owned cache-record clone so Rust keeps private cleanup ownership alive through native lease teardown. An empty Drop can enforce the destruction boundary; compiler fixtures must exercise both later access and implicit destruction after the last access.
+- Separate publication from the owned record before output copying, with explicit safe declaration/drop order. Use a real private-type compiler bridge plus a passing access control; a private-import failure cannot prove the lifetime contract.
+- Paused-sweep publication regressions should report native lock availability separately from full publisher completion. Retain failing timing receipts and existing deadlines when diagnosing intermittent failures.
+
+### Pre-elaboration drops and downstream ownership checks (#1964)
+- A moved-value drop may be impossible to execute while still present in compiler MIR. Its impossible unwind edge can contaminate later guard state even when the lint skips checking the drop itself. Prune only drops proven empty by initialization/drop requirements on a private MIR clone, and retain a negative fixture with a real destructor after a partial move.
+- Validate the proposed precision change against a minimal positive and real negative. Discard broader analysis changes when the control already passes without them; do not classify an unsupported helper-transfer shape as a false-positive regression.
+
+### Native job ownership survives explicit service release (#1964)
+- Retaining Arc<SharedState> does not prove a cache-root claim survives shutdown: the controller explicitly releases its native lock. Test actual native reacquisition after explicit release while cleanup is paused. A narrow job lease can keep that claim alive without retaining cache state and its recursive destructors.
+- Distinguish ownership capabilities from short publication/store exclusion. Lifetime leases can span bounded admission and blocking cleanup while resolved leaks and erasure remain forbidden.
+- Keep semaphore admission on its async lane with a real duration before queuing blocking work. Moving a capacity wait into the same blocking pool as permit holders can create starvation cycles.
+- A timeout of a cleanup waiter does not stop a filesystem syscall; ownership must remain with the actual worker until completion. Controller release must refuse new leases while outstanding jobs keep their own native claims.

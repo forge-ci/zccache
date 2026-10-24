@@ -309,6 +309,7 @@ def lint_workspace():
             "dylints/enforce_platform_boundary/Cargo.toml",
             "dylints/ban_registered_env_read/Cargo.toml",
             "dylints/ban_unbounded_sync/Cargo.toml",
+            "dylints/ban_sweep_under_exclusion/Cargo.toml",
         ):
             result = run_cmd(cargo_command(
                 "fmt",

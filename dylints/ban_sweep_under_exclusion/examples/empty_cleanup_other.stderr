@@ -1,0 +1,22 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/empty_cleanup_other.rs:35:18
+   |
+LL |     let holder = populated(cleanup, value);
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/empty_cleanup_other.rs:40:5
+   |
+LL |     changed(cleanup, value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/empty_cleanup_other.rs:52:18
+   |
+LL |     let holder = boxed_populated(cleanup, value);
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
+

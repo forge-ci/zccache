@@ -407,6 +407,24 @@ fn a_driver_waiting_on_a_busy_compiler_child_is_making_progress() {
 }
 
 #[test]
+fn observable_flat_tree_cpu_is_a_stall_when_session_cpu_is_unavailable() {
+    // macOS session accounting reports nothing; the tree ticks still decide.
+    assert!(!super::session::stall_cpu_advanced(
+        None,
+        None,
+        Some(7),
+        Some(7)
+    ));
+    assert!(super::session::stall_cpu_advanced(
+        None,
+        None,
+        Some(7),
+        Some(9)
+    ));
+    assert!(super::session::stall_cpu_advanced(None, None, None, None));
+}
+
+#[test]
 fn a_driver_moving_from_its_compiler_to_its_assembler_is_making_progress() {
     // cc1plus exits and `as` starts: the live descendants' total drops.
     let driver = Some(std::time::Duration::from_millis(40));

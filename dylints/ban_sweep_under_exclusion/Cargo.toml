@@ -1,0 +1,24 @@
+[package]
+name = "ban_sweep_under_exclusion"
+version = "0.6.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.0.3"
+
+[dev-dependencies]
+kernal-api = { version = "=0.1.26", default-features = false }
+dylint_testing = "=6.0.3"
+serde_json = "1"
+zccache-core = { path = "../../crates/zccache-core" }
+zccache-artifact = { path = "../../crates/zccache-artifact" }
+zccache-daemon-core = { path = "../../crates/zccache-daemon-core", features = ["test-support"] }
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]

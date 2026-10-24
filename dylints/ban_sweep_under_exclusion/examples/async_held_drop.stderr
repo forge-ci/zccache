@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/async_held_drop.rs:5:5
+   |
+LL |     drop(operation.take());
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/async_held_drop.rs:11:5
+   |
+LL |     drop(operation.take());
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

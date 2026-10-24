@@ -151,6 +151,46 @@ observed overruns; it does not cancel arbitrary callbacks in place, guarantee a
 hard real-time deadline, interrupt an uninterruptible kernel syscall, or establish
 a global order between operation permits.
 
+Materialization payloads borrow an owned cached-record clone, never a DashMap
+shard. Rust requires that record to outlive both payload access and native lease
+destruction; private staging cleanup therefore belongs to the record owner.
+Compile hits separate publication ownership from that record, release publication
+before output copying, and retain the record through delivery. Durable generation
+paths additionally keep their shared native store lease until delivery finishes.
+Compiler contract fixtures exercise early owner drops and correct release order;
+isolated runtime regressions cover retained readers, replacement, Clear and eviction.
+
+Direct-exec persistence transfers publication to its owned task before scheduling
+displaced-record destruction on the blocking lane. Persistence admission has a
+mandatory duration budget. Expiry releases publication while capacity remains
+unavailable; private cleanup proceeds independently of the async caller.
+Each of these jobs retains a `CacheRootWriterLease`. Server release closes new
+root leases, and outstanding jobs retain the native writer claim through actual
+completion. The lease carries filesystem ownership across waits and cleanup;
+its destruction releases the claim without recursively dropping cache state.
+The wait budget does not interrupt an individual filesystem syscall.
+
+Clear and disk-maintenance sweep workers also retain their own root lease,
+independent of the request future and `Arc<SharedState>`. Explicit daemon release
+cannot admit another native writer while these workers are paused in cleanup.
+Maintenance separately retains a completion lease through its full-pass marker.
+Clear submits its lease through `SharedState::launch_blocking_with_root`. The
+wrapper retains ownership through its tracked activity's final state destruction,
+including private-plan cleanup after the callback returns or unwinds. Keeping the
+lease only inside the callback is insufficient. Regressions drop the server,
+pause that actual last-owner cleanup, probe native exclusion, and prove root reuse
+after the tracked task finishes. The draft now removes the root-free tracked launch entrypoint and requires a
+concrete lease at its callers. The latest focused released-root check passes;
+validation of the complete caller migration remains unfinished.
+The WAL actor receives a service root lease before it is spawned. All of its
+index writes (periodic/batch flush, removal, Clear and final drain) use a private
+nonblocking job constructor requiring shared root ownership. Each blocking job
+retains its own strong reference through store teardown. An acknowledgement timeout
+or actor cancellation releases the waiter while the actual write retains native
+exclusion. A paused-write regression exercises both conditions and proves native
+root reuse after completion. The actor is an owned service with an explicit
+shutdown signal and bounded drain/join; its FIFO writes remain sequential.
+
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 
 | PR | Status | Relevance here |

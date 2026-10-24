@@ -80,9 +80,25 @@ impl Fixture {
         }
     }
 
-    fn bind(&self) -> DaemonServer {
-        DaemonServer::bind_with_cache_dir(&crate::ipc::unique_test_endpoint(), &self.cache_root)
-            .unwrap()
+    /// The previous daemon's background tasks keep a root lease until they
+    /// finish, so a rebind right after shutdown may briefly see `WouldBlock`.
+    async fn bind(&self) -> DaemonServer {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match DaemonServer::bind_with_cache_dir(
+                &crate::ipc::unique_test_endpoint(),
+                &self.cache_root,
+            ) {
+                Ok(server) => return server,
+                Err(crate::ipc::IpcError::Io(error))
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("daemon rebind failed: {error}"),
+            }
+        }
     }
 
     async fn compile(&self, server: &DaemonServer) -> bool {
@@ -111,7 +127,7 @@ impl Fixture {
     /// Run one full daemon lifetime: bind, load the graph the production way,
     /// compile, then perform the real shutdown durability drain.
     async fn session(&self, load_graph: bool) -> bool {
-        let mut server = self.bind();
+        let mut server = self.bind().await;
         let writer = spawn_index_writer(&mut server);
         if load_graph {
             start_with_production_load(&server, self.depgraph_path.as_path());
@@ -152,7 +168,7 @@ async fn a_version_reset_costs_one_recompile_and_leaves_the_artifact_re_adoptabl
     // A schema bump: same bytes, foreign version tag.
     skew_snapshot_version(fixture.depgraph_path.as_path());
 
-    let server = fixture.bind();
+    let server = fixture.bind().await;
     assert!(
         !start_with_production_load(&server, fixture.depgraph_path.as_path()),
         "a foreign schema version must not be installed"
@@ -211,7 +227,7 @@ async fn an_oscillating_schema_version_stays_warm_through_the_quarantine_sidecar
     std::fs::copy(ours.as_path(), fixture.depgraph_path.as_path()).unwrap();
     skew_snapshot_version(fixture.depgraph_path.as_path());
 
-    let server = fixture.bind();
+    let server = fixture.bind().await;
     assert!(
         start_with_production_load(&server, fixture.depgraph_path.as_path()),
         "our own parked snapshot carries this build's exact schema version and \
@@ -250,7 +266,7 @@ async fn repeated_resets_are_idempotent() {
 
     for round in 0..3 {
         skew_snapshot_version(fixture.depgraph_path.as_path());
-        let server = fixture.bind();
+        let server = fixture.bind().await;
         assert!(!start_with_production_load(
             &server,
             fixture.depgraph_path.as_path()

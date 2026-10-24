@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn cache_hit_branches_precede_compiler_admission() {
-        let pipeline = include_str!("handle_compile/pipeline/mod.rs");
+        let pipeline = include_str!("handle_compile/pipeline/request.rs");
         let compile_miss = pipeline
             .find("run_compile_exec(CompileExecRequest")
             .expect("pipeline must dispatch real cache misses");

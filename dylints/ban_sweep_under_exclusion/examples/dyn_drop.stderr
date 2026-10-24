@@ -1,0 +1,22 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/dyn_drop.rs:23:5
+   |
+LL |     drop(hook);
+   |     ^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/dyn_drop.rs:39:5
+   |
+LL |     drop(callback);
+   |     ^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/dyn_drop.rs:57:5
+   |
+LL |     drop(callback);
+   |     ^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
+

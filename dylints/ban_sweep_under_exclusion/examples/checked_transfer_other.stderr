@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/checked_transfer_other.rs:8:5
+   |
+LL |     release_then_drop(first, value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/checked_transfer_other.rs:12:5
+   |
+LL |     drop(value);
+   |     ^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

@@ -1431,7 +1431,7 @@ next child, then sync/rebase against origin/main and leave a clean tree.
 
 - [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
 - [x] #1962 holder watchdog and diagnostics: merged PR #1973 after all six gate lanes passed (1,394s); rebased clean main to origin/main 0fb36402.
-- [ ] #1963 bounded generic process liveness.
+- [x] #1963 bounded generic process liveness (merged PR #1974).
 - [ ] #1964 detach staged deletion from publication exclusion.
 - [ ] #1965 durable-entry payload demotion.
 - [ ] #1966 default eligible native/link/exec staging.
@@ -1559,3 +1559,874 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+## #1964 implementation plan
+
+- [x] RED: both maintenance and Clear paused recursive deletion block a real unrelated publisher; workers are resumed/drained before assertions. Evidence: /tmp/zccache-1964-sweep-red.log (2 expected failures).
+- [ ] Introduce typed detach/sweep ownership; rename to private restart-safe trash under short exclusion, sweep on the blocking lane after release.
+- [ ] Cover generation replacement, retained readers, retries/crash recovery, correct reclaimed-byte accounting, symlink/reparse refusal, two-second maintenance deferral and bounded Clear acquisition.
+- [ ] Include publication rollback/conflict/invalid-generation recursive cleanup, which remains under store exclusion beyond the producer's maintenance patch.
+- [ ] Add resolved-symbol deny-level Dylint for destructive sweep capabilities and slow filesystem work under publication/store guards; real negative/positive alias/UFCS/function-item fixtures.
+- [ ] Update docs; run focused tests, one local review and clean-tree full gate, merge separate PR; rebase main to origin/main and delete feature branch.
+
+#1963 completed: PR #1974 merged as adf2c5e1300b16662261700af5e4f99fe347bc96;
+issue closed. All six gate lanes passed in 1,618s, including 52 strict PCH
+regressions and 3,661 main tests, final normal-wrapper Dylint on three OS
+selections and planted violations. Attested head `7cb7a78a80bf`, tree `cef40a9e0946`.
+Local review clean; ten focused liveness cases rerun independently. Main was
+rebased to origin/main (0/0), verified clean, and feature branches removed.
+
+#1964 runtime checkpoint (not ready to push):
+
+- Both original paused-sweep RED cases are GREEN. The additional retained-reader
+  conflict case was RED (resolved old path vanished), then GREEN: conflict
+  retires the pointer immediately, attempts generation retirement only after
+  dropping publication's native shared/key guards, and defers while readers
+  remain. Exclusive orphan collection revalidates the current pointer.
+- `DetachedStagedTrash` owns already-renamed paths; Drop does no filesystem work.
+  The sweep checks one shared deadline across enumeration/deletion and retries
+  durable leftovers. Only its recursive owner deletes staged trees. Final
+  empty-trash-directory unlink takes a zero-wait native exclusive permit to
+  avoid racing new detaches. Clear's prior clean layout is preserved.
+- Publication rollback/conflict/invalid-generation cleanup and startup orphan
+  cleanup use retirement rather than recursive deletion under native locks.
+  Normal maintenance returns sweep work from the publication commit. Planning
+  recursive scans run without a store guard. Clear's staged detach and sweep
+  run on the blocking lane; its staged sweep follows publication-writer drop.
+- 85 targeted regressions pass: 33 staged-store, 11 cached-artifact, 36 disk
+  maintenance, 5 Clear-handler (including ignored cases). Evidence:
+  /tmp/zccache-1964-maintenance-regressions.log. New cases include failed-delete
+  recovery, expired-sweep recovery, linked/reparse-root refusal and no traversal
+  through a trash-entry link. Windows junction fixture is present but only Linux
+  runtime has run locally so far.
+- Large source files were split: staged_store/publish.rs;
+  disk_maintenance_commit.rs and disk_maintenance_runtime.rs. Modified owners
+  are below 1,000 lines. Digest sidecar naming is shared with the sweep owner.
+
+Remaining #1964 work:
+1. Complete Clear's other cleanup: synchronous flat-file enumeration/removal,
+   metadata/depgraph snapshots, meson tree and exec KV namespace still run
+   under its publication writer (some on the async worker). Retire live names
+   atomically before releasing exclusion, then sweep on an owned blocking lane;
+   avoid erasing fresh post-Clear publications. Preserve WAL queue ordering,
+   lookup/startup leases and cancellation ownership. Do not simply drop the
+   writer and delete live paths. The current staged-only split is partial.
+2. Include failed/deferred trash in accounted cache usage. Reclaimed bytes now
+   use successful sweep unlink allocation and existing last-link/COW eligibility,
+   but pending .trash is skipped by current live-key scans. Add targeted
+   partial-failure/hardlink/COW accounting and real crash/restart recovery proof.
+3. Add actual global-publication pause regressions for maintenance and Clear,
+   generation replacement races and final two-second contention/Clear deadlines.
+   Existing new pause tests prove store-lock release with a real publisher;
+   existing Clear tests preserve hydration/lookup leases.
+4. Implement/register deny-level semantic Dylint for destructive sweep ownership
+   and forbidden slow filesystem/sweep work while publication/store guards live.
+   Cover aliases, UFCS/function items and wrappers; use typed phase capabilities
+   where liveness cannot be established. Preserve narrow justified owners;
+   private compile staging cleanup is distinct from shared store retirement.
+5. Update authoritative docs, final Clippy and cross-OS/feature lint coverage,
+   one clud-review invocation, full clean-tree gate, separate PR/merge, then
+   switch/rebase main onto origin/main and delete feature branches.
+
+
+### #1964 Clear/KV ownership progress (2026-10-22)
+
+- Added typed `DetachedKvNamespace`: namespace-gated rename, blocking sweep after
+  gate release, durable `.retired` recovery, link/reparse refusal, allocated-byte
+  last-link/COW accounting. Two isolated namespace recreation/reopen tests passed
+  (`/tmp/zccache-1964-kv-green.log`); missing-API RED retained separately.
+- Clear now moves its maintenance permit and retained SharedState into its owned
+  blocking worker. Publication exclusion covers only logical reset, live-name
+  retirement and ordered WAL Clear acknowledgement. Staged, flat, snapshots,
+  meson and exec namespace cleanup follows after writer release. Snapshot live
+  names are never deleted by the later sweeper. WAL flush failure is an error.
+- Both new Clear regressions failed before this change: publication stayed
+  excluded during KV sweeping, and cancellation released maintenance too soon
+  (`/tmp/zccache-1964-clear-cancel-red-bounded.log`). All 87 focused staged,
+  retained-reader, disk-maintenance and Clear tests passed with the owned worker
+  (`/tmp/zccache-1964-clear-owned-green.log`). Strengthened seeded-KV rerun also
+  passed all 87 tests (`/tmp/zccache-1964-clear-seeded-green.log`).
+- Compatibility KV Clear now also retires before sweeping instead of recursively
+  deleting under its namespace gate. Its isolated full KV regression rerun passed 29 tests, with one existing
+  allocation-heavy test ignored (`/tmp/zccache-1964-kv-full-green.log`).
+- The earlier remaining-work item 1 is now implemented, pending final review.
+  Items 2–5 remain open; do not treat this checkpoint as completed #1964.
+
+
+### #1964 pending-trash accounting and process recovery (2026-10-22)
+
+- Captured accounting RED: maintenance reported only 17 pending-write bytes
+  while a 16 KiB retired payload remained (`/tmp/zccache-1964-trash-accounting-red.log`).
+- The physical scan now returns live eviction candidates separately from pending
+  trash allocation; both share inode deduplication. Pending trash contributes to
+  before/after usage and budget pressure, never becomes a live eviction key.
+- Three focused accounting regressions pass: recovered durable trash, partial
+  unlink failure retaining its allocated usage, and live/trash hardlinks counted
+  once with zero promised free-space gain. Receipts:
+  `/tmp/zccache-1964-trash-accounting-extended.log`.
+- A bounded child actually exits with a detached token still live, skipping Rust
+  destructors. Parent reopens the store, publishes the same key again, recovers
+  trash, and verifies the replacement remains readable. Passed with seven other
+  sweep regressions (`/tmp/zccache-1964-process-recovery.log`). The ignored child
+  fixture is explicitly executed by its parent; it is not an omitted assertion.
+- Full focused staged-store/reader/maintenance/Clear rerun passed:
+  `/tmp/zccache-1964-accounting-store-regressions.log`.
+- Still open: production KV recovery scheduling and crash regression, global
+  maintenance writer pause, generation replacement race, semantic Dylint and
+  required UI/OS/feature gates, docs/review/full gate/PR merge/main rebase.
+
+
+### #1964 production recovery scheduling (2026-10-22)
+
+- Both Clear and periodic maintenance previously failed the new production
+  regression by retaining an abandoned KV namespace indefinitely (RED:
+  `/tmp/zccache-1964-production-kv-recovery-red.log`). Both now invoke bounded
+  retired-namespace recovery on the blocking lane outside publication exclusion.
+  Clear also retries pre-existing staged trash. Successful unlink credits are
+  included; incomplete recovery is logged and retained for retry.
+- All focused store/maintenance/reader/Clear tests passed, including both new
+  recovery entrypoint tests (`/tmp/zccache-1964-production-kv-recovery-green.log`).
+- KV process-exit recovery also passed with a fresh same-key replacement intact;
+  full KV suite: 30 passed, one existing allocation-heavy test and one explicitly
+  parent-invoked child fixture ignored in the outer harness
+  (`/tmp/zccache-1964-kv-process-recovery.log`).
+- Next: maintenance global writer/cancellation regression, explicit generation
+  replacement race, then semantic Dylint enforcement and final PR gates.
+
+
+### #1964 maintenance cancellation and generation-race evidence (2026-10-22)
+
+- A real expired-generation maintenance pass pauses its recursive sweep after
+  destructive commit. The regression verifies the old entry is unreachable and
+  the global publication writer is released, then cancels the request. RED
+  exposed premature maintenance-permit release
+  (`/tmp/zccache-1964-maintenance-cancel-red.log`).
+- The blocking worker now owns the permit and returns it with its result.
+  Cancellation cannot release it mid-cleanup; normal completion still retains
+  it through the WAL acknowledgement. All 94 focused regressions passed
+  (`/tmp/zccache-1964-maintenance-cancel-green.log`).
+- A separate deterministic race pauses eviction between scan and native-store
+  acquisition, replaces the generation under the same key, resumes commit, and
+  proves stale eviction leaves the new pointer/payload intact. All nine sweep
+  regressions passed, with the explicitly parent-invoked child fixture ignored
+  by the outer harness (`/tmp/zccache-1964-replacement-race.log`).
+- Primary remaining #1964 work: implement/register semantic deny-level Dylint
+  with alias/UFCS/function-item and live-guard coverage, typed capabilities as
+  needed, cross-OS/features, docs/review/full gate, PR merge and main rebase.
+
+
+### #1964 typed publication and Dylint foundations (2026-10-22)
+
+- Added `ban_sweep_under_exclusion`, registered in workspace discovery,
+  ci/lint.py formatting and the existing ci.yml Dylint job. Cache-footprint and
+  wiring validators pass. No new workflow file. Raw recursive/empty-directory
+  deletion is resolved by DefId, confined to explicit shared sweep/link owners
+  and existing private compiler/lifecycle owners. Capturing a raw function item
+  is forbidden even in an approved owner; direct alias calls resolve normally.
+- Raw alias fixture RED: `/tmp/zccache-1964-dylint-owner-red.log`. Ownership-only
+  production checks passed Linux/Windows/macOS selections before guard analysis
+  was added (`/tmp/zccache-1964-owner-workspace-dylint.log`). Do not mistake that
+  earlier run for validation of the current full guard implementation.
+- Current guard analysis uses compiler MoveData and MaybeInitializedPlaces on
+  promoted MIR, with guard leaves rather than wrapper roots. Copies of MIR omit
+  borrow-checker imaginary edges. The wrapper adds enum discriminant refinement
+  without enabling rustc's experimental precise-enum-drop flag. Fixtures cover
+  partial moves, complete releases, aliased guards and released Result values.
+- MIR findings: mir_built is already stolen during late linting. optimized_mir
+  loses local metadata and contains SetDiscriminant/Deinit unsupported by the
+  borrowck MoveData builder. Promoted MIR works for the sync fixtures, but some
+  production async MIR is already consumed. Current fallback fails closed when
+  it cannot validate a guard; do not suppress this or claim production coverage.
+  Failed development runs are retained in /tmp/zccache-1964-*-guard-workspace.log.
+- The generic core WritePermit also means whole-compile admission; it cannot be
+  treated as publication critical-section ownership. Added actual core
+  PublicationBarrier / PublicationCommitPermit / PublicationDrainPermit facades,
+  with private underlying permits and mandatory Duration on all waits. Async
+  drain_for is distinct from blocking_write_for; shared ReadPermit stays the
+  existing operation lease. Migrated daemon field/construction, maintenance,
+  bounded shutdown/flush return contracts and tests. KV namespace gates now use
+  the publication facade instead of a unit data RwLock held through put I/O.
+- API RED/GREEN: /tmp/zccache-1964-publication-facade-api-{red,green}.log. Runtime:
+  95 daemon regressions pass (/tmp/zccache-1964-publication-facade-runtime.log),
+  30 KV tests pass, with existing allocation-heavy and parent-invoked child
+  fixtures ignored by the outer harness
+  (/tmp/zccache-1964-publication-kv-runtime.log).
+- 10 current UI fixtures pass, including actual core commit rejection and
+  allowed admission/drain/released commit examples
+  (/tmp/zccache-1964-real-publication-ui-green.log). Dependency flag discovery
+  uses Cargo JSON from a bounded soldr child. SpawnSpec 0.1.26 lacks env_remove;
+  helper clear-and-copies inherited environment except IN_SOLDR_PID, preserving
+  the explicit toolchain and default wrapper under CI.
+- Existing ban_std_pathbuf caught the new retirement-token PathBuf fields; both
+  staged and KV tokens now use NormalizedPath. Their runtime regressions pass.
+
+NEXT (still incomplete, do not push/merge #1964):
+1. Give native store EXCLUSIVE commits a distinct sealed capability instead of
+   the same FileLock used by key publication, read leases and lifecycle roots.
+   Artifact staged_lock.rs is the shared daemon/warm owner; its public
+   open_store_lock currently returns a raw File. Audit all consumers before
+   migrating. Keep retained readers valid and the 2s maintenance deadline.
+2. Separate guard effects: short publication/store commit permits forbid slow
+   filesystem work; shared/native operation leases and publication drains
+   forbid shared trash sweeps but allow their intentional operation I/O. Generic
+   core WritePermit admission is NOT a publication commit. Current matcher was
+   updated to PublicationCommitPermit, but native FileLock is still over-broad.
+3. Confine PublicationBarrier::drain_for acquisition to
+   wal::drain_durable_state_for_shutdown and embedded::flush_embedded_state
+   (plus test-only callers); otherwise it bypasses the typed commit policy.
+   Resolve method/function-item DefIds. The current API example calls drain_for
+   as a signature check; adjust that positive fixture when adding owner policy.
+4. Classify actual DetachedStagedTrash / DetachedKvNamespace sweep facades,
+   including UFCS, function items, erased callbacks, local helper/closure effects.
+   Add actual artifact/core dependency UI inputs and accepted after-release cases.
+   Do not rely only on primitive std::fs names. Guard leaks/type erasure also need
+   consideration so ownership moves are not mistaken for physical release.
+5. Resolve consumed MIR without a fail-open path; typed roles should remove
+   admission false positives first. All three OS selections must pass with the
+   final guard implementation, relevant feature/UI/planted violations included.
+6. Tighten raw owner identity to exact impl/type/functions; retain justified
+   distinct private staging owners. Permit only fixed-depth name retirement in
+   short commit owners, not recursive scans hidden in helpers.
+7. Finish docs, clippy/lint, one clud-review invocation, full clean committed gate,
+   separate PR merge, verify issue closed, fetch/switch main/rebase origin/main,
+   clean tree and delete feature branches. Then #1965–1971 sequentially.
+
+
+### #1964 drain acquisition boundary (2026-10-22)
+
+- Captured RED for untrusted publication drain acquisition and factory capture
+  (`/tmp/zccache-1964-drain-owner-red.log`). A resolved method, alias/UFCS path or
+  factory reference now requires the exact WAL/embedded drain owner. Even an
+  approved owner may not export the raw factory as a function item.
+- Added actual-core negative alias/method/UFCS/factory cases and an included
+  auxiliary source with the genuine crate/module/file/function identity proving
+  the shutdown owner is accepted. Unrelated same-named methods remain accepted.
+  All 12 fixtures passed (`/tmp/zccache-1964-drain-owner-final.log`).
+- Important correction: rustc's def_path_str is display-oriented and can omit
+  the local crate prefix. Owner matching and the opaque StagingRoot exemption
+  now use canonical get_def_path symbols. Do not use pretty paths for identity.
+- Current full production probe still fails in guard analysis
+  (`/tmp/zccache-1964-typed-publication-workspace.log`), notably consumed async
+  MIR and raw FileLock over-classification. No push, gate attestation or PR.
+- Native-store migration design: centralize acquisition in artifact staged_lock;
+  expose a sealed StagedCommitGuard::acquire_for(artifact_dir, Duration) and
+  bounded StagedReadGuard acquisition. Remove the public raw open_store_lock
+  escape, migrate daemon publisher/maintenance/trash/materialization, CLI warm,
+  snapshot and coordination tests to typed guards. Owned native locks avoid a
+  self-referential borrowed guard. Preserve the exact same lock filename,
+  reader-path validity, 2s maintenance contention deferral and zero-wait empty
+  trash cleanup. All waits must require Duration; no unbounded compatibility
+  overload. Then classify commit vs read/drain effects by resolved types.
+
+
+### #1964 native-store facade migration (2026-10-22)
+
+- Added sealed artifact::StagedCommitGuard with mandatory acquire_for(root,
+  Duration). Raw open_store_lock is now private to artifact staged_lock.
+  StagedReadGuard now has acquire_for and acquire_if_present_for with mandatory
+  Duration; the parameterless acquisition APIs were removed. It is must_use.
+- Migrated daemon publication, generation retirement, Clear auxiliary retirement,
+  recovery/empty-trash unlink, pooled hit materialization, snapshot export, CLI
+  warming and coordination fixtures. Every participant still uses the canonical
+  .staged-v2/.store.lock. Exclusive guards own native handles rather than exposing
+  a File or constructing a self-referential borrowing guard. Key publication's
+  separate per-key operation lock remains distinct.
+- Missing-type/method RED retained in
+  /tmp/zccache-1964-store-facade-api-red.log; five native coordination tests GREEN
+  (/tmp/zccache-1964-store-facade-api-green.log), including zero-wait contention
+  and actual exclusive/shared interference.
+- 95 daemon regressions passed with the migrated store API
+  (/tmp/zccache-1964-store-facade-runtime.log). 14 snapshot tests and the CLI warm
+  contention regression passed (/tmp/zccache-1964-store-facade-consumers.log).
+  Its production build caught an unused cfg(test)-only root binding, now removed.
+- Single-worker embedded real-hit/control-plane regression passed. It now requires
+  rustc instead of silently returning when the compiler is missing; the hardened
+  run passed (/tmp/zccache-1964-store-facade-control-plane-required.log).
+- Dylint recognizes the actual StagedCommitGuard by defining crate, type and
+  parent module DefIds. UI dependency flags now include actual artifact and core
+  rlibs, produced via bounded soldr Cargo JSON. All 14 fixtures passed, including
+  rejection under a native commit, acceptance after release, and retained-reader
+  I/O (/tmp/zccache-1964-native-store-ui-green.log).
+
+Remaining enforcement work before #1964 can ship:
+- Separate Critical vs Lease/Drain effects: publication/store commits forbid
+  bulk work; reader/admission operation permits allow their intended I/O, while
+  shared trash sweeps remain forbidden under reader/native/drain exclusion.
+- Make ownership inspection structural: Weak and PhantomData do not own their
+  generic guard parameters. SharedState's weak materialization slot previously
+  caused phantom FileLock ownership when its local target directly exposed the
+  raw native guard. The migrated target now contains opaque StagedReadGuard;
+  do not reintroduce that false positive when classifying reader leases.
+- Permit only immediate fixed-depth name enumeration in the exact bounded
+  detach owners returning typed trash. Do not move enumeration ahead of native
+  exclusion without proving publisher/replacement safety. Recursive payload
+  scans and helper-hidden slow work must still be rejected under commits.
+- Classify actual shared sweep facades and transitive helper/closure effects,
+  prevent function-pointer and leaked/erased-guard bypasses, and resolve consumed
+  MIR without a fail-open fallback. Add async/callback/actual-native fixture
+  coverage. Existing failed production probes are development evidence, not a
+  green final guard gate.
+- Final OS/features/planted violations, docs, clippy, one clud-review invocation,
+  clean committed full gate, PR merge, origin/main rebase and branch cleanup are
+  still required. Then continue #1965–1971 in order.
+
+### #1964 structural ownership and cleanup effects (2026-10-22)
+
+- Publication reads now return sealed PublicationReadPermit rather than generic
+  admission ReadPermit. Migrated explicit daemon reader-lease signatures without
+  changing the underlying barrier or lease lifetime.
+- Guard classification follows owned fields/captures, ignores Weak/PhantomData
+  and raw pointer/signature-only parameters, and distinguishes short commit/data
+  guards from reader/native/drain leases. Bulk filesystem work is forbidden under
+  short commits; shared sweeps and unresolved indirect calls are forbidden under
+  either exclusion role. Ordinary admission permits remain separate.
+- Resolved local helper/closure call effects expose cleanup hidden behind a
+  helper. A borrowed guard parameter remains caller-owned even after drop(ref).
+  RED logs: ownership-effects-red and borrowed-guard-red under /tmp/zccache-1964-*.
+- All 18 UI fixtures passed (/tmp/zccache-1964-ownership-boundaries-final.log),
+  including non-owning wrappers, helper-hidden cleanup, reader/drain cleanup,
+  cleanup after release, and borrowed guard retention.
+- Daemon all-target compiler check with test-support passed
+  (/tmp/zccache-1964-publication-reader-feature-check.log). Fixed a preexisting
+  test-only staged_root import exposed by checking the production library.
+- All 95 declared bosn staged-store-regressions passed
+  (/tmp/zccache-1964-publication-reader-runtime.log); the ignored process-exit
+  child is invoked by its parent fixture, not silently omitted.
+- Consumed MIR fallback now rejects relevant effects conservatively instead of
+  rejecting an effect-free body merely because it mentions a guard. This remains
+  conservative, not a final async lifetime solution. Full production lint probe
+  is /tmp/zccache-1964-structural-effects-workspace.log; do not treat UI/runtime
+  receipts as proof of complete production enforcement. Remaining enforcement,
+  OS/features, review/full gate and merge/main cleanup requirements above apply.
+- Production probe exposed an ICE when effect traversal queried MIR for a
+  required trait method with no body. Added hir_maybe_body_owned_by guard;
+  bodyless dynamic methods conservatively carry UNKNOWN effects. New actual
+  dependency abstract_effect fixture diagnoses the call instead of crashing;
+  all 19 fixtures pass (/tmp/zccache-1964-abstract-effect-final.log).
+  Previous production probe remains RED; reader callback analysis and production
+  enforcement are not yet complete.
+
+### #1964 generic cleanup-effect substitution (2026-10-22)
+
+- Local effect summaries now retain concrete generic arguments and substitute
+  them into MIR call targets. Closure and function-item callbacks reached through
+  generic helpers retain their actual effects. Recursive summaries track both
+  defining symbol and arguments, with conservative UNKNOWN at bounded depth.
+- RED: generic_callback incorrectly rejected ordinary read I/O under a reader
+  permit (/tmp/zccache-1964-generic-effects-red.log). GREEN: that callback passes
+  while a sweep through the same generic FnOnce helper is denied. All 21 UI
+  fixtures pass (/tmp/zccache-1964-generic-effects-final.log).
+
+### #1964 bounded pointer revalidation (2026-10-22)
+
+- Replaced unbounded pointer read_to_string calls in maintenance with a private
+  mandatory-budget reader: fixed 129-byte stack buffer, 128-byte accepted maximum,
+  deadline checked between reads, InvalidData for oversized/invalid UTF-8 input.
+  Single kernel calls remain non-interruptible. Short legacy pointer names remain
+  supported; this change does not impose a new digest-format migration.
+- New oversized-pointer regression proved old generation retirement accepted an
+  oversized current pointer (/tmp/zccache-1964-pointer-budget-red.log). Corrected
+  implementation rejects it and preserves the existing generation. Existing
+  legacy cleanup behavior is unchanged.
+- All 96 declared bosn staged-store regressions pass
+  (/tmp/zccache-1964-pointer-budget-compatible-green.log).
+
+### #1964 explicit operation phases and effect memoization (2026-10-22)
+
+- Spawn materialization returns sealed MaterializationPermit, preserving its
+  existing native RwLock/watchdog lifetime. Its data-free whole-copy role permits
+  copy I/O but still excludes shared cleanup. Publication/store commits retain
+  their stricter role. All four declared spawn-watchdog tests pass, including
+  real termination of the 120-second wedged materialization holder
+  (/tmp/zccache-1964-materialization-permit-runtime.log).
+- Effect traversal memoizes concrete completed summaries; its limit now counts
+  active recursion rather than total callees. This removes graph-width false
+  UNKNOWN effects. All 21 UI fixtures pass
+  (/tmp/zccache-1964-effect-memo-ui.log).
+- Reader reacquisition now matches Option ownership explicitly: the existing
+  reader moves through unchanged, and only None calls the generic factory.
+- Refresh filesystem-space immediately before taking publication exclusion.
+  Volume space is not made atomic with foreign writers by that barrier; live
+  in-memory access is still refreshed under it. This removes the potentially
+  slow resource query from the commit while retaining the near-commit refresh.
+- All 96 staged-store regressions pass again
+  (/tmp/zccache-1964-callback-phase-runtime.log). Production lint now has exactly
+  two diagnostics, both immediate-name enumeration under Clear exclusion
+  (/tmp/zccache-1964-callback-phase-workspace.log). This is not a final green gate;
+  bounded fixed-depth detach capability/enforcement and remaining acceptance
+  requirements still need completion before review/push/merge.
+
+### #1964 bounded immediate-name detach cursor (2026-10-22)
+
+- Clear now enumerates through private ImmediateChildren with mandatory open_for
+  Duration, private native iterator and deadline checks before/after open and
+  each entry. It never descends into children; its budget includes caller work
+  between entries. Entry errors now propagate instead of being flattened away.
+- Focused RED: a zero-budget Clear previously detached live names
+  (/tmp/zccache-1964-shallow-budget-red.log). GREEN: timeout preserves the live
+  pointer; all 97 staged-store regressions pass
+  (/tmp/zccache-1964-shallow-budget-green.log).
+- Resolved-symbol Dylint confines constructor calls to the two exact Clear
+  detach functions/files, disallows factory capture and aliases outside those
+  owners, and recognizes the actual cursor source/defining crate/type. Its
+  direct one-level read_dir is the sole metadata exception; other effects in
+  its helper graph still propagate. No whole helper/body exemption was added.
+- Wrong-owner/factory RED and GREEN retained under /tmp/zccache-1964-shallow-owner-*
+  using the actual source file. All 22 fixtures pass (shallow-owner-final.log).
+- Full production workspace lib/bin Dylint now passes
+  (/tmp/zccache-1964-shallow-workspace.log). This is default Linux evidence only;
+  pending guard-escape/callback/async coverage, supported OS/features, final docs,
+  clippy, review/full gate, PR merge and main rebase remain required.
+
+### #1964 guard escape, callback, and exact cleanup ownership (2026-10-22)
+
+- Added deny-level semantic checks for guard-typed mem::forget (including function
+  items), ManuallyDrop/MaybeUninit construction, Box leak/raw conversion,
+  transmute, and ownership-erasing unsizing/casts. Ordinary dereference access
+  remains permitted; non-owning Weak/PhantomData can still be forgotten.
+- Correct RED escape evidence is guard-escapes-red-valid.log: the initial attempt
+  failed dependency compilation on rustc's undropped_manually_drops rule, so that
+  first log is not policy RED evidence. The fixture explicitly allows that
+  unrelated rustc rule to test this lint's leak prevention.
+- Foreign combinators propagate concrete local closure effects. Iterator::for_each
+  previously hid a typed trash sweep (iterator-sweep-red.log), and now rejects
+  it while allowing a read callback under a reader lease.
+- Cleanup permission now matches exact free-function identities or the actual
+  impl receiver DefId plus method and source file. Impostor::cleanup and a free
+  cleanup in staged_plan.rs previously passed (cleanup-owner-red.log); both now
+  fail while StagedCompilePlan::cleanup passes in the same fixture.
+- All 25 fixtures pass (/tmp/zccache-1964-owner-escape-final.log). Production
+  workspace lib/bin Dylint is green with these checks
+  (/tmp/zccache-1964-owner-escape-workspace.log). Other pending acceptance gates
+  above still apply. New drop_sweep RED fixture is separate uncommitted work.
+
+### #1964 destructor cleanup analysis checkpoint (2026-10-22)
+
+- RED: explicit mem::drop and implicit scope exit hid a local destructor calling
+  DetachedKvNamespace::sweep_for under PublicationReadPermit
+  (/tmp/zccache-1964-drop-effects-red.log).
+- Added local destructor/owned-field drop effects to call summaries and MIR Drop
+  terminators, including enum/tuple/array fields. Native guard release itself is
+  not bulk cleanup. Skip uninitialized Drop placeholders in pre-elaboration MIR;
+  they cannot execute cleanup after a value has already moved out.
+- All 26 fixtures pass (/tmp/zccache-1964-drop-effects-final.log): explicit and
+  implicit cleanup are denied under the reader, cleanup after release is accepted.
+- Production probe is RED (/tmp/zccache-1964-drop-effects-workspace.log), with 25
+  diagnostics mostly caused by conservative UNKNOWN destructor effects. This is
+  a development checkpoint, not production-gate completion.
+- Temporary type tracing was removed after diagnosis. Trace evidence lives in
+  /tmp/zccache-1964-drop-types-trace.log. Unresolved types include generic callback
+  parameters, generic future/result types, HostAdmissionClassifier trait objects,
+  boxed admission/process futures, and dyn Send+Sync. Do not silence UNKNOWN or
+  claim a green production run using earlier pre-destructor receipts. Determine
+  concrete drop ownership/substitution or supply an enforceable closed contract.
+- Additional static cases still need coverage: closure-owned cleanup dropped
+  without invoking the closure; async/native sweep execution and consumed-MIR
+  behavior; typed transfer/release boundaries. Then complete OS/features/planted
+  violations, docs, clippy, review/full gate, PR and main cleanup before #1965.
+
+### #1964 passive/captured drop ownership and closed lease sources (2026-10-22)
+
+- RED: passive_drop treated Weak, PhantomData, ManuallyDrop and MaybeUninit as
+  dropping their generic cleanup value (/tmp/zccache-1964-passive-drop-red.log).
+  Drop analysis now follows actual fields for types without destructors, treats
+  ManuallyDrop as non-dropping, and drops only Weak's allocator rather than T.
+  Foreign owning destructors still conservatively include their generic values.
+  Owning Arc<Cleanup> remains a denied sweep under a reader permit.
+- RED: dropping an uninvoked closure with an owned Cleanup capture bypassed
+  analysis (captured-drop-red.log). Drop effects now include closure upvars.
+  Held-reader capture cleanup is denied; cleanup after release is accepted.
+- All 28 fixtures pass (/tmp/zccache-1964-passive-captured-final.log).
+- Production resolver now uses a closed Source enum (state-backed or cfg(test)
+  direct acquisition), replacing owned generic factory closures. The existing
+  bounded native acquisition owners and payload lifetimes are preserved; there
+  is no arbitrary factory destructor while returning a retained reader lease.
+  Moved resolution to cached_artifact_resolution.rs to keep source below 1K LOC.
+- All 97 staged-store regressions passed after the resolver change
+  (/tmp/zccache-1964-closed-lease-runtime.log). Latest production evidence with
+  passive fixes is still RED (passive-drop-workspace.log); opaque/generic drop
+  resolution and actual provisional-owner cleanup under commits remain pending.
+- New private-plan cleanup hook/regression and bosn task are separate uncommitted
+  work. Initial broad run failed an existing one-second publication observation
+  before reaching the new test. First focused run blocked because the test itself
+  accessed a shard still held by paused Clear; cancelled exact bosn job 522 and
+  verified its managed container had no test process remaining. The corrected
+  regression inspects the map only when it can acquire publication ownership.
+  Only its subsequent assertion-based RED should count as bug evidence.
+
+### #1964 provisional-owner destructor deferral (2026-10-22)
+
+- Actual bug: Clear's artifacts.clear dropped the last CachedArtifact owner of
+  StagedCompilePlan while retaining publication exclusion. The plan's destructor
+  recursively deletes its private output root. Maintenance removal had the same
+  last-owner risk in artifacts.remove.
+- Added path-scoped PrivatePlanCleanup hook and production Clear regression.
+  Valid focused RED is /tmp/zccache-1964-provisional-owner-red-bounded.log:
+  assertion "private plan destructor retained publication exclusion" failed in
+  0.13s after both workers were resumed/drained. Earlier broad/focused attempts
+  described above are not the RED receipt for this fix.
+- Clear now moves removed records into an outer-scope retirement Vec; maintenance
+  passes an outer Vec by mutable reference into its short removal commit. Those
+  owners drop after the publication scope, including early-error/panic unwinding.
+  Native store and logical invalidation ordering are unchanged.
+- Focused GREEN /tmp/zccache-1964-provisional-owner-focused-green.log proves old
+  entry unreachability, publication admission and a real KV publication while
+  private cleanup is paused, survival of that new value after Clear, and removal
+  of the old private root. Declared bosn task is staged-private-cleanup-test.
+- Full staged-store-regressions passes all 98 tests with the new fixture
+  (/tmp/zccache-1964-provisional-owner-regressions.log), including the previously
+  failed one-second observation. No timing threshold or test concurrency changed.
+
+### #1964 initialized drop-field summaries (2026-10-22)
+
+- RED: transferred_cleanup rejected retain(&mut retired, cleanup) even though the
+  cleanup owner moves into an outer collection rather than being destroyed
+  (/tmp/zccache-1964-drop-transfer-red.log).
+- Effect summaries now use initialized-place dataflow for promoted MIR drops,
+  remove imaginary borrow-checking edges, and retain optimized MIR's already
+  elaborated drops without feeding optimized statements into MoveData.
+- New drop_paths shares field/variant initialization semantics between local
+  guard checks and transitive summaries. It excludes moved-out fields and inactive
+  enum variants, preserves actual remaining siblings/destructors, and respects
+  union/ManuallyDrop non-dropping semantics. This resolves the deferred-owner
+  Option tuple placeholders reported at Clear's removal loop.
+- All 29 fixtures pass (/tmp/zccache-1964-drop-fields-final.log), including
+  Option<(String, Cleanup)> transfer acceptance and partially retained sibling
+  cleanup denial. Production diagnostics for Clear and maintenance removal are
+  gone, but full production lint remains RED with 26 other diagnostics
+  (/tmp/zccache-1964-drop-fields-workspace.log). Do not claim the production gate
+  passed based on older pre-destructor logs.
+- Remaining work includes consumed async MIR, opaque/generic drop contracts,
+  and ownership transfer into checked callees. Any call-boundary exemption must
+  retain checks for caller-held sibling guards and generic guard hiding/erasure;
+  do not exempt arbitrary moved arguments into unchecked generic helpers.
+  Consider preserving promoted MIR before transitive queries consume it, or a
+  validated optimized-MIR lifetime backend; neither is implemented yet.
+- Native private-plan deferral is already separately GREEN in the 98-test bosn
+  regression receipt above. OS/features/planted cases, docs, clippy, one review,
+  clean committed full gate, PR merge/main rebase/cleanup remain required.
+
+### #1964 runtime coroutine lifetime analysis checkpoint (2026-10-22)
+
+- Focused RED: an async reader released before dropping a borrowed opaque value
+  was rejected solely because promoted MIR was consumed
+  (/tmp/zccache-1964-async-snapshot-red.log). Snapshotting at check_crate, including
+  reverse body order, proved too late: the async body was already consumed.
+  Removed that failed experiment and temporary trace output.
+- New runtime_mir works exclusively on a cloned compiler body. It restores
+  analysis hints, validates aliases of the real self pointer (all assignments,
+  pointer-storage borrows and call results), and models owned frame storage.
+  Unknown/ambiguous frame aliases deny compilation; rustc's body is never changed.
+- Saved fields use rustc's stable CoroutineSavedLocal identities across variants.
+  The lifetime CFG starts unresumed and connects each suspension only to its
+  matching continuation. Prefix captures remain owned until actually moved or
+  dropped. The first variant-based approach missed a captured reader after yield
+  (yield-frame-red.log); that approach was replaced, not exempted.
+- Exact guarded move paths are registered via fake reads in an unreachable
+  analysis-only block. This avoids collapsing untracked sibling fields into one
+  parent. Reader/drain permits remain allowed through async operations; short
+  publication/store/data guards are denied when live at Yield/Pending suspension.
+- Mutable borrowed captures and nested reference wrappers remain caller-held
+  even after drop(reference). Valid RED is async-mut-borrow-red.log (no diagnostic
+  before borrowed-capture tracking). async_held_drop diagnoses before release;
+  async_released accepts opaque drops after release, including a second await.
+  Coroutine fixtures likewise check held and released readers across yields.
+- mutated_guard_storage was already denied by the analysis; its initial log is
+  an expected-stderr mismatch, not evidence of a new policy bypass. Retained it
+  as negative coverage without adding an unsupported mutation rule.
+- All 35 compiler fixtures pass
+  (/tmp/zccache-1964-runtime-resume-verified.log). New generator fixture uses only
+  the pinned nightly compiler harness; no product Rust feature was changed.
+- Production probe remains RED with 34 diagnostics
+  (/tmp/zccache-1964-resume-lifetime-workspace.log). They are now concrete slow/
+  opaque-drop and ownership-transfer sites rather than the old consumed-MIR
+  blanket diagnostic. No native alias-preparation ICE or permissive fallback.
+- Inspection MIR preserved at /tmp/zccache-soldr-policy-audit/async-released-runtime.mir;
+  removed the one-off emitted .mir from the build directory with safe-rm.
+
+Still required before #1964 can land:
+- Validate generated coroutine cancellation/drop glue, not just Poll/resume
+  execution; current runtime_mir does not traverse coroutine_drop. Check opaque
+  captured destructors and ownership ordering during unpolled/pending cancellation.
+- Resolve typed ownership transfer into checked local callees/owned blocking
+  tasks while retaining checks for caller-held sibling guards. Do not exempt
+  arbitrary moved values or unchecked generic helpers.
+- Add direct/transitive async sweep lane enforcement with recognized owned
+  handoffs. Preserve liveness checks across handoffs rather than treating a
+  blocking-task factory as a blanket no-effects boundary.
+- Check generic guard erasure/leak helpers and mutable guard storage using
+  planted violations before relaxing any call-boundary rule. Existing explicit
+  mem::forget/Box erasure cases do not prove generic escape completeness.
+- Production green, supported OS/features and planted violations, final docs,
+  clippy, one clud-review, clean committed full gate, PR merge/main rebase and
+  branch cleanup remain outstanding. Then continue #1965–1971 sequentially.
+
+### #1964 future-capture cancellation checkpoint
+- Added `drop_future` compiler fixture: cancelling an unpolled future with a captured recursive-cleanup destructor under publication exclusion must fail; releasing exclusion first must pass.
+- Verified RED: `/tmp/zccache-1964-future-drop-red.log` (missing expected diagnostic, exit 101).
+- Effects now include coroutine upvar destructors. GREEN: `/tmp/zccache-1964-future-drop-green.log`, all 36 compiler fixtures pass (7 base + 29 examples).
+- This covers captured values only, not saved locals created after polling; generated cancellation glue/saved-local coverage remains required. Production lint remains unresolved at checked ownership handoffs/opaque drops. No push or PR yet.
+
+### #1964 saved-local cancellation checkpoint
+- Extended `drop_future` with a cleanup constructed inside an async fn and stored across a pending await, plus release-before-drop positive case.
+- RED `/tmp/zccache-1964-saved-drop-red.log`: saved-local drop diagnostic absent.
+- Coroutine drop summaries now inspect saved field types with instantiated generics. Local opaque return types reveal their concrete hidden drop type; unresolved aliases/foreign coroutine cancellation remain UNKNOWN rather than silently cleanup-free.
+- `soldr cargo fmt --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --all` passed.
+- Current suite `/tmp/zccache-1964-saved-drop-checkpoint.log`: base 7 pass, example 27 pass / 2 fail. `drop_future` passes both required negative diagnostics and release positives. Drain-authorized and drain-wrong-owner fixtures now flag foreign completed acquisition-future drops. Resolve completed-future lifetime/drop semantics or establish a checked facade contract; do not blanket-ignore foreign cleanup. This is an intermediate RED checkpoint, not a passing gate. Production ownership handoff failures also remain.
+
+### #1964 foreign future drop investigation
+- Compiler metadata permits inspecting foreign coroutine saved layouts (`is_mir_available`) and opaque hidden types; extended cancellation summaries accordingly and normalize associated aliases through rustc's typing environment. Unavailable metadata stays UNKNOWN.
+- `/tmp/zccache-1964-foreign-future-layout.log` and `/tmp/zccache-1964-normalized-future-layout.log` remain RED on the same two drain fixtures, with all cancellation cases accepted/rejected as expected.
+- Temporary diagnostic trace `/tmp/zccache-1964-normalized-drop-trace.log` identified concrete UNKNOWN sources: dynamically dispatched Tokio runtime/task callbacks reachable from acquisition-future saved state. Temporary debug output removed. Root issue is all-state drop summaries applied to a coroutine proven completed by await, not absent foreign metadata.
+- Next: track Poll::Ready completion for compiler-generated coroutine drop state, retaining conservative pending/cancellation and custom Future destructor behavior. Do not zero all future drops or approve an acquisition-name allowlist. Production owned-transfer diagnostics remain separate work.
+
+### #1964 completed coroutine drop proof
+- Added `completed_future.rs`: only a concrete compiler-generated coroutine qualifies. Require resolved Future::poll, unique reference/Pin aliases, uniquely defined Poll result/discriminant, actual Poll::Ready zero edge, and completion on every incoming path. Writes, indirect writes, new mutable borrows, intervening calls, and dropping invalidate completion. Unrelated free `poll` is checked without querying associated-item metadata.
+- Guard analysis skips only the direct drop of a coroutine proven completed. Pending/unpolled cancellation remains all-state; custom Future implementations retain field/destructor effects even after Ready.
+- Existing two drain fixture failures reproduced in `/tmp/zccache-1964-completed-future.log`; verified GREEN all 36 UI fixtures in `/tmp/zccache-1964-completed-green.log`.
+- Added custom Ready Future owning Cleanup to `drop_future`: verified actual diagnostic at await, inspected expected stderr. Added free `poll` call to approved drain positive fixture. Final conservative proof + both boundaries pass all 36 fixtures in `/tmp/zccache-1964-completion-boundaries.log` (terminal 0). Format and diff check pass.
+- Production probe `/tmp/zccache-1964-completion-workspace.log` terminal 1, 47 diagnostics, no ICE. This snapshot preceded the final conservative invalidation/free-poll hardening. New saved-local/opaque cancellation checks expose additional drop paths; workspace is not green. Owned handoffs, opaque state drops, transitive completed-future summaries, and cancellation glue inside a future retaining guards still need work; do not treat UI coverage as complete enforcement or a full gate.
+- No push/PR. Continue #1964 before later children.
+
+### #1964 instantiated ownership escape prevention
+- Planted generic `forget_value<T>` consuming a concrete PublicationReadPermit; prior direct-HIR-only checks missed it. RED `/tmp/zccache-1964-generic-escape-red.log`; GREEN `/tmp/zccache-1964-generic-escape-green.log`.
+- Planted generic `erase_value<T: Any>` returning Box<dyn Any>; prior summary missed the instantiated ownership-erasing unsize. RED `/tmp/zccache-1964-generic-erasure-red.log`; GREEN `/tmp/zccache-1964-generic-erasure-green.log`.
+- Shared resolved leak predicate between HIR and instantiated effects. ESCAPE effects propagate through local generic helper summaries. MIR casts retain source/destination types and are checked after generic substitution. Direct HIR diagnostics are not duplicated.
+- Added positive generic forget/erasure of PhantomData<PublicationReadPermit> while a real permit is held; ownership is not inferred from the marker's type argument.
+- Final sequential-after-format validation: `/tmp/zccache-1964-instantiated-escape-verified.log` terminal 0, 7 base + 30 actual-dependency examples pass. Format and git diff checks pass. README now accurately distinguishes current capabilities from remaining #1964 work.
+- These changes do not resolve the existing production RED (latest prior probe 47 diagnostics) or establish complete transfer/cancellation/lane enforcement. No push/PR; continue #1964.
+
+### #1964 explicit checked synchronous ownership transfers
+- RED `/tmp/zccache-1964-typed-transfer-red.log`: caller rejected a local synchronous helper that explicitly takes PublicationReadPermit and releases it before dropping opaque T. Companion fixture preserves a second caller-held permit and requires rejection.
+- Added `checked_transfer.rs`: moves can transfer only to local synchronous functions whose source is covered by the same shared guard-check predicate and whose declared formal type explicitly owns the guard. Generic T, borrowed wrappers, foreign/async callees, and opaque/guard-owning outputs do not qualify. Nested return fields are inspected for unknown ownership.
+- Caller excludes only initialized guard move paths inside those exact moved operands. Other owned and borrowed guards remain held. Callee analysis still checks all paths; added wrong-order helper regression that rejects cleanup before its owned permit is released.
+- `/tmp/zccache-1964-typed-transfer-boundaries.log` terminal 0: 7 base + 32 actual-dependency examples (39 total) pass, including generic escape tests. soldr cargo fmt --check and git diff --check pass.
+- Production `/tmp/zccache-1964-typed-transfer-workspace.log` terminal 1, 44 diagnostics, no ICE (previous snapshot 47). Explicit store_rustc_outputs/store_single_output call diagnostics at miss_store:140/:160 disappear; foreign launch_blocking/captured-state drops and other diagnostics remain. This is not a passing workspace gate, no push/PR.
+- Continue checked task ownership/drop ordering, coroutine cancellation with retained guards, async sweep lane, OS/features, review and full gate before completing #1964 or advancing to #1965.
+
+### #1964 checked canonical blocking handoff
+- Actual kernal-api 0.1.26 added to compiler-fixture inputs, through Cargo JSON dependency discovery (no stub scheduler).
+- RED `/tmp/zccache-1964-blocking-transfer-red.log`: a local closure releasing its permit before opaque cleanup was rejected at canonical launch_blocking. Negative fixtures simultaneously preserve rejection with another caller-held permit and with unsafe cancellation capture order.
+- Added exact resolved `kernal_api::async_engine::launch_blocking` contract: local closure body must be covered by guard checking; no borrowed guard captures or opaque/guard-owning outputs; compiler capture drop order must release exclusion before forbidden cleanup. Direct guard/Option/Result/tuple release proofs only. Arc and manually suppressed owners cannot claim last-owner release. Async launch and other foreign calls remain ineligible.
+- Invoked body remains independently checked. Wrong-body fixture proves opaque cleanup before permit release still denies inside closure. Arc<Permit> fixture proves shared ownership cannot qualify merely because dropping Arc itself has no cleanup effect.
+- Final `/tmp/zccache-1964-blocking-transfer-final.log` terminal 0: 7 base + 34 actual-dependency examples = 41 fixtures pass, including all prior generic leaks/transfers. Formatting and diff check pass. Earlier green attempt failed only rustfmt-shifted negative golden locations; inspected actual diagnostics before updating.
+- Production `/tmp/zccache-1964-blocking-transfer-workspace.log` terminal 1: 42 diagnostics, no ICE, versus prior 44. miss_store:421 canonical transfer now accepted; :976 and remaining ownership/drop failures remain. Production snapshot has identical lint implementation to final fixtures; only last Arc negative fixture was added afterward.
+- No runtime product source changed this checkpoint; no claim of new runtime regression coverage. No push/PR. Continue #1964 cancellation/ownership/lane and final OS/features/full gate work.
+
+### #1964 publication capture and execution release ordering
+- Inspected remaining rejected blocking handoffs: single-output and multi-output publication closures captured InFlightGuard (an Arc<SharedState> owner) before PublicationReadPermit. Cancellation could therefore destroy opaque state ownership while retaining publication exclusion.
+- Both callbacks now first borrow publication to establish capture order, then bind lifetime owners, then bind publication last. Cancellation drops the captured publication field first; executed/unwinding callback drops its last-bound publication local before other lifetime owners. Added matching positive compiler fixture to blocking_transfer.
+- Source files were already oversized. Extracted depfile sources + identity/index commit helpers from miss_store (now 972 lines) and per-unit cache lookup from handle_compile_multi (now 807). New modules 64/approx50/441 lines. Existing public helper paths preserved by re-exports; index helper parent paths adjusted.
+- Declared bosn task publication-miss-regressions. Current runtime evidence `/tmp/zccache-1964-publication-capture-runtime.log`: terminal 0, 8 real publication diagnostics regressions + 11 multi-file tests pass inside managed bosn container. No host runtime tests, isolation spoofing, or threshold edits.
+- `/tmp/zccache-1964-capture-binding-ui.log`: terminal 0, all 41 compiler fixtures pass. Workspace format and diff checks pass.
+- `/tmp/zccache-1964-capture-order-workspace.log`: terminal 1, 40 diagnostics, no ICE, down from 42. Targeted single/multi blocking launch diagnostics disappear. Async frame/cancellation and opaque-drop failures remain. No push/PR.
+- Next source/policy audit also needs private staged-plan cleanup ordering: the Rustc blocking closure still binds its publication local before resource/staged-plan locals, and raw recursive deletion currently shares BULK classification with copy/read work. Verify recursive deletion is forbidden under every publication/store role, while bulk materialization remains allowed under operation/read permits. Do not silently narrow acceptance to shared trash APIs.
+
+### #1964 all recursive deletion is sweep work
+- Planted an approved StagedCompilePlan cleanup owner holding PublicationReadPermit during raw remove_dir_all, plus an approved cc owner releasing the permit first. RED `/tmp/zccache-1964-private-tree-red.log`: only impostor diagnostics existed; the approved-but-held deletion was silently accepted.
+- Raw std/tokio fs::remove_dir_all now has SWEEP effects, distinct from copy/read bulk effects, independent of approved owner status. Ownership placement and exclusion lifetime are separate checks. GREEN `/tmp/zccache-1964-private-tree-green.log`; final all 41 UI fixtures `/tmp/zccache-1964-private-tree-final-ui.log` terminal 0.
+- Stronger production RED `/tmp/zccache-1964-private-plan-source-red.log` terminal 1: 102 diagnostics (previous weaker rule 40). In particular miss_store:440 caught local staging-plan destruction before publication release; other new paths include artifact replacement/map owner destruction under readers. Do not downgrade deletion back to BULK to hide them.
+- Rustc blocking publication callback now captures publication first and binds it last, after resource admission and staged plan. All exit/unwind paths release publication before local plan cleanup. miss_store remains below 1000 lines.
+- `/tmp/zccache-1964-private-plan-runtime.log` terminal 0: declared bosn publication task passes 8 publication + 11 multi-file runtime regressions. Workspace + Dylint formatting and diff checks pass.
+- Final production `/tmp/zccache-1964-private-plan-order-workspace.log` terminal 1, 101 diagnostics, no ICE; the targeted local plan-drop error disappears. This is intentionally still RED and not a workspace gate pass. No push/PR.
+- Next: inspect actual private plan/StagingRoot destructor and replacement ownership paths. Existing retirement vectors solve Clear/maintenance only; publication replacements and aggregate/async cancellation lifetimes remain. Consider a checked typed cleanup owner for private-root retirement if it removes recursive work from Drop, but preserve durable retry, cancellation, and no-tree-deletion-under-exclusion contracts; an unchecked background callback/blanket summary exemption is not a fix. Still need async sweep-lane enforcement, supported OS/features, review/full gate and PR merge before #1965.
+
+### #1964 retire replaced Rust cache records outside publication
+- Concrete bug: commit_rustc_artifact_index dropped entry.insert's old CachedArtifact under the caller's publication reader. An old provisional entry can own the last private StagedCompilePlan.
+- Added real filesystem/hook regression rustc_replacement_releases_publication_before_private_cleanup. Pause last-owner private cleanup; a publication writer must proceed, replacement metadata must already be visible, then resume and verify private root removed. Map lookup is conditional on successful writer admission so old shard-lock behavior cannot hang RED.
+- Valid RED `/tmp/zccache-1964-replacement-owner-red-bounded.log`: 8 pass/1 fail in 0.40s, assertion "replacement destructor retained publication exclusion". Earlier `replacement-owner-red.log` was only a private-module test import error and is not valid RED.
+- Commit helper now retains displaced owners in a caller-owned Vec. Synchronous Rust publication declares retirement before re-binding publication ownership; detached blocking callback declares its retirement Vec before the last-bound publication permit. Thus default exit/unwind drops exclusion before displaced records. Vacant insertion has no retired owner; merge/commit failure ordering unchanged. All callers migrated.
+- GREEN `/tmp/zccache-1964-replacement-retirement-green.log` terminal 0: 9 publication regressions + 11 multi-file tests pass under declared bosn task. New writer/visibility/destructor assertion passes. Intermediate `replacement-owner-green.log` had a mistaken vacant-entry push type error (corrected); it is not a passing receipt.
+- Workspace fmt and diff checks pass; miss_store 981 lines, tests 502. Lint implementation/UI fixtures unchanged this checkpoint (prior all41 fixture receipt still applies to that implementation).
+- Production `/tmp/zccache-1964-replacement-retirement-verified-workspace.log` terminal 1, 102 diagnostics, no ICE; runtime fix does not make lint green. Helper call at miss_store:434 and new retirement drop at :448 remain flagged, so next inspect exact live move paths/borrowed flags and effect-summary origin rather than suppressing drops. Prior typo-containing production probe is invalid for policy conclusions.
+- Checked daemon root lifetime ownership hypothesis: CacheRootWriterLock is a foreign core type with no generic arguments and is already opaque to current guard containment. Do not add a speculative SharedState/root-lock exemption. Private-plan type itself contains only paths/args; trace actual reported guard lifetime before changing classification.
+- Remaining #1964 work and #1965–1971 scope unchanged. No push or PR; full gate/review/OS-feature audit still required.
+
+### #1964 ordered closure destruction during unwind
+- Exact trace `/tmp/zccache-1964-retirement-guard-trace.log` terminal1 showed miss_store:434 held a real publication local (_6) at the helper call; :448 held the closure's still-unmoved capture (_1.0) on unwind. borrowed=false. Thus the closing-drop diagnostic is not a daemon/root lifecycle-lock classification issue.
+- Removed all temporary trace output. Extended positive binding_order fixture with Vec::<u8>::new before captures move into locals; valid RED `/tmp/zccache-1964-ordered-closure-unwind-red.log` terminal101 at closure closing drop. This isolates the unwind path even though capture destruction releases the guard first.
+- Reused the existing canonical blocking cancellation release proof for a whole compiler-generated closure drop only when every initialized owned guard is inside that drop place and no borrowed guard remains. Check both Critical and Any capture order. Custom destructors, uncertain wrappers, outside guards and bad capture order retain existing denial. No arbitrary aggregate/drop exemption.
+- GREEN `/tmp/zccache-1964-ordered-closure-unwind-green.log` terminal0: all41 compiler fixtures pass, including captured cleanup, partial moves, external guards, unsafe cancellation order and generic escapes. Format/diff checks pass.
+- Final production `/tmp/zccache-1964-ordered-closure-workspace.log` terminal1: 101 diagnostics, no ICE; prior102 and miss_store:448 closing-drop diagnostic now absent. Helper call :434 still has a SWEEP summary under a real publication guard; next trace concrete effect origins/initialized drop variants in that helper graph before assuming the runtime-retirement fix removes every potential path.
+- No runtime product code changed; d57835a7's valid20-test isolated runtime receipt remains applicable. No push/PR. Goal and remaining #1964 / later child scope remain active.
+
+### #1964 known local enum initialization in cleanup effects
+- Temporary summary trace `/tmp/zccache-1964-index-effects-trace.log` terminal1 identified commit_rustc_artifact_index -> CachedArtifact::from_index -> StagedCompilePlan::drop/cleanup -> std::fs::remove_dir_all. from_index explicitly sets private owner None. All temporary SWEEP_ORIGIN trace code removed.
+- Planted empty_cleanup_field: a factory initializes cleanup=None before a checked scalar operation that can unwind, returns a holder, and the caller releases its permit before dropping the holder. Valid RED `/tmp/zccache-1964-empty-owner-red.log` terminal101 falsely attributed cleanup to the factory call.
+- Added drop_variants: prove only a non-argument place with one explicit ADT aggregate initialization; reject overlapping writes, parent writes, reference/raw-pointer creation, discriminant mutation, call-result writes and inline asm. Structural drop traversal skips only proven inactive variants; custom Drop remains fully analyzed.
+- GREEN `/tmp/zccache-1964-empty-owner-green.log`. Added populated-owner and mutation-through-&mut negatives; inspected actual two required diagnostics before recording golden. Final `/tmp/zccache-1964-empty-owner-verified-ui.log` terminal0, 7 base + 36 examples =43 fixtures pass. Formatting and diff checks pass.
+- Production `/tmp/zccache-1964-empty-owner-workspace.log` terminal1, still101 diagnostics, no ICE; miss_store:434 helper call remains flagged. Direct local variant proof does not yet handle all nested aggregate fields/transfers in the actual constructor. Next trace exact Drop target types/places within from_index and plant that nested case; do not assume this direct-local fix proves its whole constructor safe or suppress its summary.
+- Runtime source unchanged; prior valid20 isolated regression receipt still applies. No push/PR. #1964 and later children remain incomplete.
+
+### #1964 nested known-empty cleanup owners
+- Extended positive empty_cleanup_field with a Holder(cleanup=None) fully initialized before checked(value) can unwind, then moved and placed in Arc. RED `/tmp/zccache-1964-nested-empty-red.log` terminal101 falsely marked boxed(value) as a sweep.
+- Variant proof now resolves a unique aggregate initializer's field operands and whole-value moves, including tuple/closure fields, through at most32 source steps. Reject args, multiple/overlapping writes, references/raw pointers, discriminant mutation, call-result initialization, unions and unsupported projections. Custom destructors remain opaque effects, not skipped by variant selection.
+- GREEN `/tmp/zccache-1964-nested-empty-green.log`; strengthened positive with an actual whole-value move and negative with a nested populated owner. Inspected all3 actual negative diagnostics before updating expected output.
+- Final `/tmp/zccache-1964-nested-owner-verified-ui.log` terminal0: all43 compiler fixtures pass. Format/diff checks pass. README documents proof limits.
+- Production `/tmp/zccache-1964-nested-owner-workspace.log` terminal1:96 diagnostics, down from101, no ICE. miss_store:434 index-commit call now absent, matching from_index's actual known-None private owner rather than exempting its type/function. Native reader/drop findings elsewhere still apply.
+- No runtime product source changed; valid20 isolated tests from replacement retirement remain applicable. No push/PR. Continue remaining #1964 production drop/cancellation/lane paths and all OS/features/full-gate/review requirements before later children.
+
+### #1964 automatic owner field drop ordering and native lease facade
+- RED `/tmp/zccache-1964-ordered-struct-red.log` terminal101: a plain Owner declaring PublicationReadPermit before Cleanup was rejected at implicit unwind/return drop even though Rust releases the permit first.
+- Generalized the existing capture-order proof into ordered_drop for automatic local structs/enums, tuples and closure captures, plus standard Option/Result. Each variant checked independently; nested owners can order only their own guards. Depth32 fails closed. No custom application Drop or shared/manual-wrapper release proof; other owned/borrowed guards remain live through the caller's all-inside test.
+- Inspected actual StagedMaterializationGuard/Lock definition: private facade holds a shared Arc to StagedReadGuard and timing fields. Added exact canonical DefId-path reader role to that facade. This tracks each materialization lease's ownership at its API boundary; it does not assert global last-reader release or exempt generic Arc<Guard>. Existing Arc negative remains required/passing.
+- Positive ordered/nested-owner tests and reversed-order, external borrowed guard, custom Drop negatives. Inspected all5 expected diagnostics before recording golden. Final `/tmp/zccache-1964-ordered-owner-verified-ui.log` terminal0, 7 base +38 examples =45 fixtures pass. Format/diff checks pass.
+- Production `/tmp/zccache-1964-ordered-owner-workspace.log` terminal1:95 diagnostics (previous96), no ICE. cached_artifact_resolution:98 return-value drop diagnostic disappears with explicit lease role and ordered automatic payload destruction. No blanket resolver exemption.
+- Runtime product source unchanged; prior20 isolated runtime regressions still apply. Next address remaining actual replacement/destructor and async frame/lane paths. No push/PR; #1964 and later child scope remains incomplete.
+
+### #1964 retire displaced error-verdict records outside publication
+- Found same concrete last-owner bug in commit_rustc_verdict: occupied-entry replacement dropped the old provisional record under the caller's publication reader.
+- Added real paused-private-cleanup regression for verdict replacement. Valid RED `/tmp/zccache-1964-verdict-retirement-red.log` terminal101:5 pass/1 fail in0.35s at "replacement destructor retained publication exclusion". Writer/map probes remain bounded and map lookup conditional on writer admission.
+- Verdict commit now retains displaced records in caller-owned retirement storage. maybe_store_rustc_error_artifact declares it before publication, explicitly releases publication, then schedules record destruction on a blocking worker.
+- New private retire_verdict_artifacts_for requires Duration and schedules synchronously before returning a waiter. Timeout/caller cancellation detaches the already-owned worker; the returned future does not retain cleanup records pending its first poll. Empty work starts no worker; join failure and wait expiry are logged.
+- Added unpolled_verdict_cleanup_waiter_keeps_owned_worker: actual private-plan destructor reaches hook before polling the waiter, survives waiter drop, and completes filesystem removal after resume.
+- Added declared bosn error-verdict-regressions task. GREEN `/tmp/zccache-1964-verdict-retirement-green.log` terminal0: all7 error-cache tests pass, including existing WAL ordering, metadata/sibling-verdict preservation and Clear-barrier tests. Format/diff checks pass. Source remains below1000 lines.
+- Production `/tmp/zccache-1964-verdict-retirement-workspace.log` terminal1:94 diagnostics, previous95, no ICE; error_cache publication call diagnostic absent. Lint implementation unchanged (prior45 fixture receipt applies). No push/PR; remaining #1964 and later child scope unchanged.
+
+### #1964 lookup owner release and explicit language drop
+- Exact trace `/tmp/zccache-1964-hit-guard-trace.log` identified publication inside CachedArtifactLookup rather than a borrowed SharedState guard. Temporary trace removed. Lookup declared cached record first, permit last, so default Drop could recursively clean a last private owner before releasing publication.
+- Added actual lookup regression: remove the live-map record while a lookup retains the sole cached owner, pause its private-plan destructor, and prove publication writer proceeds before cleanup resumes. Valid RED `/tmp/zccache-1964-lookup-owner-red.log` terminal101:5 pass/1 fail in0.35s at "lookup drop retained publication during private cleanup".
+- Reordered lookup fields and initializer: publication permit first, cached owner last. Lifetime during lookup unchanged; normal/unwind destruction releases publication before private cleanup.
+- Declared bosn lookup-retirement-regressions. GREEN `/tmp/zccache-1964-lookup-owner-green.log` terminal0, all6 real deferred-load/lookup tests pass.
+- Also planted explicit drop(Owner { permit, cleanup }) with safe field order. RED `/tmp/zccache-1964-explicit-owner-drop-red.log` terminal101. Ordered proof previously handled only MIR Drop. It now also handles a moved operand to resolved core::mem::drop; references/dynamic function pointers/custom destructors/outside guards remain ineligible.
+- Added alias and function-item positives, explicit reversed-order and borrowed-other-guard negatives. Inspected all9 negative diagnostics including unwind sites before updating golden. Final `/tmp/zccache-1964-explicit-drop-verified-ui.log` terminal0: all45 compiler fixtures pass. Format/diff checks pass; no trace output remains.
+- Production `/tmp/zccache-1964-lookup-release-workspace.log` terminal1:90 diagnostics, previous94, no ICE. cached_hit:148/:287/:491 findings disappear. Remaining :313/:335/:654 involve payload resolution, separately held native materialization leases and/or temporary reference paths; trace those rather than exempting the hit routine.
+- Prevention audit next should plant raw destruction routes (ptr::drop_in_place, ManuallyDrop::drop, MaybeUninit::assume_init_drop) under a held guard: the newly proven mem::drop transfer does not prove those effect summaries complete. Also retain all cancellation, async sweep-lane, OS/features, review/full-gate requirements before closing #1964. No push/PR; all later child scope remains active.
+
+### #1964 raw destructor effect prevention
+- Planted actual Cleanup destructor invoked under PublicationReadPermit through std::ptr::drop_in_place, ManuallyDrop::drop and MaybeUninit::assume_init_drop. Valid RED `/tmp/zccache-1964-raw-destructor-red.log` terminal101: all3 expected diagnostics absent, so these resolved standard APIs bypassed cleanup effects.
+- Extended core/std destructor symbol classification to evaluate target T's Drop effects for those APIs. This is effect propagation only: raw pointers/borrowed slots never get the moved-owner release proof used by language mem::drop.
+- Added resolved import-alias and UFCS method function-item negatives, and release-before-drop positives for all3 APIs. Inspected all5 negative diagnostics before recording final golden. Early green attempt failed underline formatting only, not missing policy diagnostics.
+- Final `/tmp/zccache-1964-raw-destructor-verified-ui.log` terminal0:7 base +39 examples =46 fixtures pass. Format/diff checks pass.
+- Production `/tmp/zccache-1964-raw-destructor-workspace.log` terminal1:still90 diagnostics, no ICE. This closes prevention bypasses without suppressing existing violations. Runtime source unchanged; earlier real runtime receipts remain applicable.
+- Remaining prevention audit must still cover owned guard/operation-capability erasure through other raw memory APIs (e.g. ptr read/write/copy, unsafe vector length changes), supported owned/mapped guard variants, coroutine cancellation and async sweep-lane enforcement. Investigate with planted cases before changing rules; do not claim the raw destructor cases prove arbitrary unsafe code safe.
+- Remaining cache-hit actual lease/owner lifetimes and production90 diagnostics, OS/features, review/full gate, PR merge/rebase and later children all still required. No push/PR.
+
+### #1964 raw guard-memory prevention
+- Planted real PublicationReadPermit pointer write/read/copy and Vec::set_len cases, with byte-operation positive controls. Baseline compiler run accepted all cases; required-diagnostic RED `/tmp/zccache-1964-raw-memory-red-expected.log` terminal101 confirms missing enforcement (empty actual stderr).
+- Extended resolved standard-library symbol checks to instantiated pointer read/write/copy variants and Vec::set_len when their element type owns exclusion. Raw pointers do not receive an owned-release proof. This rejects unsafe ownership tracking bypasses without banning ordinary byte memory operations.
+- Inspected all5 actual diagnostics covering imported alias, function item and UFCS before recording expected stderr. DYLINT_TEST_BLESS was unsupported; that intermediate run failed expected-output comparison only. Verified GREEN `/tmp/zccache-1964-raw-memory-green.log` terminal0:7 base +40 examples =47 fixtures. Formatting and diff checks pass.
+- Workspace validation `/tmp/zccache-1964-raw-memory-workspace.log` running at this checkpoint; no claim of production success. Remaining production ownership fixes, cancellation/lane/watchdog audits, OS/features, review/full gate and PR remain required. No push/PR.
+- Final workspace probe terminal1: daemon-core reports90 previous errors, unchanged from the preceding probe; no new guard-erasure diagnostics or compiler ICE. `/tmp/zccache-1964-raw-memory-workspace.log` is authoritative for this revision. No active probe remains.
+
+### #1964 generic-tool replacement retirement
+- Production handle_exec inserted a replacement CachedArtifact while retaining staged publication. A displaced last private plan owner could therefore recurse through filesystem cleanup before releasing publication.
+- Extracted the existing final insertion/release into exec_publication without changing its initial ordering, and planted a real-map/private-plan pause regression. Valid RED `/tmp/zccache-1964-exec-retirement-red.log` terminal101:2 existing staged exec salvage tests passed; new test failed in0.26s at "exec replacement retained publication during private cleanup".
+- The final helper accepts a definite replacement, declares retirement storage before the permit, retains the actual insert result, releases publication, then schedules owned blocking cleanup before returning a bounded waiter. The caller only invokes it for a pending replacement. Delivery failures still return before insertion. Normal, unpolled-waiter and cancellation cleanup ownership use the same already-tested mechanism as verdict retirement.
+- Moved the unchanged verdict retirement mechanism to cached_artifact_retirement; both callers share it. No global guard/destructor exemptions were added.
+- Initial GREEN `/tmp/zccache-1964-exec-retirement-green.log` terminal0:3 exec-publication matches +7 verdict tests. Expanded integration `/tmp/zccache-1964-exec-retirement-verified.log` terminal0:1 new regression +20 complete handle_exec tests +7 verdict tests. The intermediate workspace probe still reported90 diagnostics, including an optional-input scope-exit diagnostic in the new helper. Refined the helper to a definite record with an uninspected insert result until publication release.
+- Final isolated task `/tmp/zccache-1964-exec-retirement-final.log` completed successfully with the refined helper:1 +20 +7 =28 tests; actual private cleanup completes despite an unpolled dropped waiter, replacement is visible during paused cleanup, and a publication writer proceeds. Final workspace probe still running at this checkpoint.
+- Final workspace `/tmp/zccache-1964-exec-retirement-final-workspace.log` terminal1:90 daemon-core diagnostics, no ICE. The exec_publication helper finding and former bare-insert finding are absent; surrounding exec async-scope/cancellation findings remain. This runtime fix does not claim those are resolved. Source files remain below1000 lines, formatting/diff checks pass. No active probe remains. No push/PR; remaining #1964 acceptance and later children unchanged.
+
+### #1964 borrow delivery from the owned cached record
+- Cached payload leases independently cloned a private cleanup owner, allowing its destructor to be summarized as recursive cleanup under separately live publication/native leases. Introduced a real-type compiler bridge behind test-support: its public fixture wrapper contains the actual private MaterializationPayloads, with no synthetic lifetime marker or alternative lease algorithm.
+- Valid RED `/tmp/zccache-1964-payload-borrow-red.log` terminal101:all47 existing fixtures and the positive owner/lease control pass, but the early-owner-drop case compiles with empty stderr instead of required E0505. Actual API access is proven, so this is not a privacy/import failure.
+- MaterializationPayloads now borrows the owned CachedArtifact clone. An empty Drop implementation retains the borrow through native field destruction; it performs no I/O. Provisional status reads the borrowed record; no private-plan owner clone is created by resolution. Existing private-file runtime regression retains its owned hit until delivery ends, verifies bytes remain live after original ownership is removed, then proves cleanup after the hit drops.
+- CachedArtifactLookup::into_parts returns publication first/record last, preserving safe discarded-tuple field order. Compile-hit code rebinds publication last, releases it at the same pre-copy point, drops payload/native lease after delivery and then the cached record. Error and unwind order release publication before record cleanup. Other consumers continue borrowing an owned clone, with no DashMap guard retained.
+- Added real compiler contracts for both access after owner-drop and owner-drop after the last access but before lease destruction. Inspected E0505 diagnostics (including destructor use) before recording golden outputs. Initial GREEN/drop-contract runs failed only golden formatting. Final `/tmp/zccache-1964-payload-borrow-verified-ui.log` terminal0:7 base +40 examples +3 native contracts =50 fixtures pass.
+- Isolated consumers `/tmp/zccache-1964-payload-borrow-consumers.log` terminal0:5 link +20 exec +11 multi +17 cached-hit =53 tests, including existing materialization budgets and output behavior.
+- Initial staged runtime `/tmp/zccache-1964-payload-borrow-staged.log` terminal101:37 staged tests passed;10 cached tests passed and one source assertion still inspected handle_compile_multi.rs after the prior lookup split. Corrected that assertion to inspect the actual handle_compile_multi_lookup.rs owner. No runtime expectation was removed.
+- Next staged run `/tmp/zccache-1964-payload-borrow-staged-final.log` terminal101:35 pass/2 fail at the original one-second paused-sweep publisher completion check. Added an independent zero-wait native-read probe and publication-start diagnostic, retaining the original one-second deadline and all full-publication/detach assertions. Final `/tmp/zccache-1964-payload-borrow-staged-diagnostic.log` terminal0:37 staged +11 cached +39 maintenance +11 Clear =98 pass; native lock probes pass. The earlier timing failures are retained; their cause is not established by a later passing run.
+- Production `/tmp/zccache-1964-payload-borrow-workspace.log` terminal1:77 diagnostics, down from90, no ICE. Resolver and direct payload/drop call diagnostics disappear; cached-hit end-of-scope and other ownership/cancellation findings remain. No lint suppression or effect downgrade. Docs, format and diff checks pass; files stay under1000 lines. No active probes remain. No push/PR; all remaining #1964 acceptance, gate/OS/features/review and later children still required.
+
+### #1964 eliminate execution-impossible drop unwinds
+- Temporary trace `/tmp/zccache-1964-hit-final-scope-trace.log`, predecessor trace and full-body trace identified native publication/payload values at a cached-record cleanup join. The pre-elaboration CFG contains drops of moved temporaries; skipping diagnostics at those drops does not remove their impossible unwind edges from subsequent guard initialization. All temporary trace code was removed.
+- Added small ordered-local compiler positives with tuple destructuring/rebinding and a release branch. Valid RED `/tmp/zccache-1964-ordered-local-unwind-red.log` terminal101:both positives incorrectly report recursive cleanup at scope exit despite publication being declared last/released first.
+- Added dead_drop_edges: on the lint's existing private MIR clone, use compiler move initialization and structural drop leaves to replace a Drop with its normal successor only if no initialized value needs destruction. Untracked storage remains initialized conservatively. Iterate until no further dead drop is proved; each pass removes a Drop. Live custom destructors retain unwind edges and original compiler MIR is untouched.
+- First GREEN attempt `/tmp/zccache-1964-ordered-local-unwind-green.log` confirms both new positives pass. One existing golden changes from9 to6 diagnostics:three duplicate moved-value/unwind sites disappear, while every reversed-order/borrowed/custom-Drop violation remains diagnosed. Inspected all6 surviving diagnostics before updating the golden.
+- Negative companion moves one field out of a tuple while retaining a Panics destructor; its real unwind into cleanup while publication lives remains rejected. An initial extra Try-helper fixture crossed the separately documented unsupported guard-owning-return transfer boundary and was not valid evidence for this fix. Replaced it with an owned Result input positive, exercising native `?` lowering without that helper contract.
+- Evaluated additional enum drop-path registration, then removed it:the owned-Result control passes with existing variant tracking. `/tmp/zccache-1964-dead-drop-enum-red.log` is actually terminal0, not RED evidence. No speculative enum-path changes remain.
+- Final `/tmp/zccache-1964-dead-drop-verified-ui.log` terminal0:7 base +42 examples +3 owner contracts =52 fixtures pass. All existing raw destruction, guard escape, cancellation, generic and ordered-owner negatives remain covered. Runtime source unchanged; no runtime test is claimed for this compiler-only change.
+- Initial full workspace `/tmp/zccache-1964-dead-drop-workspace.log` terminal1:76 diagnostics, down from77, no ICE. Exact comparison removes store_outcome.rs:687:14 only, adds none; cached-hit scope-exit still remains and must not be declared fixed. Final full workspace probe running at this checkpoint. Formatting/diff checks pass; no trace code remains. No push/PR; remaining #1964 prevention/ownership/platform/gate work and all later children unchanged.
+- Final `/tmp/zccache-1964-dead-drop-final-workspace.log` terminal1 confirms76 production diagnostics, no ICE. No active probe remains. New compiler source is under1000 lines. No push/PR.
+
+### #1964 multi-source replacement retirement
+- Found another actual last-owner cleanup path: the blocking multi-source miss worker discarded DashMap::insert's old CachedArtifact while retaining its publication reader through metadata/WAL bookkeeping.
+- Extracted the same insertion into multi_publication::replace_cached_artifact with an initially unused retirement sink, preserving the old immediate destruction for RED. Added a real map/private-plan pause regression. Valid `/tmp/zccache-1964-multi-retirement-red.log` terminal101:0 pass/1 fail in0.19s at "multi replacement retained publication during private cleanup". Workers are resumed/drained before the assertion, so the baseline terminates.
+- The helper now distinguishes occupied/vacant entries and moves the displaced record into the caller's sink. The actual blocking worker declares the sink before publication; normal return and unwind release publication before the sink's private cleanup. Existing metadata, stats and WAL ordering remain inside publication. No async-worker cleanup handoff is required for this already-blocking worker.
+- GREEN `/tmp/zccache-1964-multi-retirement-green.log` terminal0:the new regression exercises both normal completion and an actual worker panic, proving publication writer progress, replacement visibility during paused cleanup, expected join result and eventual private-root removal. All11 existing compile_multi tests also pass (12 tests total).
+- Production `/tmp/zccache-1964-multi-retirement-workspace.log` terminal1:still76 diagnostics, no ICE. The helper call and surrounding async scopes remain diagnosed; this runtime repair does not claim a complete static ownership proof. Inspected the pinned DashMap6.2.1 ownership layout: its native lock aliases are already lock_api guards; no speculative guard-role changes were made. Future analysis should trace the actual helper summary/argument and unwind effects instead of broadly exempting map entries or cached owners.
+- Formatting and diff checks pass. New source109 lines; multi handler813 lines. No active probe remains. No push/PR; remaining #1964 enforcement/ownership/platform/full-gate/review requirements and later children are still active.
+
+### #1964 narrow multi publication to durable metadata
+- Traced the retained helper-call effect in `/tmp/zccache-1964-multi-helper-effects.log`:the effect list includes destruction of the incoming CachedArtifact's Arc<Inner> on unwind before insertion. The prior helper accepted arbitrary provisional cleanup ownership even though the multi-source path inserts durable metadata. Temporary trace code was removed; effects.rs is unchanged from HEAD.
+- Changed replace_cached_artifact to accept ArtifactIndex. Entry acquisition happens before constructing a fresh durable CachedArtifact directly at the occupied/vacant insertion. The caller passes its metadata clone and no longer constructs an arbitrary cached owner before key cloning/lookup. This excludes the incoming provisional-owner hazard by type and preserves the retirement sink and metadata/WAL ordering.
+- Isolated `/tmp/zccache-1964-multi-durable-interface-green.log` terminal0:the real paused private cleanup regression still covers normal/unwind writer progress, replacement visibility and cleanup, and all11 existing compile_multi tests pass (12 total).
+- Full workspace `/tmp/zccache-1964-multi-durable-interface-workspace.log` terminal1:74 diagnostics, down from76. The multi replacement call and local publication-scope findings are absent; multi async handoff/frame findings remain. No ICE, lint exception, effect downgrade or static rule change.
+- Format/diff checks pass. No active probes remain. No push/PR; #1964 still needs the remaining ownership/cancellation/lane/watchdog/platform/gate/review work, followed by all later children and required merge/rebase cleanup.
+
+### #1964 direct exec retirement, root job authority and bounded admission
+- Direct exec discarded the prior CachedArtifact on its async caller while publication still needed to reach the persistence task. Added a real store_exec_artifact/private-plan pause regression. Valid RED `/tmp/zccache-1964-direct-exec-retirement-red.log` terminal101:existing exec replacement passes; new test fails in4.13s at "direct exec kept its async caller in private cleanup". Hook is resumed and workers drained before asserting.
+- Transfer the original publication lease directly into persistence, then synchronously schedule displaced-record cleanup on an owned blocking worker before returning an async waiter. No publication reacquisition or post-insertion caller suspension was added. Queue an async observer containing only the blocking task/budget. Skip the observer when no displaced record exists.
+- An initial Arc<SharedState> retention prototype passed29 focused tests, but stronger native evidence disproved its root-ownership claim: `/tmp/zccache-1964-direct-exec-root-lease-red.log` terminal101 reports "explicit shutdown release bypassed active cleanup ownership". CacheRootWriterLock::release explicitly unlocks even while SharedState arcs survive. The prototype is not the final implementation.
+- Added core CacheRootWriterLease and mandatory-duration lease_for. Server release closes admission and drops its native claim; existing job leases retain the actual OwnedFileLock through completion. Final native handle destruction runs outside the controller's data mutex. Jobs retain a narrow lease without retaining the full cache state. Pinned kernal-api0.1.26 represents OwnedFileLock as Option<File> on the common implementation; no speculative extra mutex or platform exception was added.
+- Both direct persistence and retirement own root leases. Closure cancellation/declaration order releases publication first and retains root ownership through record destruction. The strengthened regression explicitly releases server ownership and drops the server during paused cleanup, proves a second native writer is refused, proves SharedState is released, then proves root reuse after cleanup. Root writer tests also cover two leases, closed lease admission, controller Drop, idempotent release and existing snapshot/restart contracts.
+- Extracted exec persistence into exec_persistence.rs to keep the handler under1000 lines; public/internal wrapper paths and existing queued-Clear handoff behavior remain tested.
+- Captured ownership-enforcement RED `/tmp/zccache-1964-root-capability-red-controls.log` terminal101:all43 other example cases including valid root work pass; the real root-lease leak fixture compiles with empty stderr. Earlier red.log had an unrelated Copy-forget warning in its positive control; switched that control to a generic helper and reran before implementation.
+- Added a separate ownership role for the exact core lease DefId. It participates in resolved leak/erasure checks and instantiated helper effects without becoming publication/store exclusion. Reviewed all6 final diagnostics:import-alias forget, generic forget, direct/generic trait erasure, ManuallyDrop and raw overwrite. Positive controls retain cleanup/async-operation lifetimes and non-owning markers. Blocking handoff cancellation still checks exclusion order; ownership-only leases remain live through cleanup. No blanket effect suppression or async-owner exception was added. Preserved the preexisting opaque staging-root boundary for the new role after an initial full probe took292s through unintended ownership traversal.
+- Final compiler `/tmp/zccache-1964-root-jobs-verified-ui.log` terminal0:7 base +44 examples +3 real lifetime contracts =54 fixtures. Intermediate runs failed golden formatting only; all6 actual root diagnostics were inspected before updating expected stderr.
+- Added a mandatory admission_bound to the private persistence entrypoint, with30s operation policy at the ordinary wrapper. Valid RED `/tmp/zccache-1964-direct-exec-admission-red.log` terminal101:20 existing handler tests pass; unavailable capacity retains publication beyond the supplied5ms budget. GREEN wraps acquisition in that budget, warns on expiry/closure, and settles the handoff while releasing publication/root authority. It preserves async semaphore admission before the blocking job, avoiding a new blocking-pool wait cycle.
+- Final isolated `/tmp/zccache-1964-direct-exec-admission-green.log` terminal0:2 publication/retirement +21 exec +7 verdict +8 root-writer =38 tests. Earlier native-root green and final-runtime receipts also pass; no kernel syscall termination is claimed by these acquisition/wait budgets.
+- Targeted Clippy initially found the earlier maintenance retirement sink had raised remove_planned_artifacts to8 arguments. Grouped scanned entries and their selected plan into RemovalSelection, preserving both call paths and retirement scope. `/tmp/zccache-1964-maintenance-selection-green.log` terminal0:all39 maintenance tests. Final targeted all-target Clippy for core/daemon-core with test-support and -D warnings passes `/tmp/zccache-1964-root-leases-clippy-final.log`.
+- Final full workspace `/tmp/zccache-1964-root-jobs-final-workspace.log` terminal1:74 diagnostics, no ICE. This is the current final source, including the maintenance input grouping. Earlier73/75 probes reflect intermediate variants and are not final success evidence. Format/diff checks pass, no trace/stub code remains, and source files stay below1000 lines. No active probe remains. No push/PR.
+- Remaining audits before #1964 can land:other Clear/maintenance/post-publication workers must be checked against explicit root release (retaining Arc<SharedState> alone is insufficient); remaining scope/cancellation/async-lane findings; new short commit holder watchdogs; owned/mapped guard identities; opaque/generic capability factories and unresolved callbacks; legacy unlink work/classification inside maintenance publication. Plant reproductions before changing proof rules. All OS/features, review and full isolated gate still required, followed by later children and mandatory PR merge/rebase cleanup.
+
+### #1964 — cancelled Clear/maintenance native-root ownership
+
+- Resumed after the issue-only kernel task (kernal-api#433); the previous turn verified that external issue, without changing this repo. Current implementation work remains #1964, sequentially after the three merged children.
+- Strengthened both existing paused-sweep cancellation regressions: abort the actual Clear/maintenance requester, explicitly release the daemon's cache-root controller, and probe the actual native writer lock from the blocking lane. Keep publication-release and maintenance-permit checks, resume/drain before asserting.
+- RED `/tmp/zccache-1964-cancelled-root-red.log` terminal101: both strengthened tests fail because another native writer is admitted during paused cleanup; the other nine Clear tests and the preceding staged/cached/maintenance suites pass.
+- Clear and maintenance acquire a bounded root lease before launching each accepted cleanup worker. Queued closure capture order and execution locals retain that lease through the worker state handle drop. Released controllers reject new work. Maintenance also retains a separate async completion lease through the full-pass marker.
+- GREEN `/tmp/zccache-1964-cancelled-root-green.log` terminal0:37 staged +11 cached +39 maintenance +11 Clear =98 pass (one preexisting ignored staged test remains ignored). Both new native-lock assertions pass after explicit release and requester cancellation.
+- Targeted all-target Clippy core+daemon-core with test-support and -D warnings passes `/tmp/zccache-1964-cancelled-root-clippy.log` terminal0. Normal soldr wrapper remains enabled in bosn runtime tests; host Clippy uses the previously documented wrapper diagnostic escape.
+- Remaining root-ownership work is explicit: WAL Clear/Remove/Flush commands call ArtifactStore::flush_async, whose detached blocking job does not currently carry root ownership. A worker/request lease does not prove safety after acknowledgement timeout/cancellation. The actor and actual disk-write ownership need their own regression/fix; do not claim this worker fix closes that audit.
+- SharedState::launch_blocking adds an outer activity owner; its eventual last-state destruction also needs ownership review separately from this worker-local cleanup proof. No claim is made that a worker-local lease alone covers every other Arc holder or actor.
+- Final workspace Dylint `/tmp/zccache-1964-cancelled-root-workspace.log` terminal1:74 remaining slow-work/exclusion diagnostics, no ICE. No suppression or effect downgrade; this change does not claim to fix those findings. Diff/format checks pass, edited source remains below1000 lines, and all test/lint handles are terminal. No push/PR. Next concrete audit is real WAL disk-write ownership under cancelled acknowledgement, including the outer activity-owner lifetime.
+
+### #1964 — WAL disk jobs retain native root ownership
+
+- Previous goal turn made concrete progress in2927f5b2 (cancelled sweep workers); resumed on that clean feature branch. No subtree/worktree or external source checkout.
+- Added a store-allocation-scoped test hook immediately inside the actual WAL blocking disk job. Independent stores cannot consume each other's pause hook. The regression drives the real actor, expires Clear's5ms acknowledgement, cancels the actor while its disk write is paused, explicitly releases daemon ownership, and attempts the actual native root lock. It resumes the worker before assertions, observes the actual index rename, then proves root reuse within5s.
+- Initial `/tmp/zccache-1964-wal-root-red.log` was a compile failure (missing io import/private module path), not behavioral RED. Corrected the test to use the public internal re-export and actual configured index path. Valid RED `/tmp/zccache-1964-wal-root-valid-red.log` terminal101:3 existing WAL tests pass; the new test fails specifically because the detached write loses native root ownership.
+- Actor startup now requires CacheRootWriterLease checked out before spawning, in both standalone and embedded service paths and real test harnesses. All actor disk writes use launch_index_flush, a nonblocking constructor requiring Arc<CacheRootWriterLease>; each detached blocking job retains its own reference through store destruction. Actor cancellation/ack timeout cannot release the claim early. No optional ownership bypass or new waiting overload was added. The service retains its existing explicit shutdown and bounded drain/join policy and sequential FIFO processing.
+- Split existing1073-line run.rs before editing startup: artifact hydration moves to run_artifact_loader.rs with the existing re-export, accept-watchdog tests move to run_accept_tests.rs. No behavior or assertion removed; final run.rs994lines.
+- Strengthened prior cancelled Clear/maintenance sweep tests to stop/join the WAL actor before explicit release and native probing. This prevents the actor's new service lease from masking the independent worker requirement.
+- First native-job GREEN `/tmp/zccache-1964-wal-root-green.log` terminal0:4 WAL tests. Refactored the async joining helper into the nonblocking job constructor, preserving owned cancellation.
+- Final runtime `/tmp/zccache-1964-wal-root-staged-green.log` terminal0:37 staged +11 cached +39 maintenance +11 Clear =98 pass, one preexisting staged test ignored. `/tmp/zccache-1964-wal-root-lifecycle-green.log` terminal0:4 WAL +2 accept +1 memory-controller +8 embedded flush/shutdown +2 actual warm restarts +1 staged multi/Clear ordering =18 pass. Declared bosn tasks, normal soldr wrapper, real managed container.
+- Targeted daemon-core all-target Clippy with test-support and -D warnings passes `/tmp/zccache-1964-wal-root-clippy.log` terminal0. Workspace Dylint `/tmp/zccache-1964-wal-root-workspace.log` terminal1:74 remaining diagnostics, no ICE; no suppression or effect downgrade.
+- Compiler fixture coverage extended for direct/generic leakage and trait erasure of shared root leases, plus valid shared cleanup/blocking job and non-owning Weak controls. Validation pending below.
+- Outstanding audits include the outer activity owner's final SharedState destruction, shutdown final-store/checkpoint jobs outside the actor, remaining exclusion/async-lane findings, short commit holder watchdogs, legacy unlink phase/classification, opaque/generic capabilities, owned/mapped guards and full OS/feature/gate/review requirements. No push/PR; #1964 remains open.
+- Shared-root UI first run `/tmp/zccache-1964-wal-root-ui.log` terminal101:7 base/43 other examples pass, including all shared cleanup and Weak controls; the negative differs only by the3 expected new resolved ownership diagnostics (direct/generic Arc forget and Arc trait erasure). Inspected all9 actual diagnostics and preserved the prior6 exactly before updating the golden output. No lint implementation change was needed.
+- Verified `/tmp/zccache-1964-wal-root-verified-ui.log` terminal0, then fixed the one new positive fixture signature's formatting. Final `/tmp/zccache-1964-wal-root-final-ui.log` terminal0:7 base +44 examples +3 real materialization contracts =54 pass on final source. Workspace and Dylint formatting/diff checks pass; no edited source exceeds1000lines. All runtime/compiler/Clippy handles are terminal. No push or PR.
+- Next concrete root-lifetime reproduction: retain a sole private-plan owner in SharedState, arrange final Arc destruction in SharedState::launch_blocking's outer activity owner after the operation returns, pause actual private-plan cleanup, explicitly release daemon ownership, and probe the native lock. A lease bound only inside the operation cannot establish ownership through that outer destructor; the facade must retain root ownership through its activity owner too. Shutdown final-store/checkpoint jobs outside the WAL actor remain a separate actual-IO audit.
+
+### #1964 — root ownership through final activity destruction
+
+- Previous goal turn progressed in4a3a3bc2 (WAL native ownership,116 runtime and54 compiler cases); resumed on its clean feature branch. No worktree/subtree/dependent checkout.
+- New regression puts the sole private-plan record in actual SharedState, launches a tracked blocking callback, explicitly releases root ownership, drops the server and permits the callback to return. It pauses the actual private-plan destructor in the wrapper's last activity owner, verifies no spare strong state owner masks destruction, probes the native root lock, resumes/drains, proves the private tree gone and verifies native root reuse after the job joins.
+- Valid RED `/tmp/zccache-1964-activity-root-red.log` terminal101: existing Clear/private-plan test passes; new regression fails specifically because callback-local root ownership ends before the outer activity cleanup.
+- Added mandatory-root launch_blocking_with_root with a shared private owned wrapper. Closure capture order drops the callback/activity before the owner on queued destruction; local declaration order retains the owner through normal/unwind activity destruction. Clear now hands its checked-out root lease to this outer facade instead of binding it only in the inner operation. Existing root-free tracked launches use the same activity/profile machinery with unit ownership; they are not asserted safe by this change.
+- Initial GREEN `/tmp/zccache-1964-activity-root-green.log` terminal0:both focused tests pass. Extended the real last-state regression to injected callback panic; it verifies the expected join failure while retaining the same native-exclusion, private-cleanup and root-reuse assertions.
+- Final isolated runtime `/tmp/zccache-1964-activity-root-staged-green.log` terminal0:37 staged +11 cached +39 maintenance +13 Clear/private-plan =100 pass, one preexisting staged test remains ignored. Both normal-return and unwind cases pass. Normal soldr wrapper, declared bosn task, actual managed container.
+- Initial targeted all-target daemon-core Clippy passes `/tmp/zccache-1964-activity-root-clippy.log` terminal0. Final rerun after adding the unwind case recorded below.
+- First workspace Dylint `/tmp/zccache-1964-activity-root-workspace.log` terminal1 was a preflight refusal while host Clippy held the target build lock, not lint evidence. Waited for that exact Clippy handle to finish, then reran. Actual final `/tmp/zccache-1964-activity-root-final-workspace.log` terminal1:74 remaining diagnostics, no ICE. No lint suppression, effects downgrade or new trusted path.
+- Native-root audit remains incomplete: migrate/remove the legacy root-free SharedState launch entrypoint (exec, link, multi and compile-hit consumers plus test wrappers), preserving explicit shutdown failure contracts rather than falling through to uncached work; split the existing oversized link handler before editing. Root lifetime of resident private owners outside tracked jobs and final shutdown/checkpoint writes also needs explicit review. Mandatory root ownership belongs in the typed launch API, not an optional best-effort check. Remaining #1964 exclusion/watchdog/legacy-unlink/async-lane/OS-feature/review/full-gate work still applies. No push/PR.
+- Final all-target Clippy with test-support and -D warnings passes `/tmp/zccache-1964-activity-root-final-clippy.log` terminal0. Format/diff checks pass, edited source stays under1000lines and every test/lint handle is terminal. The new facade is verified; migration of the legacy unrooted entrypoint is the next concrete source change.
+
+### Draft handoff — goal paused at user request
+
+- User requested stopping the goal, publishing a draft PR and updating #1964 with current status. Goal set paused; no implementation work is to continue as part of this handoff.
+- Preserving the current migration as WIP: removed the root-free tracked launch entrypoint and generic/unit-owner helper; all SharedState tracked launches now require a concrete CacheRootWriterLease. Migrated exec, compile-hit, multi and link consumers and test wrappers. Root release produces terminal Response::Error, not a cache miss; compile-hit callers avoid hit-cache updates for terminal errors. Split the preexisting oversized link handler and compile pipeline before editing.
+- Focused valid RED `/tmp/zccache-1964-root-launch-red.log` terminal101:2 existing released-root tests pass; new actual exec-hit test fails because released ownership still permits materialization/a nonterminal outcome.
+- Focused GREEN `/tmp/zccache-1964-root-launch-green.log` terminal0:3 released-root tests pass, including rejected actual exec materialization and zero active requests. This compiles the current migration, but does not establish full caller/lifecycle/platform coverage.
+- Latest broader runtime evidence is100 staged/cached/maintenance/Clear tests on efc61d18, including actual last-state private cleanup on normal return and unwind; earlier4a3a3bc2 also has18 WAL/lifecycle/restart tests and54 compiler fixtures. These broader results predate this final API migration and must not be presented as current-head full validation.
+- Latest production Dylint is74 unresolved diagnostics on efc61d18; no final migration-head production Dylint/full gate/review or full OS/feature validation has passed. Pending:remaining exclusion/cancellation/async-lane findings, short commit watchdogs, legacy unlink detach phase, private resident-owner/shutdown/checkpoint root lifetimes, opaque/generic and mapped/owned guard coverage, full local gate/platform checks and review. Child #1964 and parent #1960 remain open; #1965–1971 are unimplemented. No merge or post-merge rebase is being performed for this draft.
+
+### Resume — finish PR #1978 (2026-10-24)
+
+- Production Dylint 74 → 0 with no suppressions. Root causes: private plan `Drop`/`cleanup` ran `remove_dir_all` (now a rename into `<staging>/.trash` or a send to the staging sweeper thread); a failed directory unpack swept under its payload lease (temp now returned and removed after release); shutdown swept depfiles under the drain (guard dropped first). The other findings were lint imprecision: every `dyn` drop was unknown, so `Arc<SharedState>` (tokio hooks) looked like a sweep. `dyn_sources.rs` now resolves trait objects to this crate's unsizing sources, with a new `dyn_drop` fixture. Lint UI: 45/45.
+- Fixed CI regressions: stale source-contract test paths; `put_racing_clear_namespace_never_errors` (clear now succeeds after detach when the retired-tree sweep is incomplete; deterministic RED→GREEN test added).
+- Review (1 HIGH, 1 MEDIUM): HIGH fixed (dsymutil bundle roots beside the output now go to the sweeper via `PrivateRootRetirer`). MEDIUM accepted: if a rename fails (e.g. an open Windows handle), the root stays until its staging root is removed.
+- Full daemon-core suite 1187 passed; focused cleanup/link suites pass after the follow-up.
+- CI follow-up: Windows junctions in staged trash were removed with `remove_file` (no-follow `is_dir()` is false for a junction); now `remove_dir` first. Two failures pre-existing on `main` fixed: macOS stall monitor treated unavailable session CPU as perpetual progress (observable tree ticks now decide); Windows ARM `probe_spawn_guard` tests self-exec the test binary instead of PowerShell. `put_racing_clear_namespace_never_errors` hung Linux x86 twice (not reproducible locally, 1–N cores); cause: clears now sweep outside the gate, so four unthrottled writers outpaced each sweep until every clear spent its full 30 s `PROBE` budget (100 × 30 s). The writers are now capped at 2,000 puts each, and a clearer panic still raises their stop flag.
+- Still open from the handoff list (not done here): short commit-holder watchdogs, legacy unlink classification, async blocking-lane enforcement, resident-owner/shutdown root-lifetime audit.

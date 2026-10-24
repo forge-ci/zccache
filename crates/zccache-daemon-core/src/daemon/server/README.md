@@ -25,6 +25,12 @@ Topic-focused submodules:
 - `pch.rs` — PCH source-header resolution
 - `client_env.rs` — replay client env into compiler children
 - `session.rs` — `Request::SessionStart` handler + session log writer
+- `exec_publication.rs` — requested-output commit followed by publication release and owned retirement
+- `exec_persistence.rs` — bounded direct-exec persistence admission and root/publication ownership handoff
+- `exec_direct_retirement_tests.rs` — paused cleanup, async caller progress and native shutdown-root lease regression
+- `multi_publication.rs` — multi-source metadata replacement retaining displaced records past publication
+- `cached_artifact_retirement.rs` — schedule displaced-record cleanup before returning a bounded waiter
+- `materialization_contract.rs` — feature-gated compiler fixture access to the real private payload lifetime
 - `handle_clear.rs` — `Request::Clear` handler
 - `handle_compile_ephemeral.rs` — single-roundtrip ephemeral compile + direct (uncached) compiler invocation
 - `directory_link.rs` — transactional publication and delivery for directory-producing link tools
