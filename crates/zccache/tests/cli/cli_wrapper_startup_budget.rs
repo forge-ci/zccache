@@ -67,19 +67,20 @@ fn run_passthrough(zccache: &str, cache_dir: &std::path::Path, namespace: Namesp
     elapsed
 }
 
-/// Median of [`RUNS`] passthroughs after one warm-up run (page cache, and
-/// for [`Namespace::Derived`] the first derivation).
-fn median_passthrough(
+/// Fastest of [`RUNS`] passthroughs after one warm-up run (page cache, and
+/// for [`Namespace::Derived`] the first derivation). The minimum is the
+/// wrapper's own cost: host load only ever adds to a sample, while every
+/// regression these tests guard adds to every run (#1985).
+fn fastest_passthrough(
     zccache: &str,
     cache_dir: &std::path::Path,
     namespace: Namespace,
 ) -> (Duration, Vec<Duration>) {
     run_passthrough(zccache, cache_dir, namespace);
-    let mut samples: Vec<Duration> = (0..RUNS)
+    let samples: Vec<Duration> = (0..RUNS)
         .map(|_| run_passthrough(zccache, cache_dir, namespace))
         .collect();
-    samples.sort();
-    (samples[RUNS / 2], samples)
+    (*samples.iter().min().unwrap(), samples)
 }
 
 /// Development builds name their daemon after a hash of the executable so two
@@ -93,16 +94,26 @@ fn median_passthrough(
 fn development_namespace_is_not_rehashed_per_invocation() {
     let zccache = env!("CARGO_BIN_EXE_zccache");
     let cache_dir = tempfile::tempdir().unwrap();
-    let (inherited, inherited_samples) =
-        median_passthrough(zccache, cache_dir.path(), Namespace::Inherited);
-    let (derived, derived_samples) =
-        median_passthrough(zccache, cache_dir.path(), Namespace::Derived);
+    // Warm both paths, then alternate them so a change in host load lands on
+    // both sides rather than on whichever batch ran second (#1985).
+    run_passthrough(zccache, cache_dir.path(), Namespace::Inherited);
+    run_passthrough(zccache, cache_dir.path(), Namespace::Derived);
+    let (inherited_samples, derived_samples): (Vec<Duration>, Vec<Duration>) = (0..RUNS)
+        .map(|_| {
+            (
+                run_passthrough(zccache, cache_dir.path(), Namespace::Inherited),
+                run_passthrough(zccache, cache_dir.path(), Namespace::Derived),
+            )
+        })
+        .unzip();
+    let inherited = *inherited_samples.iter().min().unwrap();
+    let derived = *derived_samples.iter().min().unwrap();
     eprintln!("inherited namespace: {inherited_samples:?}");
     eprintln!("derived namespace:   {derived_samples:?}");
     assert!(
         derived <= inherited + NAMESPACE_DERIVATION_MARGIN,
         "deriving the development namespace costs {:?} per wrapper invocation \
-         (median {derived:?} against {inherited:?} with it inherited); the \
+         (fastest {derived:?} against {inherited:?} with it inherited); the \
          executable is being re-hashed on the compile hot path (#1649)",
         derived.saturating_sub(inherited)
     );
@@ -112,11 +123,11 @@ fn development_namespace_is_not_rehashed_per_invocation() {
 fn compiler_wrapper_passthrough_stays_within_budget() {
     let zccache = env!("CARGO_BIN_EXE_zccache");
     let cache_dir = tempfile::tempdir().unwrap();
-    let (median, samples) = median_passthrough(zccache, cache_dir.path(), Namespace::Inherited);
+    let (fastest, samples) = fastest_passthrough(zccache, cache_dir.path(), Namespace::Inherited);
     eprintln!("wrapper passthrough samples: {samples:?}");
     assert!(
-        median <= WRAPPER_PASSTHROUGH_BUDGET,
-        "median wrapper passthrough {median:?} exceeds {WRAPPER_PASSTHROUGH_BUDGET:?}; \
+        fastest <= WRAPPER_PASSTHROUGH_BUDGET,
+        "fastest wrapper passthrough {fastest:?} exceeds {WRAPPER_PASSTHROUGH_BUDGET:?}; \
          a steady per-process cost is back on the compile hot path (#1649): {samples:?}"
     );
 }
