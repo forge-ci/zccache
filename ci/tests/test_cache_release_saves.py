@@ -70,7 +70,7 @@ def test_live_inventory_fits_with_test_binary_headroom_after_retire_first() -> N
 
 
 def test_release_builds_never_save_the_actions_cache() -> None:
-    release = yaml.safe_load((ROOT / ".github/workflows/release-auto.yml").read_text(encoding="utf-8"))
+    release = yaml.safe_load((ROOT / ".github/workflows/auto-release.yml").read_text(encoding="utf-8"))
     steps = [step for job in release["jobs"].values() for step in job.get("steps", [])]
     target = next(step for step in steps if step.get("uses") == "./.github/actions/build-target")
     assert target["with"]["save_cache"] == "false"

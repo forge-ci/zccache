@@ -12,7 +12,7 @@ MACOS_WORKFLOWS = {
     "fs-matrix.yml": ["matrix (macos-15)"],
     "wrapper-e2e.yml": ["wrapper-e2e (macos-15)"],
     "test-action.yml": ["macOS ARM", "macOS x86_64"],
-    "release-auto.yml": [
+    "auto-release.yml": [
         "Test PyPI Wheel (macosx_11_0_arm64)",
         "Test PyPI Wheel (macosx_10_12_x86_64)",
     ],
@@ -47,7 +47,7 @@ def test_all_load_bearing_macos_lanes_use_the_supported_arm_runner_and_observer(
 
 def test_intel_wheel_is_smoked_under_a_loud_rosetta_boundary() -> None:
     """Intel support remains real execution, never a silent ARM substitution."""
-    workflow = _workflow("release-auto.yml")
+    workflow = _workflow("auto-release.yml")
     ungated = _job(workflow, "test-wheels-ungated")
     assert "- os: macos-15" in ungated
     assert "architecture: x64" in ungated
@@ -58,7 +58,7 @@ def test_intel_wheel_is_smoked_under_a_loud_rosetta_boundary() -> None:
 
 def test_intel_wheel_smoke_remains_outside_every_publish_needs_edge() -> None:
     """#1538's release-dependency repair must survive the migration."""
-    workflow = _workflow("release-auto.yml")
+    workflow = _workflow("auto-release.yml")
     publish_jobs = ("publish-pypi", "publish-crates")
     for job in publish_jobs:
         assert "test-wheels-ungated" not in _job(workflow, job)

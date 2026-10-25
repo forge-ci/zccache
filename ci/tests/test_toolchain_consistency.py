@@ -36,7 +36,7 @@ MUST_PIN: tuple[str, ...] = (
     ".github/workflows/coverage.yml",
     ".github/workflows/fs-matrix.yml",
     ".github/workflows/integration.yml",
-    ".github/workflows/release-auto.yml",
+    ".github/workflows/auto-release.yml",
     # test-action.yml is deliberately absent: setup-soldr reads the pin from
     # rust-toolchain.toml, so the workflow no longer restates the version.
     "ci/docker/zccache-builder.Dockerfile",

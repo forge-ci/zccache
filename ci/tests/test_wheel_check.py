@@ -147,7 +147,7 @@ def test_wheel_and_release_budgets(monkeypatch) -> None:
 def test_release_workflow_runs_the_check_before_upload() -> None:
     from pathlib import Path
 
-    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release-auto.yml").read_text()
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/auto-release.yml").read_text()
     build = workflow.index("python -m ci.release_workflow build-wheels")
     check = workflow.index("ci/wheel_check.py dist/wheels/*.whl")
     upload = workflow.index("name: pypi-wheels")
