@@ -493,6 +493,56 @@ jobs:
           SOLDR_JOBS: "1"
         run: soldr cargo test -p zccache-daemon-core --features test-support --lib miss_overhead_budget -- --ignored --nocapture  # ci-lint: allow RUST-017 one budget probe, prints the measured overhead
 
+  # Windows MSVC cl.exe cache coverage (zccache#1940). The platform Test job in
+  # ci-check.yml runs only `--lib --bins`, so the `cache_native` integration
+  # binary — which owns the real cl.exe cold→warm cache assertions — is never
+  # compiled or run on Windows. This focused job builds just that binary and
+  # runs the `msvc_cl_` tests under a real vcvars64 toolchain, so a regression
+  # in MSVC cl.exe caching (e.g. a flag misclassified as a side output, which
+  # made zccache cache nothing for CMake/MSVC projects) fails a PR.
+  msvc-cl-cache:
+    name: MSVC cl.exe cache
+    needs: [cache-pre-prune, ci-mode]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Wait for current-main cache pre-prune
+        uses: ./.github/actions/wait-cache-pre-prune
+      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+        with:
+          job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
+          cook-delta: false # per-commit delta layer off (setup-soldr#528)
+          save-cache: auto
+          save-cache-remote: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.ZCCACHE_CACHE_WRITES == 'true' && 'auto' || 'false' }}
+          zccache-seed-strict: true
+          toolchain: 1.95.0
+          cache: true
+          build-cache: true
+          linker: fast
+          prebuild-deps: none
+          solo-toolchain-cache: false # #1677 retires the standalone toolchain archive.
+      # Build BEFORE any vcvars PATH change. Git for Windows ships a coreutils
+      # `link.exe` under `usr/bin`, and a vcvars-prepended MSVC path can leave
+      # that one ahead of MSVC's, which breaks linking. The image's default env
+      # links Rust fine (the repo's other Windows jobs rely on it), so only the
+      # test step needs the vcvars environment (for cl.exe + INCLUDE).
+      - name: Build the cache_native integration test binary
+        shell: bash
+        run: |
+          soldr cargo test -p zccache --features test-support --test cache_native --no-run
+      - name: Set up MSVC environment (vcvars64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      # pwsh, not bash: the test only needs cl.exe (compile-only `/c`), and
+      # Git Bash re-prepends `usr/bin` ahead of the vcvars MSVC path.
+      - name: Run the MSVC cl.exe cache tests
+        shell: pwsh
+        run: |
+          soldr cargo test -p zccache --features test-support --test cache_native -- `
+            msvc_cl_ --ignored --test-threads=1 --nocapture
+
   # GEN-022 (forge-ci/ci.yml#405): every queue run and main push ends with the
   # ci-lint cache janitor. It runs after every other job, even failed ones, so
   # the repository stays under [cache].budget by our LRU order instead of
@@ -501,7 +551,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5

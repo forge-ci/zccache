@@ -19,8 +19,14 @@ pub fn unmodeled_side_output_flag(args: &[String], msvc_syntax: bool) -> Option<
                 .or_else(|| arg.strip_prefix('-'))
                 .unwrap_or(arg);
             let lower_body = body.to_ascii_lowercase();
-            body.starts_with("Fd")
-                || body.starts_with("Fp")
+            // `/Fd` is deliberately absent (issue #1940). It only *names* the
+            // PDB that `/Zi`/`/ZI` writes; with `/Z7` (or no debug flag) no PDB
+            // is produced, so the object is self-contained and cacheable.
+            // CMake passes `/Fd<target>.pdb` on every MSVC compile, so treating
+            // it as a side output made zccache cache nothing for any CMake/MSVC
+            // project. The PDB-writing flags (`/Zi`/`/ZI`) are rejected on their
+            // own, so removing `/Fd` here does not weaken that guard.
+            body.starts_with("Fp")
                 || body.starts_with("Fr")
                 || body.starts_with("FR")
                 || body.starts_with("Fi")
@@ -90,11 +96,25 @@ mod tests {
 
     #[test]
     fn recognizes_msvc_pdb_and_listing_side_outputs_case_insensitively() {
-        for flag in ["/Zi", "/ZI", "/Fd:unit.pdb", "/FAcs", "/sourceDependencies"] {
+        for flag in ["/Zi", "/ZI", "/Fp:unit.pch", "/FAcs", "/sourceDependencies"] {
             assert_eq!(
                 unmodeled_side_output_flag(&args(&["/c", "unit.c", flag]), true),
                 Some(flag),
                 "{flag} must bypass object-only caching"
+            );
+        }
+    }
+
+    /// `/Fd` names a PDB but does not itself write one (`/Zi`/`/ZI` do), so it
+    /// is not a side output. CMake emits it on every MSVC compile; flagging it
+    /// made zccache cache nothing for CMake/MSVC projects (issue #1940).
+    #[test]
+    fn msvc_fd_flag_is_not_a_side_output() {
+        for flag in ["/Fd:unit.pdb", "/Fdunit.pdb", "-Fd:unit.pdb"] {
+            assert_eq!(
+                unmodeled_side_output_flag(&args(&["/c", "unit.c", flag]), true),
+                None,
+                "{flag} must not bypass object-only caching"
             );
         }
     }

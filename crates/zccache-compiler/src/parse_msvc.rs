@@ -739,12 +739,7 @@ mod tests {
 
     #[test]
     fn msvc_side_output_flags_are_non_cacheable_for_single_file_compiles() {
-        for flag in [
-            "/Fd:unit.pdb",
-            "/Fp:unit.pch",
-            "/FAcs",
-            "/sourceDependencies",
-        ] {
+        for flag in ["/Fp:unit.pch", "/FAcs", "/sourceDependencies"] {
             let result = parse_msvc_invocation(
                 "cl.exe",
                 &args(&["/c", flag, "/Fo:hello.obj", "hello.c"]),
@@ -753,6 +748,71 @@ mod tests {
             assert!(
                 matches!(result, ParsedInvocation::NonCacheable { .. }),
                 "{flag}"
+            );
+        }
+    }
+
+    /// Issue #1940: CMake passes `/Fd<target>.pdb` on **every** MSVC compile,
+    /// with both the Visual Studio and Ninja generators. `/Fd` only *names* the
+    /// PDB that `/Zi`/`/ZI` writes; with `/Z7` (debug info embedded in the
+    /// object) or with no debug flag at all, no PDB is produced, so the object
+    /// is self-contained. Treating `/Fd` as an unmodeled side output made
+    /// zccache cache **nothing** for any CMake/MSVC project (0 artifacts), the
+    /// same over-rejection ccache avoids — ccache 4.14 accepts `/Fd` and `/MP`
+    /// and refuses only `/Zi`. This pins the actual CMake shape as cacheable.
+    #[test]
+    fn cmake_fd_flag_is_cacheable() {
+        let result = parse_msvc_invocation(
+            "cl.exe",
+            &args(&[
+                "/nologo",
+                "/c",
+                "/Z7",
+                "/FdC:\\build\\obj\\Debug\\mytarget.pdb",
+                "/Foobj\\hello.obj",
+                "hello.cpp",
+            ]),
+            CompilerFamily::Msvc,
+        );
+        match result {
+            ParsedInvocation::Cacheable(c) => {
+                assert_eq!(c.source_file, NormalizedPath::new("hello.cpp"));
+                assert_eq!(c.output_file, NormalizedPath::new("obj\\hello.obj"));
+            }
+            other => panic!("expected Cacheable, got: {other:?}"),
+        }
+    }
+
+    /// `/Fd` on its own (no `/Zi`/`/ZI`, so no PDB is written) must not divert
+    /// the compile away from the cache.
+    #[test]
+    fn fd_without_pdb_writer_is_cacheable() {
+        for fd in ["/Fd:vc.pdb", "-Fd:vc.pdb", "/Fdvc.pdb"] {
+            let result = parse_msvc_invocation(
+                "cl.exe",
+                &args(&["/c", fd, "/Fo:hello.obj", "hello.c"]),
+                CompilerFamily::Msvc,
+            );
+            assert!(
+                matches!(result, ParsedInvocation::Cacheable(_)),
+                "{fd} must not bypass the cache"
+            );
+        }
+    }
+
+    /// `/Fd` next to a real PDB writer (`/Zi`) is still refused: the shared PDB
+    /// is an unmodeled side output even though `/Fd` itself is not.
+    #[test]
+    fn fd_with_zi_is_still_non_cacheable() {
+        for flag in ["/Zi", "/ZI"] {
+            let result = parse_msvc_invocation(
+                "cl.exe",
+                &args(&["/c", flag, "/Fd:vc.pdb", "/Fo:hello.obj", "hello.c"]),
+                CompilerFamily::Msvc,
+            );
+            assert!(
+                matches!(result, ParsedInvocation::NonCacheable { .. }),
+                "/Fd with {flag} must stay non-cacheable"
             );
         }
     }

@@ -91,10 +91,14 @@ pub(in crate::daemon::server) fn explicit_staged_side_outputs(
             } else if let Some(rest) = body.strip_prefix("ifcOutput") {
                 value = Some(rest.strip_prefix(':').unwrap_or(rest));
             } else {
-                for prefix in ["Fd", "Fa", "Fr", "FR", "Fi"] {
+                // `/Fd` is deliberately absent (issue #1940): it names the PDB
+                // that only `/Zi`/`/ZI` writes, so it produces no extra file and
+                // is not a side output. Listing it here made every CMake/MSVC
+                // multi-source batch with `/Fd` divert to the uncached path.
+                for prefix in ["Fa", "Fr", "FR", "Fi"] {
                     if let Some(rest) = body.strip_prefix(prefix) {
                         if rest.is_empty() {
-                            if matches!(prefix, "Fd" | "Fi") {
+                            if prefix == "Fi" {
                                 value = args.get(index + 1).map(String::as_str);
                                 if value.is_some() {
                                     index += 1;
@@ -578,7 +582,6 @@ mod tests {
             vec![cwd.join("shared.d"), cwd.join("diag.json")]
         );
         let msvc = vec![
-            "/Fd:shared.pdb".into(),
             "/doccomments.xdc".into(),
             "/sourceDependencies:directives".into(),
             "deps.json".into(),
@@ -588,12 +591,25 @@ mod tests {
         assert_eq!(
             explicit_staged_side_outputs(&msvc, true, cwd),
             vec![
-                cwd.join("shared.pdb"),
                 cwd.join("comments.xdc"),
                 cwd.join("deps.json"),
                 cwd.join("module.ifc")
             ]
         );
+    }
+
+    /// Issue #1940: `/Fd` names a PDB but writes none on its own, so it is not
+    /// an extra staged output. It must not appear in the side-output list that
+    /// drives hardlink detachment for a direct batch compile.
+    #[test]
+    fn explicit_side_outputs_exclude_fd_pdb_path() {
+        let cwd = Path::new("workspace");
+        for fd in ["/Fd:shared.pdb", "/Fdshared.pdb", "-Fd:shared.pdb"] {
+            assert!(
+                explicit_staged_side_outputs(&[fd.into()], true, cwd).is_empty(),
+                "{fd} must not be treated as a side output"
+            );
+        }
     }
 
     #[test]
@@ -832,7 +848,6 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let requested: NormalizedPath = temp.path().join("first.obj").into();
         for side_output in [
-            "/Fdshared.pdb",
             "/Fpshared.pch",
             "/Fashared.asm",
             "/Zi",
@@ -852,6 +867,30 @@ mod tests {
                 ),
                 StagedPlanOutcome::Unsupported(StagedPlanReason::UnmodeledSideOutput)
             ));
+        }
+    }
+
+    /// Issue #1940: `/Fd` on a multi-source MSVC batch (the CMake/MSBuild `/MP`
+    /// shape) must remain stageable. `/Fd` writes no PDB without `/Zi`, so it is
+    /// not a shared side output that forces the batch onto the uncached path.
+    #[test]
+    fn multi_unit_plan_accepts_msvc_fd_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let requested: NormalizedPath = temp.path().join("first.obj").into();
+        for fd in ["/Fdshared.pdb", "/Fd:shared.pdb"] {
+            assert!(
+                matches!(
+                    StagedMultiUnitPlan::build_enabled(
+                        temp.path(),
+                        crate::compiler::CompilerFamily::Msvc,
+                        vec!["/c".into(), "first.c".into(), fd.into()],
+                        &requested,
+                        temp.path(),
+                    ),
+                    StagedPlanOutcome::Enabled(_)
+                ),
+                "{fd} must stay stageable"
+            );
         }
     }
 
