@@ -42,6 +42,7 @@ fn test_rsp_entry(cached_at: std::time::Instant) -> RspCacheEntry {
         expanded: Vec::new(),
         dependencies: Vec::new(),
         cached_at,
+        family: crate::compiler::CompilerFamily::Gcc,
     }
 }
 

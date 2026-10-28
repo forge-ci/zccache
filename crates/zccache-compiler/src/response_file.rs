@@ -1,14 +1,19 @@
 //! Response file (`@file`) expansion for compiler arguments.
 //!
-//! Both GCC and Clang support `@filename` syntax where the file contains
-//! additional command-line arguments. This module handles reading and
-//! expanding those files into the argument list.
+//! GCC, Clang, MSVC and rustc support `@filename` syntax where the file
+//! contains additional command-line arguments; rustc reads it one argument
+//! per line ([`parse_response_file_content_for`]). This module handles
+//! reading and expanding those files into the argument list.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use zccache_core::NormalizedPath;
 
+mod family;
+pub use family::{
+    expand_response_files_in_for, expands_nested_response_files, parse_response_file_content_for,
+};
 mod format;
 #[cfg(test)]
 use format::gnu as format_rsp_content;
@@ -130,13 +135,13 @@ pub fn expand_response_files(args: &[String]) -> Result<Vec<String>, ResponseFil
 /// Like [`expand_response_files`], but resolves relative `@file` paths against
 /// `base_dir` instead of the process's current working directory. For nested
 /// `@file` references inside a response file, paths are resolved against the
-/// parent file's directory (matching compiler behavior).
+/// parent file's directory (matching compiler behavior). Files are read with
+/// the GCC/Clang grammar; see [`expand_response_files_in_for`] for rustc.
 pub fn expand_response_files_in(
     args: &[String],
     base_dir: &Path,
 ) -> Result<Vec<String>, ResponseFileError> {
-    let mut seen = HashSet::new();
-    expand_recursive(args, base_dir, &mut seen, 0)
+    expand_response_files_in_for(args, base_dir, crate::CompilerFamily::Gcc)
 }
 
 fn expand_recursive(
@@ -144,6 +149,7 @@ fn expand_recursive(
     base_dir: &Path,
     seen: &mut HashSet<NormalizedPath>,
     depth: usize,
+    family: crate::CompilerFamily,
 ) -> Result<Vec<String>, ResponseFileError> {
     let mut result = Vec::new();
 
@@ -185,9 +191,13 @@ fn expand_recursive(
             // Nested @file references resolve against the parent file's directory
             let parent_dir = canonical.parent().unwrap_or(base_dir);
 
-            let expanded_args = parse_response_file_content(&content);
-            let nested = expand_recursive(&expanded_args, parent_dir, seen, depth + 1)?;
-            result.extend(nested);
+            let expanded_args = parse_response_file_content_for(&content, family);
+            if expands_nested_response_files(family) {
+                let nested = expand_recursive(&expanded_args, parent_dir, seen, depth + 1, family)?;
+                result.extend(nested);
+            } else {
+                result.extend(expanded_args);
+            }
 
             // Remove from seen so the same file can appear in sibling branches
             // (circular = same file in ancestor chain, not sibling)

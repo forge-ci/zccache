@@ -8,6 +8,10 @@ would silently corrupt arguments for one of them.
 
 ## Layout
 
+- `family.rs` — reading: which grammar each compiler family splits an `@file`
+  with. rustc takes one argument per line, verbatim, and does not expand
+  nested `@file`s (cargo's argfiles depend on this); every other family uses
+  the GCC/Clang parser in `response_file.rs`.
 - `format.rs` — `gnu` plus the `*_if_safe` variants (`gnu_if_safe`,
   `msvc_if_safe`, `rustc_if_safe`). The `_if_safe` forms return `None` rather
   than emitting a response file when an argument cannot be represented

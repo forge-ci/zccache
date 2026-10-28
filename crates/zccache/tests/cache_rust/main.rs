@@ -20,6 +20,7 @@ mod daemon_rustc_cache_basic_test;
 mod daemon_rustc_cache_path_remap_test;
 mod daemon_rustc_cache_worktree_test;
 mod daemon_rustc_issue_210_async_populate_test;
+mod daemon_rustc_response_file_test;
 mod daemon_rustc_restore_test;
 mod daemon_workspace_pin_747;
 mod reflink_worktree_e2e;

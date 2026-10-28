@@ -18,6 +18,9 @@ pub(super) struct RspCacheEntry {
     pub(super) expanded: Vec<String>,
     pub(super) dependencies: Vec<RspDependency>,
     pub(super) cached_at: std::time::Instant,
+    /// Family whose grammar produced `expanded`; rustc splits a file
+    /// differently from the GCC family, so another family re-expands it.
+    pub(super) family: crate::compiler::CompilerFamily,
 }
 
 /// Expand response file references with caching.
@@ -25,8 +28,14 @@ pub(super) struct RspCacheEntry {
 /// For each `@file` argument, checks if the expansion is already cached.
 /// If so, uses the cached result (no file I/O or canonicalize). Otherwise,
 /// expands the reference and caches the result for future requests.
-/// Non-`@file` arguments are passed through unchanged.
-pub(super) fn expand_args_cached(state: &SharedState, args: &[String], cwd: &Path) -> Vec<String> {
+/// Non-`@file` arguments are passed through unchanged. Files are read the
+/// way a compiler of `family` reads them.
+pub(super) fn expand_args_cached(
+    state: &SharedState,
+    args: &[String],
+    cwd: &Path,
+    family: crate::compiler::CompilerFamily,
+) -> Vec<String> {
     // Quick check: skip expansion if no @file references exist
     if !args.iter().any(|a| a.len() > 1 && a.starts_with('@')) {
         return args.to_vec();
@@ -42,7 +51,7 @@ pub(super) fn expand_args_cached(state: &SharedState, args: &[String], cwd: &Pat
                 cwd.join(filename).into()
             };
 
-            match expand_rsp_arg_cached(state, &resolved) {
+            match expand_rsp_arg_cached(state, &resolved, family) {
                 Ok(expanded) => result.extend(expanded),
                 Err(e) => {
                     tracing::debug!("response file expansion failed: {e}, passing raw arg");
@@ -59,6 +68,7 @@ pub(super) fn expand_args_cached(state: &SharedState, args: &[String], cwd: &Pat
 pub(super) fn expand_rsp_arg_cached(
     state: &SharedState,
     resolved: &Path,
+    family: crate::compiler::CompilerFamily,
 ) -> Result<Vec<String>, String> {
     let canonical: NormalizedPath = resolved
         .canonicalize()
@@ -66,10 +76,11 @@ pub(super) fn expand_rsp_arg_cached(
         .into();
 
     if let Some(cached) = state.rsp_cache.get(&canonical) {
-        let fresh = cached
-            .dependencies
-            .iter()
-            .all(|dep| hash_file_via_cache(state, &dep.path) == Some(dep.hash));
+        let fresh = cached.family == family
+            && cached
+                .dependencies
+                .iter()
+                .all(|dep| hash_file_via_cache(state, &dep.path) == Some(dep.hash));
         if fresh {
             return Ok(cached.expanded.clone());
         }
@@ -77,7 +88,7 @@ pub(super) fn expand_rsp_arg_cached(
 
     let mut seen = HashSet::new();
     let mut dependencies = Vec::new();
-    let expanded = expand_rsp_recursive(state, &canonical, &mut seen, &mut dependencies, 0)
+    let expanded = expand_rsp_recursive(state, &canonical, &mut seen, &mut dependencies, 0, family)
         .map_err(|e| e.to_string())?;
     state.rsp_cache.insert(
         canonical,
@@ -85,6 +96,7 @@ pub(super) fn expand_rsp_arg_cached(
             expanded: expanded.clone(),
             dependencies,
             cached_at: std::time::Instant::now(),
+            family,
         },
     );
     Ok(expanded)
@@ -96,8 +108,11 @@ pub(super) fn expand_rsp_recursive(
     seen: &mut HashSet<NormalizedPath>,
     dependencies: &mut Vec<RspDependency>,
     depth: usize,
+    family: crate::compiler::CompilerFamily,
 ) -> Result<Vec<String>, crate::compiler::response_file::ResponseFileError> {
-    use crate::compiler::response_file::{parse_response_file_content, ResponseFileError};
+    use crate::compiler::response_file::{
+        expands_nested_response_files, parse_response_file_content_for, ResponseFileError,
+    };
 
     const MAX_RSP_DEPTH: usize = 10;
 
@@ -144,9 +159,10 @@ pub(super) fn expand_rsp_recursive(
             }
         })?;
     let base_dir = canonical.parent().unwrap_or_else(|| Path::new("."));
+    let expands_nested = expands_nested_response_files(family);
     let mut expanded = Vec::new();
-    for child in parse_response_file_content(&content) {
-        if let Some(filename) = child.strip_prefix('@') {
+    for child in parse_response_file_content_for(&content, family) {
+        if let Some(filename) = child.strip_prefix('@').filter(|_| expands_nested) {
             if filename.is_empty() {
                 expanded.push(child);
                 continue;
@@ -162,6 +178,7 @@ pub(super) fn expand_rsp_recursive(
                 seen,
                 dependencies,
                 depth + 1,
+                family,
             )?);
         } else {
             expanded.push(child);

@@ -54,8 +54,10 @@ pub(super) async fn prepare_request_arguments(
         })?;
 
     // Expand before request caching so mutations to an @file cannot reuse a
-    // fast-hit entry keyed only by the raw argument list.
-    let expanded_args = expand_args_cached(state, raw_args, cwd);
+    // fast-hit entry keyed only by the raw argument list. rustc reads cargo's
+    // argfiles one argument per line, so the family picks the grammar.
+    let family = crate::compiler::detect_family(&compiler_path.to_string_lossy());
+    let expanded_args = expand_args_cached(state, raw_args, cwd, family);
     let strict_paths_mode = strict_paths_mode_from_client_env(client_env.as_deref())
         .map_err(|err| compile_failure_stderr(format!("zccache: {err}")))?;
     crate::compiler::strict_paths::validate_args(&expanded_args, strict_paths_mode).map_err(

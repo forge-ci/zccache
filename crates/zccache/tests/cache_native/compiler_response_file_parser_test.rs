@@ -18,7 +18,10 @@
     clippy::unwrap_in_result
 )]
 
-use zccache::compiler::response_file::parse_response_file_content;
+use zccache::compiler::response_file::{
+    parse_response_file_content, parse_response_file_content_for,
+};
+use zccache::compiler::CompilerFamily;
 
 fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
@@ -592,4 +595,52 @@ fn parse_three_quoted_segments() {
 fn parse_escaped_quote_then_unquoted() {
     let result = parse_response_file_content("\"a\\\"b\" c");
     assert_eq!(result, s(&["a\"b", "c"]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION: RUSTC GRAMMAR — ONE ARGUMENT PER LINE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// rustc makes every line one argument, verbatim (`rustc_driver_impl/src/args.rs`):
+/// spaces, quotes and backslashes belong to the argument. Cargo's argfile
+/// relies on this for `--check-cfg` values.
+#[test]
+fn parse_rustc_reads_one_argument_per_line() {
+    let content = "--check-cfg\ncfg(feature, values(\"a\", \"b\"))\n-L\nC:\\dir with spaces\\deps\n'quoted'\n";
+    let result = parse_response_file_content_for(content, CompilerFamily::Rustc);
+    assert_eq!(
+        result,
+        s(&[
+            "--check-cfg",
+            "cfg(feature, values(\"a\", \"b\"))",
+            "-L",
+            "C:\\dir with spaces\\deps",
+            "'quoted'",
+        ])
+    );
+}
+
+/// CRLF ends a line like LF, and an empty line is an empty argument, as in rustc.
+#[test]
+fn parse_rustc_crlf_and_empty_lines() {
+    let result = parse_response_file_content_for("-O\r\n\r\n--cfg\r\nfoo", CompilerFamily::Rustc);
+    assert_eq!(result, s(&["-O", "", "--cfg", "foo"]));
+}
+
+/// Every other family keeps the GCC/Clang grammar.
+#[test]
+fn parse_non_rustc_families_keep_gcc_grammar() {
+    let content = "--check-cfg 'cfg(feature, values(\"a\"))' \"-DX=1 2\"";
+    for family in [
+        CompilerFamily::Gcc,
+        CompilerFamily::Clang,
+        CompilerFamily::Msvc,
+        CompilerFamily::Rustfmt,
+    ] {
+        assert_eq!(
+            parse_response_file_content_for(content, family),
+            parse_response_file_content(content),
+            "{family:?}"
+        );
+    }
 }

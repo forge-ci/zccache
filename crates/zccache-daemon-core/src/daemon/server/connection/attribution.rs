@@ -48,8 +48,10 @@ pub(in crate::daemon::server) fn compile_miss_reason(
     // If the response file is already gone by journal time, keep the
     // honest `unknown` default instead of guessing uncacheable.
     let base_dir = std::path::Path::new(&ctx.cwd);
-    let reason = match crate::compiler::response_file::expand_response_files_in(&ctx.args, base_dir)
-    {
+    let family = crate::compiler::detect_family(&ctx.compiler);
+    let reason = match crate::compiler::response_file::expand_response_files_in_for(
+        &ctx.args, base_dir, family,
+    ) {
         Ok(expanded) => match crate::compiler::parse_invocation(&ctx.compiler, &expanded) {
             crate::compiler::ParsedInvocation::NonCacheable { .. } => {
                 Some(miss_reason::UNCACHEABLE_INPUT)
