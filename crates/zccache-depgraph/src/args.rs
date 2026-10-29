@@ -465,11 +465,19 @@ fn profile_input_files(path: &str, cwd: &Path) -> Vec<NormalizedPath> {
     }
 
     fn visit(dir: &Path, files: &mut Vec<NormalizedPath>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let Ok(mut cursor) = kernal_api::platform::fs::DirectoryCursor::open(dir) else {
             return;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
+        loop {
+            let entry = match cursor.next_entry() {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                // One unreadable or unclassifiable entry is skipped, matching
+                // the previous `flatten()` behavior; the native cursor has
+                // already advanced past it.
+                Err(_) => continue,
+            };
+            let path = entry.path().to_path_buf();
             if path.is_file() {
                 files.push(NormalizedPath::new(path));
             } else if path.is_dir() {
@@ -612,8 +620,9 @@ mod tests {
     #[test]
     fn force_include_with_gcc_implicit_pch_adds_the_gch() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("pch.h"), "#include \"sub.h\"\n").unwrap();
-        std::fs::write(dir.path().join("pch.h.gch"), "gch").unwrap();
+        kernal_api::platform::fs::write_file(&dir.path().join("pch.h"), b"#include \"sub.h\"\n")
+            .unwrap();
+        kernal_api::platform::fs::write_file(&dir.path().join("pch.h.gch"), b"gch").unwrap();
         let parsed = parse_gnu_args(&args(&["-include", "pch.h", "-c", "x.c"]), dir.path());
         assert_eq!(
             parsed.force_includes,
@@ -626,8 +635,9 @@ mod tests {
         let temp = tempdir().expect("temp profile directory");
         let source = temp.path().join("unit.c");
         let profile = temp.path().join("unit.profdata");
-        std::fs::write(&source, "int unit(void) { return 1; }").expect("write source");
-        std::fs::write(&profile, "profile one").expect("write profile");
+        kernal_api::platform::fs::write_file(&source, b"int unit(void) { return 1; }")
+            .expect("write source");
+        kernal_api::platform::fs::write_file(&profile, b"profile one").expect("write profile");
 
         let parsed = parse_gnu_args(
             &args(&[
@@ -658,7 +668,7 @@ mod tests {
             None,
         );
 
-        std::fs::write(&profile, "profile two").expect("rewrite profile");
+        kernal_api::platform::fs::write_file(&profile, b"profile two").expect("rewrite profile");
         let second_profile_hash = zccache_hash::hash_file(&profile).expect("hash second profile");
         let second = compute_artifact_key(
             &context_key,
@@ -679,11 +689,11 @@ mod tests {
         let temp = tempdir().expect("temp profile directory");
         let profile_dir = temp.path().join("profiles");
         let nested = profile_dir.join("nested");
-        std::fs::create_dir_all(&nested).expect("create nested profile directory");
+        kernal_api::platform::fs::create_dir_all(&nested).expect("create nested profile directory");
         let first = profile_dir.join("first.gcda");
         let second = nested.join("second.gcda");
-        std::fs::write(&first, "one").expect("write first profile");
-        std::fs::write(&second, "two").expect("write second profile");
+        kernal_api::platform::fs::write_file(&first, b"one").expect("write first profile");
+        kernal_api::platform::fs::write_file(&second, b"two").expect("write second profile");
 
         let parsed = parse_gnu_args(
             &args(&[

@@ -60,13 +60,11 @@ crates/zccache-daemon-core/src/daemon/server/run.rs
 crates/zccache-daemon-core/src/daemon/server/staging_root.rs
 crates/zccache-daemon-core/src/daemon/side_effect.rs
 crates/zccache-daemon-core/src/daemon/trampoline.rs
-crates/zccache-depgraph/src/args.rs
 crates/zccache-depgraph/src/header_trace.rs
 crates/zccache-depgraph/src/snapshot/persistence.rs
 crates/zccache-depgraph/src/snapshot/quarantine.rs
 crates/zccache-depgraph/src/system_includes.rs
 crates/zccache-download-protocol/src/daemon_mgmt.rs
-crates/zccache-download/src/lib.rs
 crates/zccache-fingerprint/src/file_lock.rs
 crates/zccache-fingerprint/src/hash_cache.rs
 crates/zccache-fingerprint/src/pch_inputs/mod.rs
