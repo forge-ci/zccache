@@ -4257,6 +4257,7 @@ dependencies = [
 name = "zccache-symbols"
 version = "1.15.9"
 dependencies = [
+ "kernal-api",
  "tempfile",
  "zccache-core",
 ]

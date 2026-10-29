@@ -64,7 +64,6 @@ crates/zccache-depgraph/src/header_trace.rs
 crates/zccache-depgraph/src/snapshot/persistence.rs
 crates/zccache-depgraph/src/snapshot/quarantine.rs
 crates/zccache-depgraph/src/system_includes.rs
-crates/zccache-download-protocol/src/daemon_mgmt.rs
 crates/zccache-fingerprint/src/file_lock.rs
 crates/zccache-fingerprint/src/hash_cache.rs
 crates/zccache-fingerprint/src/pch_inputs/mod.rs
@@ -74,7 +73,5 @@ crates/zccache-fscache/src/metadata.rs
 crates/zccache-fscache/src/persistence.rs
 crates/zccache-fscache/src/verify.rs
 crates/zccache-hash/src/native.rs
-crates/zccache-ipc/src/lib.rs
-crates/zccache-symbols/src/cache.rs
 crates/zccache-symbols/src/marker.rs
 crates/zccache-test-support/src/lib.rs

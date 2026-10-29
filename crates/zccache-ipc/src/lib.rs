@@ -448,6 +448,11 @@ fn lock_file_name_for(namespace: Option<&str>, endpoint: &str) -> String {
     }
 }
 
+/// Largest lock file body the PID read will allocate: a decimal `u32` plus
+/// whitespace is far smaller, and the facade refuses to read an unbounded
+/// context file.
+const LOCK_FILE_MAX_BYTES: usize = 4 * 1024;
+
 /// Write the daemon PID to the lock file.
 ///
 /// Creates parent directories if needed.
@@ -462,7 +467,7 @@ pub fn write_lock_file_for(endpoint: &str, pid: u32) -> Result<(), std::io::Erro
         // #1171: same directory family as the socket endpoint.
         zccache_core::config::create_dir_all_private(parent)?;
     }
-    std::fs::write(&path, pid.to_string())
+    kernal_api::platform::fs::write_file(path.as_path(), pid.to_string().as_bytes())
 }
 
 /// Read the daemon PID from the lock file, if it exists and is valid.
@@ -474,9 +479,16 @@ pub fn read_lock_file_pid() -> Option<u32> {
 /// Endpoint-scoped counterpart of [`read_lock_file_pid`] (#1904).
 #[must_use]
 pub fn read_lock_file_pid_for(endpoint: &str) -> Option<u32> {
-    std::fs::read_to_string(lock_file_path_for(endpoint))
+    let observation = kernal_api::platform::fs::read_context_regular_file_bounded(
+        lock_file_path_for(endpoint).as_path(),
+        LOCK_FILE_MAX_BYTES,
+    )
+    .ok()?;
+    std::str::from_utf8(observation.bytes.as_slice())
+        .ok()?
+        .trim()
+        .parse()
         .ok()
-        .and_then(|s| s.trim().parse().ok())
 }
 
 /// Remove the lock file.
@@ -486,7 +498,7 @@ pub fn remove_lock_file() {
 
 /// Endpoint-scoped counterpart of [`remove_lock_file`] (#1904).
 pub fn remove_lock_file_for(endpoint: &str) {
-    let _ = std::fs::remove_file(lock_file_path_for(endpoint));
+    let _ = kernal_api::platform::fs::remove_file(lock_file_path_for(endpoint).as_path());
 }
 
 /// Retire a stale native endpoint without exposing its host representation.
