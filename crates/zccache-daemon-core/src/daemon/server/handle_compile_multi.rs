@@ -891,7 +891,7 @@ pub(super) async fn handle_compile_multi(
             // the Defender write-scan budget. `unwrap_or(0)` matches the old
             // `unwrap_or_default()` semantics for the size-fetch on a missing
             // output path: caller treats that as a non-cacheable result.
-            let output_size = std::fs::metadata(&output_path)
+            let output_size = kernal_api::platform::fs::path_metadata(&output_path)
                 .map(|m| m.len())
                 .unwrap_or(0);
 
@@ -919,7 +919,7 @@ pub(super) async fn handle_compile_multi(
                     &cwd_path_task,
                 ) {
                     Ok(result) => {
-                        let _ = std::fs::remove_file(&depfile_path);
+                        let _ = kernal_api::platform::fs::remove_file(&depfile_path);
                         result
                     }
                     Err(e) => {

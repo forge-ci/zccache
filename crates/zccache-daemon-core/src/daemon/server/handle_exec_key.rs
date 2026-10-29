@@ -185,7 +185,12 @@ pub(super) fn load_depfile_sidecar(
     _cwd: &Path,
 ) -> Option<Vec<(String, ContentHash)>> {
     let path = depfile_sidecar_path(&state.artifact_dir, primary_hex);
-    let content = std::fs::read_to_string(&path).ok()?;
+    let observation = kernal_api::platform::fs::read_context_regular_file_bounded(
+        &path,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )
+    .ok()?;
+    let content = String::from_utf8(observation.bytes).ok()?;
     let mut pairs: Vec<(String, ContentHash)> = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -218,7 +223,7 @@ pub(super) fn persist_depfile_sidecar(
         content.push_str(p);
         content.push('\n');
     }
-    if let Err(e) = std::fs::write(&path, content) {
+    if let Err(e) = kernal_api::platform::fs::write_file(&path, content) {
         tracing::warn!(path = %path.display(), err = %e, "failed to write depfile sidecar");
     }
 }
@@ -236,8 +241,13 @@ pub(super) fn harvest_depfile(
     cwd: &Path,
     inputs: &[(String, ContentHash)],
 ) -> Result<Vec<(String, ContentHash)>, String> {
+    let observation = kernal_api::platform::fs::read_context_regular_file_bounded(
+        depfile_path,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )
+    .map_err(|e| format!("read depfile: {e}"))?;
     let content =
-        std::fs::read_to_string(depfile_path).map_err(|e| format!("read depfile: {e}"))?;
+        String::from_utf8(observation.bytes).map_err(|error| format!("read depfile: {error}"))?;
     // `parse_depfile` takes a `source` path it excludes from results; we
     // pass an empty path so nothing is excluded — exec doesn't have a
     // single "source", any included files get filtered against the
