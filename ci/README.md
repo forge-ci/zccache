@@ -29,12 +29,12 @@ The benchmark tests keep human-readable Markdown in `benchmark.log` and also emi
 
 ## Release Automation
 
-- **Canonical workflow** - `.github/workflows/release-auto.yml` is the only supported release entrypoint
+- **Canonical workflow** - `.github/workflows/auto-release.yml` is the only supported release entrypoint
 - **Workflow helper** - `ci/release_workflow.py` provides preflight checks, wheel assembly, and crates publish helpers for the release workflow only
 - **Fast fail** - preflight checks PyPI and crates.io before any build fan-out and skips registry jobs that are already complete
 - **Trigger** - push a tag matching the workspace version (`1.3.6` or `v1.3.6`)
 - **Manual recovery** - `Run workflow` can leave `tag` empty; the workflow derives the current workspace version from the selected branch. Existing GitHub Releases are updated. A first same-version push stays quiet when that version is already released, while an unreleased version warns that it published nothing. Any rerun skips before bump/tag/release checks and cannot resume a prior release: use `workflow_dispatch` with the existing `tag` and `dry-run` inputs to resume PyPI/crates.io from the GitHub Release checkpoint.
-- **PyPI** - use Trusted Publishing with GitHub environment `pypi` and workflow `.github/workflows/release-auto.yml`
+- **PyPI** - use Trusted Publishing with GitHub environment `pypi` and workflow `.github/workflows/auto-release.yml`
 - **crates.io** - add repository secret `CARGO_REGISTRY_TOKEN`
 - **GitHub Release** - created automatically with standalone archives, installer scripts, and `SHA256SUMS`
 - **Marketplace** - still manual in the GitHub UI; edit the generated GitHub release and check `Publish this action to the GitHub Marketplace`

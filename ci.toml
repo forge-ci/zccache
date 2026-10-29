@@ -220,7 +220,7 @@ cache  = "machine"
 
 # ── Allowlists ────────────────────────────────────────────────────────────────
 [allow]
-workflows = { "ci.yml" = ["push:main", "pull_request", "merge_group"], "ci-linux.yml" = ["push:main", "workflow_dispatch"], "ci-macos.yml" = ["push:main"], "ci-windows.yml" = ["push:main"], "ci-check.yml" = ["workflow_call"], "ci-check-cross.yml" = ["workflow_call"], "integration.yml" = ["push:main", "schedule", "workflow_dispatch"], "python-tests.yml" = ["push:main", "pull_request"], "clippy.yml" = ["push:main"], "coverage.yml" = ["push:main"], "wrapper-e2e.yml" = ["push:main"], "release-auto.yml" = ["push:main", "push:tags", "workflow_dispatch"], "cache-pre-prune.yml" = ["push:main"], "wait-cache-pre-prune.yml" = ["workflow_call"], "reflink-e2e.yml" = ["workflow_call"], "cache-budget.yml" = ["schedule", "workflow_dispatch"], "cache-cleanup.yml" = ["schedule", "workflow_dispatch"] }
+workflows = { "ci.yml" = ["push:main", "pull_request", "merge_group"], "ci-linux.yml" = ["push:main", "workflow_dispatch"], "ci-macos.yml" = ["push:main"], "ci-windows.yml" = ["push:main"], "ci-check.yml" = ["workflow_call"], "ci-check-cross.yml" = ["workflow_call"], "integration.yml" = ["push:main", "schedule", "workflow_dispatch"], "python-tests.yml" = ["push:main", "pull_request"], "clippy.yml" = ["push:main"], "coverage.yml" = ["push:main"], "wrapper-e2e.yml" = ["push:main"], "auto-release.yml" = ["push:main", "push:tags", "workflow_dispatch"], "cache-pre-prune.yml" = ["push:main"], "wait-cache-pre-prune.yml" = ["workflow_call"], "reflink-e2e.yml" = ["workflow_call"], "cache-budget.yml" = ["schedule", "workflow_dispatch"], "cache-cleanup.yml" = ["schedule", "workflow_dispatch"] }
 actions = ["actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/github-script", "zackees/setup-soldr", "astral-sh/setup-uv", "mozilla-actions/sccache-action"]
 tools = ["soldr", "uv", "python3", "git"]
 secrets = []
@@ -246,7 +246,7 @@ platform-code = ["crates/zccache/src/platform.rs", "crates/zccache-core/src/plat
 only-in = ""
 
 # ── Publish ───────────────────────────────────────────────────────────────────
-# zccache ships a binary plus a PyPI wrapper, but release-auto.yml publishes
+# zccache ships a binary plus a PyPI wrapper, but auto-release.yml publishes
 # from its own release job rather than from the ci-lint plan, so this contract
 # declares no PyPI publish target.
 [publish]

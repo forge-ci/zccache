@@ -73,7 +73,7 @@ jobs:
           }
 
           manual_recovery_warning() {
-            echo "::warning title=Release skipped::This automated rerun is diagnostic-only and was skipped; nothing was published. Recovery is manual: run workflow_dispatch for release-auto.yml with the existing tag and dry-run inputs."
+            echo "::warning title=Release skipped::This automated rerun is diagnostic-only and was skipped; nothing was published. Recovery is manual: run workflow_dispatch for auto-release.yml with the existing tag and dry-run inputs."
           }
 
           # Manual dispatch always proceeds — operator chose to run it.
@@ -111,7 +111,7 @@ jobs:
                 fi
               done
               if [ -z "$RELEASED" ]; then
-                echo "::warning title=Version $NEW_VERSION is bumped but unreleased::No GitHub release exists for $NEW_VERSION. A failed release run does not retry on its own: use workflow_dispatch for release-auto.yml with the existing tag and dry-run inputs. See issue #1472."
+                echo "::warning title=Version $NEW_VERSION is bumped but unreleased::No GitHub release exists for $NEW_VERSION. A failed release run does not retry on its own: use workflow_dispatch for auto-release.yml with the existing tag and dry-run inputs. See issue #1472."
               fi
               echo "should_release=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -684,7 +684,7 @@ jobs:
       # verify step's `--wheels-dir dist/wheels` lookup succeeds.
       # Without this, the verify step fails with "wheels directory does
       # not exist" even though the actual publish step already ran
-      # successfully — release-auto reports failure on a green release.
+      # successfully — auto-release reports failure on a green release.
       - uses: actions/download-artifact@v8
         with:
           name: pypi-wheels

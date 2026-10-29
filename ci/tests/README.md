@@ -17,7 +17,7 @@ for `--frozen` — `uv.lock` is gitignored, so it only works on a machine that
 happens to have one, and `pytest` is not declared in any dependency group.
 
 Some suites also exercise workflow YAML directly. `test_release_detect_bump.py`
-extracts the `detect-bump` step out of `.github/workflows/release-auto.yml` and
+extracts the `detect-bump` step out of `.github/workflows/auto-release.yml` and
 runs it under bash with stubbed `gh`/`git`/`python3`, so the branching logic is
 tested rather than the file's text. It needs a POSIX bash and skips on Windows;
 the step it covers runs on `ubuntu-latest`. `test_release_publish_gating.py` guards the
