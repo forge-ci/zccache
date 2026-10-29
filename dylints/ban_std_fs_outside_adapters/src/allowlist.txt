@@ -24,7 +24,6 @@ crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/log_io.rs
-crates/zccache-daemon-core/src/daemon/crash.rs
 crates/zccache-daemon-core/src/daemon/fingerprint/verify.rs
 crates/zccache-daemon-core/src/daemon/server/cached_artifact.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
@@ -32,13 +31,11 @@ crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/embedded.rs
 crates/zccache-daemon-core/src/daemon/server/handle_clear.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/miss_store.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile_multi_preflight.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile_multi.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay_aliases.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/compile_exec.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome_scan.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec_key.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec.rs
