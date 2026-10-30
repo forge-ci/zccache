@@ -97,7 +97,7 @@ pub(in crate::daemon::server) fn write_cached_output(
 ) -> std::io::Result<()> {
     if !cache_file.exists() {
         remove_materialized_output(out_path)?;
-        return std::fs::write(out_path, data);
+        return kernal_api::platform::fs::write_file(out_path, data);
     }
     materialize_cached_file(
         out_path,
@@ -228,7 +228,7 @@ fn materialize_verified_cached_file_tiers(
     let hardlink_allowed = hardlink_permitted(mode, hardlink_eligible);
     if crate::platform::fs::identity::same_file(out_path, cache_file).unwrap_or(false) {
         if !hardlink_allowed {
-            let bytes = std::fs::metadata(cache_file)?.len();
+            let bytes = kernal_api::platform::fs::path_metadata(cache_file)?.len();
             // The detached output is a new inode carrying the same mtime the
             // copy tier gives it, sibling floor included, so a mode switch
             // (LINK -> COPY) cannot leave it older than its siblings
@@ -240,7 +240,7 @@ fn materialize_verified_cached_file_tiers(
         crate::platform::fs::permissions::set_cache_blob_sealed(cache_file, readonly_enabled())?;
         let hit = resolve_hit_mtime(out_path, cache_file, pass)?;
         if hit.raised {
-            let bytes = std::fs::metadata(cache_file)?.len();
+            let bytes = kernal_api::platform::fs::path_metadata(cache_file)?.len();
             detach_with_floored_mtime(out_path, cache_file, hit.mtime, mode)?;
             return Ok(observed(0, 0, 1, bytes));
         }
@@ -317,7 +317,7 @@ fn materialize_verified_cached_file_tiers(
             );
         }
         if let Ok(registration) = registration {
-            match std::fs::hard_link(cache_file, out_path) {
+            match kernal_api::platform::fs::hard_link(cache_file, out_path) {
                 Ok(()) => {
                     if let Err(error) = crate::platform::fs::permissions::set_cache_blob_sealed(
                         cache_file,
@@ -489,7 +489,7 @@ fn write_cached_payload_with_floor(
             let _materialize_guard = crate::daemon::spawn_exclusion::materialize_exclusive();
             remove_materialized_output(out_path)
                 .map_err(|error| destination_write_failure(out_path, error))?;
-            std::fs::write(out_path, data.as_slice())
+            kernal_api::platform::fs::write_file(out_path, data.as_slice())
                 .map_err(|error| destination_write_failure(out_path, error))?;
             if let Some(output_mode) = output_mode {
                 crate::platform::fs::permissions::apply_mode(out_path, output_mode)
@@ -581,7 +581,7 @@ where
                      payload: &CachedPayload|
      -> MaterializationResult<StagedMaterializationStats> {
         if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
+            kernal_api::platform::fs::create_dir_all(parent)
                 .map_err(|error| destination_write_failure(out, error))?;
         }
         write_cached_payload_with_floor(
@@ -834,7 +834,8 @@ fn deliver_one_output(
     provisional_staged: bool,
 ) -> MaterializationResult<StagedMaterializationStats> {
     if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| destination_write_failure(out, error))?;
+        kernal_api::platform::fs::create_dir_all(parent)
+            .map_err(|error| destination_write_failure(out, error))?;
     }
     if provisional_staged {
         if let CachedPayload::File(path) = payload {
@@ -964,7 +965,7 @@ fn classify_file_materialization_error(
     cache_path: &Path,
     error: std::io::Error,
 ) -> MaterializationFailure {
-    match std::fs::metadata(cache_path) {
+    match kernal_api::platform::fs::path_metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)
         }
@@ -973,7 +974,7 @@ fn classify_file_materialization_error(
 }
 
 fn classify_cache_read_error(cache_path: &Path, error: std::io::Error) -> MaterializationFailure {
-    match std::fs::metadata(cache_path) {
+    match kernal_api::platform::fs::path_metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)
         }

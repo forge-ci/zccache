@@ -109,13 +109,13 @@ pub(crate) fn object_pointer_path(artifact_dir: &Path, key: &str) -> NormalizedP
 pub(crate) fn ensure_object_layout(artifact_dir: &Path) -> io::Result<()> {
     let objects = object_root(artifact_dir);
     let deleting = deleting_root(artifact_dir);
-    fs::create_dir_all(&objects)?;
-    fs::create_dir_all(&deleting)?;
-    fs::create_dir_all(pointer_root(artifact_dir))?;
+    kernal_api::platform::fs::create_dir_all(&objects)?;
+    kernal_api::platform::fs::create_dir_all(&deleting)?;
+    kernal_api::platform::fs::create_dir_all(pointer_root(artifact_dir))?;
     for bucket in 0..BUCKET_COUNT {
         let name = format!("{bucket:02x}");
-        fs::create_dir_all(objects.join(&name))?;
-        fs::create_dir_all(deleting.join(&name))?;
+        kernal_api::platform::fs::create_dir_all(objects.join(&name))?;
+        kernal_api::platform::fs::create_dir_all(deleting.join(&name))?;
     }
     Ok(())
 }
@@ -140,9 +140,9 @@ fn write_counter(path: &Path, value: u64) -> io::Result<()> {
         file.write_all(&value.to_le_bytes())?;
         file.sync_all()?;
     }
-    let result = fs::rename(&temporary, path);
+    let result = kernal_api::platform::fs::rename(&temporary, path);
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     result
 }
@@ -259,9 +259,9 @@ pub(crate) fn write_object_pointer(
         file.write_all(b"\n")?;
         file.sync_all()?;
     }
-    let result = fs::rename(&temporary, &target);
+    let result = kernal_api::platform::fs::rename(&temporary, &target);
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     if result.is_ok() {
         let _ = sync_file(&target);
@@ -279,7 +279,7 @@ pub(crate) fn remove_object_pointer_if_matches(
     if read_object_pointer(artifact_dir, key)? != Some(expected) {
         return Ok(false);
     }
-    match fs::remove_file(path) {
+    match kernal_api::platform::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
@@ -323,7 +323,7 @@ pub(crate) fn queue_orphaned_objects(artifact_dir: &Path) -> io::Result<usize> {
                 continue;
             }
             let target = deleting_object_path(artifact_dir, id);
-            match fs::rename(entry.path(), target) {
+            match kernal_api::platform::fs::rename(entry.path(), target) {
                 Ok(()) => queued += 1,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -366,9 +366,10 @@ mod tests {
     fn allocation_recovers_from_stale_counter_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         ensure_object_layout(dir.path()).unwrap();
-        fs::write(dir.path().join(COUNTER_FILE), 7_u64.to_le_bytes()).unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join(COUNTER_FILE), 7_u64.to_le_bytes())
+            .unwrap();
         let stale = ArtifactObjectId(8);
-        fs::create_dir_all(object_path(dir.path(), stale)).unwrap();
+        kernal_api::platform::fs::create_dir_all(object_path(dir.path(), stale)).unwrap();
         let allocated = allocate_object_id(dir.path()).unwrap();
         assert_eq!(allocated, ArtifactObjectId(9));
         assert_eq!(
@@ -397,9 +398,9 @@ mod tests {
     fn orphan_objects_are_moved_to_recoverable_queue() {
         let dir = tempfile::tempdir().unwrap();
         let orphan = allocate_object_id(dir.path()).unwrap();
-        fs::write(object_path(dir.path(), orphan), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(object_path(dir.path(), orphan), b"payload").unwrap();
         let live = allocate_object_id(dir.path()).unwrap();
-        fs::write(object_path(dir.path(), live), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(object_path(dir.path(), live), b"payload").unwrap();
         write_object_pointer(dir.path(), "key", live).unwrap();
 
         assert_eq!(queue_orphaned_objects(dir.path()).unwrap(), 1);

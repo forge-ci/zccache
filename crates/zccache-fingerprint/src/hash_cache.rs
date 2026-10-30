@@ -223,9 +223,9 @@ pub(crate) mod tests {
     fn create_file(dir: &std::path::Path, rel: &str, content: &str) {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
+            kernal_api::platform::fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&path, content).unwrap();
+        kernal_api::platform::fs::write_file(&path, content).unwrap();
     }
 
     /// Move `path`'s mtime two seconds forward.
@@ -320,7 +320,7 @@ pub(crate) mod tests {
         cache.check(&scan_dir(src.path())).unwrap();
         cache.mark_success().unwrap();
 
-        fs::remove_file(src.path().join("b.rs")).unwrap();
+        kernal_api::platform::fs::remove_file(src.path().join("b.rs")).unwrap();
         let decision = cache.check(&scan_dir(src.path())).unwrap();
         assert_eq!(decision, CacheDecision::Run(RunReason::ContentChanged));
     }
@@ -376,7 +376,7 @@ pub(crate) mod tests {
         create_file(src.path(), "a.rs", "a");
 
         let cache_path = cache_dir.path().join("fp.json");
-        fs::write(&cache_path, "garbage").unwrap();
+        kernal_api::platform::fs::write_file(&cache_path, "garbage").unwrap();
 
         let cache = HashCache::new(cache_path);
         let decision = cache.check(&scan_dir(src.path())).unwrap();
@@ -427,7 +427,7 @@ pub(crate) mod tests {
         cache.mark_success().unwrap();
 
         // Remove the file.
-        fs::remove_file(src.path().join("a.rs")).unwrap();
+        kernal_api::platform::fs::remove_file(src.path().join("a.rs")).unwrap();
         let decision = cache.check(&scan_dir(src.path())).unwrap();
         assert_eq!(decision, CacheDecision::Run(RunReason::ContentChanged));
     }
@@ -444,7 +444,7 @@ pub(crate) mod tests {
         cache.mark_success().unwrap();
 
         // Rename file (delete + create with different name, same content).
-        fs::remove_file(src.path().join("a.rs")).unwrap();
+        kernal_api::platform::fs::remove_file(src.path().join("a.rs")).unwrap();
         create_file(src.path(), "b.rs", "same");
 
         let decision = cache.check(&scan_dir(src.path())).unwrap();
@@ -537,7 +537,7 @@ pub(crate) mod tests {
     fn binary_content_handled() {
         let (src, cache_dir) = setup();
         let path = src.path().join("data.bin");
-        fs::write(&path, [0u8, 1, 2, 255, 0, 128, 0, 0]).unwrap();
+        kernal_api::platform::fs::write_file(&path, [0u8, 1, 2, 255, 0, 128, 0, 0]).unwrap();
 
         let cache = HashCache::new(cache_dir.path().join("fp.json"));
         cache.check(&scan_dir(src.path())).unwrap();

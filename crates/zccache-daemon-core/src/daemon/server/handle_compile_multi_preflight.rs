@@ -27,7 +27,7 @@ impl InputStampSet {
 }
 
 fn input_stamp(path: &Path) -> Option<InputStamp> {
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
     Some(InputStamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),
@@ -540,14 +540,14 @@ mod tests {
     fn input_stamp_detects_aba_even_when_mtime_is_restored() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input.c");
-        std::fs::write(&input, b"AAAA").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"AAAA").unwrap();
         let before = input_stamp(&input).unwrap();
         let original_mtime = kernal_api::platform::fs::FileTime::from_last_modification_time(
-            &std::fs::metadata(&input).unwrap(),
+            &kernal_api::platform::fs::path_metadata(&input).unwrap(),
         );
 
-        std::fs::write(&input, b"BBBB").unwrap();
-        std::fs::write(&input, b"AAAA").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"BBBB").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"AAAA").unwrap();
         kernal_api::platform::fs::set_file_mtime(&input, original_mtime).unwrap();
 
         let after = input_stamp(&input).unwrap();
@@ -575,9 +575,9 @@ mod tests {
         let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
         let state = server.test_state_arc();
         let input: NormalizedPath = temp.path().join("input.c").into();
-        std::fs::write(&input, b"AAAA").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"AAAA").unwrap();
         let original_mtime = kernal_api::platform::fs::FileTime::from_last_modification_time(
-            &std::fs::metadata(&input).unwrap(),
+            &kernal_api::platform::fs::path_metadata(&input).unwrap(),
         );
         let clock = state.cache_system.current_clock();
         let before_hash = hash_file(&state.cache_system, &input, clock).unwrap();
@@ -588,8 +588,8 @@ mod tests {
             clock,
         };
 
-        std::fs::write(&input, b"BBBB").unwrap();
-        std::fs::write(&input, b"AAAA").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"BBBB").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"AAAA").unwrap();
         kernal_api::platform::fs::set_file_mtime(&input, original_mtime).unwrap();
         let current_hash = hash_file(
             &state.cache_system,

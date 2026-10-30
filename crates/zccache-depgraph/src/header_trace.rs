@@ -337,8 +337,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let header = temp.path().join("header with spaces.h");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
         let stderr = format!(
             ". {}\nwarning: useful diagnostic\n.. {}\n",
             header.display(),
@@ -360,8 +360,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let header = temp.path().join("header.h");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
         let stderr = format!(". {}\r\nnote: retained\r\n", header.display());
         let expected = parse_header_trace(stderr.as_bytes(), &source, temp.path());
         let mut parser = HeaderTraceParser::new(&source, temp.path());
@@ -379,7 +379,7 @@ mod tests {
     fn malformed_trace_shaped_lines_are_not_removed() {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
         let stderr = b". not a path\n...\n.. warning: still useful\n";
 
         let (scan, filtered) = parse_header_trace(stderr, &source, temp.path());
@@ -393,7 +393,7 @@ mod tests {
     fn source_record_is_filtered_but_not_tracked() {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
         let stderr = format!(". {}\n", source.display());
 
         let (scan, filtered) = parse_header_trace(stderr.as_bytes(), &source, temp.path());
@@ -407,8 +407,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let header = temp.path().join("unguarded.h");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
         let stderr = format!(
             "Multiple include guards may be useful for:\n{}\nwarning: retained\n",
             header.display()
@@ -427,7 +427,7 @@ mod tests {
     fn disappeared_trace_path_fails_closed_and_remains_visible() {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
         let missing = temp.path().join("removed-system-header.h");
         let stderr = format!(". {}\n", missing.display());
 
@@ -452,11 +452,13 @@ mod tests {
         };
         let first = temp.path().join(first_name);
         let second = temp.path().join(second_name);
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
         // Some Unix filesystems reject byte sequences that `OsString` can
         // represent (APFS reports EILSEQ, for example). Exercise the
         // fail-closed path wherever the fixture itself is supported.
-        if std::fs::write(&first, "").is_err() || std::fs::write(&second, "").is_err() {
+        if kernal_api::platform::fs::write_file(&first, "").is_err()
+            || kernal_api::platform::fs::write_file(&second, "").is_err()
+        {
             return;
         }
         let stderr = b". header-\xff.h\n. header-\xfe.h\n".to_vec();
@@ -474,9 +476,9 @@ mod tests {
         let source = temp.path().join("main.c");
         let valid = temp.path().join("valid.h.gch");
         let invalid = temp.path().join("invalid.h.gch");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&valid, "").unwrap();
-        std::fs::write(&invalid, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&valid, "").unwrap();
+        kernal_api::platform::fs::write_file(&invalid, "").unwrap();
         let stderr = format!("..! {}\n...x {}\n", valid.display(), invalid.display());
 
         let (scan, filtered) = parse_header_trace(stderr.as_bytes(), &source, temp.path());
@@ -507,9 +509,9 @@ mod tests {
         let source = temp.path().join("main.c");
         let header = temp.path().join("header with spaces.h");
         let trace = temp.path().join("main.headers");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
-        std::fs::write(
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(
             &trace,
             format!(
                 "digraph \"dependencies\" {{\n  header_0 [ shape=\"box\", label=\"{}\"];\n  header_1 [ shape=\"box\", label=\"{}\"];\n  malformed node\n}}\n",
@@ -533,8 +535,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let header = temp.path().join("system.h");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
         let rootless = header
             .to_string_lossy()
             .trim_start_matches(['/', '\\'])
@@ -547,7 +549,7 @@ mod tests {
             return;
         }
         let trace = temp.path().join("rootless.headers");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &trace,
             format!(
                 "digraph \"dependencies\" {{\n  header_0 [ shape=\"box\", label=\"{}\"];\n  header_1 [ shape=\"box\", label=\"{}\"];\n  header_0 -> header_1;\n}}\n",
@@ -571,8 +573,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let header = temp.path().join("system.h");
-        std::fs::write(&source, "").unwrap();
-        std::fs::write(&header, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&header, "").unwrap();
         let rootless = header
             .to_string_lossy()
             .trim_start_matches(['/', '\\'])
@@ -585,10 +587,10 @@ mod tests {
             return;
         }
         let shadow = temp.path().join(&rootless);
-        std::fs::create_dir_all(shadow.parent().unwrap()).unwrap();
-        std::fs::write(&shadow, "shadow").unwrap();
+        kernal_api::platform::fs::create_dir_all(shadow.parent().unwrap()).unwrap();
+        kernal_api::platform::fs::write_file(&shadow, "shadow").unwrap();
         let trace = temp.path().join("ambiguous.headers");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &trace,
             format!(
                 "digraph \"dependencies\" {{\n  header_0 [ shape=\"box\", label=\"{}\"];\n  header_1 [ shape=\"box\", label=\"{}\"];\n  header_0 -> header_1;\n}}\n",
@@ -608,13 +610,13 @@ mod tests {
     fn dependency_graph_requires_nodes_source_and_one_footer() {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
         for graph in [
             "digraph \"dependencies\" {\n  header_0 -> header_1;\n}\n",
             "digraph \"dependencies\" {\n  header_0 -> broken;\n}\n",
         ] {
             let trace = temp.path().join("invalid.headers");
-            std::fs::write(&trace, graph).unwrap();
+            kernal_api::platform::fs::write_file(&trace, graph).unwrap();
 
             let scan = parse_dependency_graph_file(&trace, &source, temp.path());
 
@@ -627,7 +629,7 @@ mod tests {
             "digraph \"dependencies\" {{\n  header_0 [ shape=\"box\", label=\"{}\"];\n}}\n}}\n",
             dot_escape_path(&source)
         );
-        std::fs::write(&trace, &graph).unwrap();
+        kernal_api::platform::fs::write_file(&trace, &graph).unwrap();
 
         let scan = parse_dependency_graph_file(&trace, &source, temp.path());
 
@@ -640,8 +642,8 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
         let trace = temp.path().join("empty.headers");
-        std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
-        std::fs::write(&trace, "digraph \"dependencies\" {\n}\n").unwrap();
+        kernal_api::platform::fs::write_file(&source, "int main(void) { return 0; }\n").unwrap();
+        kernal_api::platform::fs::write_file(&trace, "digraph \"dependencies\" {\n}\n").unwrap();
 
         let scan = parse_dependency_graph_file(&trace, &source, temp.path());
 
@@ -653,7 +655,7 @@ mod tests {
     fn missing_private_dependency_graph_fails_closed() {
         let temp = tempfile::TempDir::new().unwrap();
         let source = temp.path().join("main.c");
-        std::fs::write(&source, "").unwrap();
+        kernal_api::platform::fs::write_file(&source, "").unwrap();
 
         let scan =
             parse_dependency_graph_file(&temp.path().join("missing.headers"), &source, temp.path());

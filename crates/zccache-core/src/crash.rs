@@ -212,8 +212,8 @@ pub fn drain_native_crash_spool() {
             modules = report.modules.len(),
             ts = report.crash_unix_ms / 1_000,
         );
-        if std::fs::write(&path, body).is_ok() {
-            let _ = std::fs::remove_file(&record);
+        if kernal_api::platform::fs::write_file(&path, body).is_ok() {
+            let _ = kernal_api::platform::fs::remove_file(&record);
         }
     }
 }
@@ -320,7 +320,7 @@ fn write_last_run_marker(bin_stem: &str) -> std::io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    std::fs::write(last_run_marker_path(bin_stem), ts.to_string())
+    kernal_api::platform::fs::write_file(last_run_marker_path(bin_stem), ts.to_string())
 }
 
 fn last_run_marker_path(bin_stem: &str) -> PathBuf {
@@ -442,7 +442,7 @@ fn write_panic_dump(panic_info: &str, backtrace: &str) -> Option<NormalizedPath>
         pid = std::process::id(),
     );
 
-    std::fs::write(&path, body).ok()?;
+    kernal_api::platform::fs::write_file(&path, body).ok()?;
     prune_crash_dumps(&crash_dir, CRASH_DUMP_KEEP);
     Some(NormalizedPath::from(path))
 }
@@ -486,7 +486,7 @@ fn bin_stem() -> &'static str {
 pub fn note_previous_crashes() {
     let crash_dir = super::config::crash_dump_dir();
     let marker = last_run_marker_path(bin_stem());
-    let marker_mtime = std::fs::metadata(&marker)
+    let marker_mtime = kernal_api::platform::fs::path_metadata(&marker)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -569,7 +569,7 @@ pub fn check_previous_crashes() {
             path.display(),
             summary
         );
-        let _ = std::fs::write(&reported, "");
+        let _ = kernal_api::platform::fs::write_file(&reported, "");
     }
 }
 
@@ -649,8 +649,8 @@ fn prune_crash_dumps(crash_dir: &Path, keep: usize) {
     });
 
     for path in dumps.iter().take(dumps.len() - keep) {
-        if std::fs::remove_file(path).is_ok() {
-            let _ = std::fs::remove_file(path.with_extension("reported"));
+        if kernal_api::platform::fs::remove_file(path).is_ok() {
+            let _ = kernal_api::platform::fs::remove_file(path.with_extension("reported"));
         }
     }
 }
@@ -669,11 +669,11 @@ pub fn clear_crash_dumps() -> usize {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
         match ext {
-            Some("txt") | Some("dmp") if std::fs::remove_file(&path).is_ok() => {
+            Some("txt") | Some("dmp") if kernal_api::platform::fs::remove_file(&path).is_ok() => {
                 count += 1;
             }
             Some("reported") => {
-                let _ = std::fs::remove_file(&path);
+                let _ = kernal_api::platform::fs::remove_file(&path);
             }
             _ => {}
         }
@@ -687,9 +687,13 @@ mod tests {
 
     /// Write `count` dumps whose embedded timestamps ascend, oldest first.
     fn seed_dumps(crash_dir: &Path, count: u64) {
-        std::fs::create_dir_all(crash_dir).unwrap();
+        kernal_api::platform::fs::create_dir_all(crash_dir).unwrap();
         for ts in 1..=count {
-            std::fs::write(crash_dir.join(format!("crash-{ts}-zccache-panic.txt")), "x").unwrap();
+            kernal_api::platform::fs::write_file(
+                crash_dir.join(format!("crash-{ts}-zccache-panic.txt")),
+                "x",
+            )
+            .unwrap();
         }
     }
 
@@ -733,7 +737,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         seed_dumps(tmp.path(), 3);
         for ts in 1..=3 {
-            std::fs::write(
+            kernal_api::platform::fs::write_file(
                 tmp.path()
                     .join(format!("crash-{ts}-zccache-panic.reported")),
                 "",
@@ -762,7 +766,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // Written newest-first, so creation order is the reverse of age.
         for ts in [30u64, 20, 10] {
-            std::fs::write(
+            kernal_api::platform::fs::write_file(
                 tmp.path().join(format!("crash-{ts}-zccache-panic.txt")),
                 "x",
             )
@@ -802,7 +806,7 @@ mod tests {
     fn unique_dump_path_disambiguates_existing_file() {
         let tmp = tempfile::tempdir().unwrap();
         let first = unique_dump_path(tmp.path(), "panic", "txt");
-        std::fs::write(&first, "").unwrap();
+        kernal_api::platform::fs::write_file(&first, "").unwrap();
         let second = unique_dump_path(tmp.path(), "panic", "txt");
         assert_ne!(first, second);
         assert!(second
@@ -816,7 +820,7 @@ mod tests {
     fn read_crash_summary_extracts_key_lines() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("crash-1-zccache-panic.txt");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &path,
             "zccache crash\nVersion: 1.2.3\nPanic:\nboom\nBacktrace:\n...\n",
         )
@@ -838,10 +842,13 @@ mod tests {
     fn list_dumps_filters_and_sorts() {
         let tmp = tempfile::tempdir().unwrap();
         let crash_dir = tmp.path();
-        std::fs::write(crash_dir.join("crash-1-zccache-panic.txt"), "a").unwrap();
-        std::fs::write(crash_dir.join("crash-2-zccache-panic.txt"), "b").unwrap();
-        std::fs::write(crash_dir.join("crash-1-zccache-panic.reported"), "").unwrap();
-        std::fs::write(crash_dir.join("noise.log"), "").unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("crash-1-zccache-panic.txt"), "a")
+            .unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("crash-2-zccache-panic.txt"), "b")
+            .unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("crash-1-zccache-panic.reported"), "")
+            .unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("noise.log"), "").unwrap();
 
         let mut dumps: Vec<PathBuf> = std::fs::read_dir(crash_dir)
             .unwrap()
@@ -859,9 +866,15 @@ mod tests {
     fn clear_dumps_drops_reported_markers_too() {
         let tmp = tempfile::tempdir().unwrap();
         let crash_dir = tmp.path();
-        std::fs::write(crash_dir.join("crash-1-zccache-panic.txt"), "a").unwrap();
-        std::fs::write(crash_dir.join("crash-2-zccache-daemon-SIGSEGV.txt"), "b").unwrap();
-        std::fs::write(crash_dir.join("crash-1-zccache-panic.reported"), "").unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("crash-1-zccache-panic.txt"), "a")
+            .unwrap();
+        kernal_api::platform::fs::write_file(
+            crash_dir.join("crash-2-zccache-daemon-SIGSEGV.txt"),
+            "b",
+        )
+        .unwrap();
+        kernal_api::platform::fs::write_file(crash_dir.join("crash-1-zccache-panic.reported"), "")
+            .unwrap();
 
         // Mirror clear_crash_dumps() against the explicit dir to avoid
         // racing on the global env var; the production code path is
@@ -872,11 +885,13 @@ mod tests {
             let path = entry.path();
             let ext = path.extension().and_then(|e| e.to_str());
             match ext {
-                Some("txt") | Some("dmp") if std::fs::remove_file(&path).is_ok() => {
+                Some("txt") | Some("dmp")
+                    if kernal_api::platform::fs::remove_file(&path).is_ok() =>
+                {
                     count += 1;
                 }
                 Some("reported") => {
-                    let _ = std::fs::remove_file(&path);
+                    let _ = kernal_api::platform::fs::remove_file(&path);
                 }
                 _ => {}
             }

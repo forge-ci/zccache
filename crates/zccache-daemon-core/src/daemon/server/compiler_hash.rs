@@ -217,7 +217,7 @@ impl CompilerHashCache {
     where
         F: FnOnce(&Path) -> Option<ContentHash>,
     {
-        let metadata = std::fs::metadata(path).ok()?;
+        let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
         let key = NormalizedPath::new(path);
@@ -235,7 +235,7 @@ impl CompilerHashCache {
                 crate::daemon::compile_journal::miss_reason::VERSION_SKEW,
             );
         }
-        let post_metadata = std::fs::metadata(path).ok()?;
+        let post_metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let post_mtime = post_metadata.modified().ok()?;
         let post_size = post_metadata.len();
         if post_mtime != mtime || post_size != size {
@@ -264,7 +264,7 @@ impl CompilerHashCache {
         F: FnOnce(std::path::PathBuf) -> Fut,
         Fut: std::future::Future<Output = Option<ContentHash>>,
     {
-        let metadata = std::fs::metadata(path).ok()?;
+        let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
         let key = NormalizedPath::new(path);
@@ -293,7 +293,7 @@ impl CompilerHashCache {
                 crate::daemon::compile_journal::miss_reason::VERSION_SKEW,
             );
         }
-        let post_metadata = std::fs::metadata(path).ok()?;
+        let post_metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let post_mtime = post_metadata.modified().ok()?;
         let post_size = post_metadata.len();
         if post_mtime != mtime || post_size != size {
@@ -324,7 +324,7 @@ impl CompilerHashCache {
     where
         F: FnOnce(&Path) -> Option<RustcIdentity>,
     {
-        let metadata = std::fs::metadata(path).ok()?;
+        let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
         let key = NormalizedPath::new(path);
@@ -348,7 +348,7 @@ impl CompilerHashCache {
                 crate::daemon::compile_journal::miss_reason::VERSION_SKEW,
             );
         }
-        let post_metadata = std::fs::metadata(path).ok()?;
+        let post_metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let post_mtime = post_metadata.modified().ok()?;
         let post_size = post_metadata.len();
         if post_mtime != mtime || post_size != size {
@@ -384,7 +384,7 @@ impl CompilerHashCache {
         &self,
         path: &Path,
     ) -> Option<ContentHash> {
-        let metadata = std::fs::metadata(path).ok()?;
+        let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
         let key = NormalizedPath::new(path);
@@ -408,7 +408,7 @@ impl CompilerHashCache {
                 crate::daemon::compile_journal::miss_reason::VERSION_SKEW,
             );
         }
-        let post_metadata = std::fs::metadata(path).ok()?;
+        let post_metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
         let post_mtime = post_metadata.modified().ok()?;
         let post_size = post_metadata.len();
         if post_mtime != mtime || post_size != size {
@@ -468,7 +468,7 @@ impl CompilerHashCache {
             .map_err(|e| std::io::Error::other(format!("bincode serialize: {e}")))?;
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         let name = path
             .file_name()
@@ -478,7 +478,7 @@ impl CompilerHashCache {
 
         let result = write_atomic_durable(&tmp, path, &bytes);
         if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = kernal_api::platform::fs::remove_file(&tmp);
         }
         if result.is_ok() {
             tracing::info!(
@@ -550,7 +550,7 @@ fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Res
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(tmp, target)?;
+    kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
         if let Ok(dir) = std::fs::File::open(parent) {
             let _ = dir.sync_all();
@@ -893,7 +893,7 @@ mod dirty_flag_tests {
     fn caching_a_hash_marks_dirty_until_taken() {
         let tmp = tempfile::tempdir().unwrap();
         let compiler = tmp.path().join("cc");
-        std::fs::write(&compiler, b"fake compiler").unwrap();
+        kernal_api::platform::fs::write_file(&compiler, b"fake compiler").unwrap();
         let cache = CompilerHashCache::new();
 
         cache.get_or_hash_with(&compiler, |_| Some(ContentHash::from_bytes([1; 32])));
@@ -911,7 +911,7 @@ mod dirty_flag_tests {
         let loaded = CompilerHashCache::new();
         let tmp = tempfile::tempdir().unwrap();
         let compiler = tmp.path().join("cc");
-        std::fs::write(&compiler, b"fake compiler").unwrap();
+        kernal_api::platform::fs::write_file(&compiler, b"fake compiler").unwrap();
         loaded.get_or_hash_with(&compiler, |_| Some(ContentHash::from_bytes([2; 32])));
 
         let live = CompilerHashCache::new();

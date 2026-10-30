@@ -572,7 +572,7 @@ fn try_write_to_path(
     extra: &serde_json::Value,
 ) -> std::io::Result<()> {
     if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
 
     // Soft-cap rotation. We have no long-lived file handle to juggle
@@ -635,7 +635,7 @@ pub fn log_file_path_in(log_dir: &NormalizedPath) -> NormalizedPath {
 /// (replacing any existing archive). No-op if the file is missing or
 /// under the threshold.
 fn rotate_if_oversized(log_path: &std::path::Path) -> std::io::Result<()> {
-    let size = match std::fs::metadata(log_path) {
+    let size = match kernal_api::platform::fs::path_metadata(log_path) {
         Ok(m) => m.len(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
@@ -644,7 +644,7 @@ fn rotate_if_oversized(log_path: &std::path::Path) -> std::io::Result<()> {
         return Ok(());
     }
     let archive = archive_path(log_path);
-    std::fs::rename(log_path, &archive)
+    kernal_api::platform::fs::rename(log_path, &archive)
 }
 
 fn archive_path(log_path: &std::path::Path) -> PathBuf {
@@ -870,11 +870,16 @@ mod tests {
 
         let log_path = log_file_path().as_path().to_path_buf();
         let archive = log_file_path().as_path().with_extension("log.1");
-        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        kernal_api::platform::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
 
         let padding = vec![b'x'; (MAX_LOG_SIZE + 1024) as usize];
-        std::fs::write(&log_path, &padding).expect("seed oversized log");
-        assert!(std::fs::metadata(&log_path).unwrap().len() > MAX_LOG_SIZE);
+        kernal_api::platform::fs::write_file(&log_path, &padding).expect("seed oversized log");
+        assert!(
+            kernal_api::platform::fs::path_metadata(&log_path)
+                .unwrap()
+                .len()
+                > MAX_LOG_SIZE
+        );
 
         write_event(EVENT_SPAWN, serde_json::json!({"first": true}));
 
@@ -883,9 +888,14 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(live.trim()).expect("jsonl parses");
         assert_eq!(v["first"], true);
         assert!(archive.exists(), "archive should exist");
-        assert!(std::fs::metadata(&archive).unwrap().len() > MAX_LOG_SIZE);
+        assert!(
+            kernal_api::platform::fs::path_metadata(&archive)
+                .unwrap()
+                .len()
+                > MAX_LOG_SIZE
+        );
 
-        std::fs::write(&log_path, &padding).expect("re-seed oversized log");
+        kernal_api::platform::fs::write_file(&log_path, &padding).expect("re-seed oversized log");
         write_event(EVENT_DIED_IDLE, serde_json::json!({"second": true}));
 
         assert!(archive.exists(), "archive still present");

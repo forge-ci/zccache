@@ -164,7 +164,7 @@ impl AuditSink {
             .as_deref()
             .ok_or(AuditSinkError::MissingOutputRoot)?;
         let output_root = PathBuf::from(output_root);
-        std::fs::create_dir_all(&output_root)?;
+        kernal_api::platform::fs::create_dir_all(&output_root)?;
         let path = output_root.join(config.event_log.as_deref().unwrap_or("audit.jsonl"));
 
         let file = std::fs::OpenOptions::new()
@@ -350,7 +350,7 @@ fn rotate_audit_log(path: &Path) -> Option<std::fs::File> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let rotated = path.with_file_name(format!("{file_name}.{nanos:020}"));
-    std::fs::rename(path, &rotated).ok()?;
+    kernal_api::platform::fs::rename(path, &rotated).ok()?;
 
     let fresh = std::fs::OpenOptions::new()
         .create(true)
@@ -391,7 +391,7 @@ fn gc_audit_logs(path: &Path, file_name: &str) {
     archives.sort();
     let excess = archives.len() - AUDIT_MAX_FILES;
     for stale in archives.into_iter().take(excess) {
-        let _ = std::fs::remove_file(stale);
+        let _ = kernal_api::platform::fs::remove_file(stale);
     }
 }
 
@@ -421,7 +421,7 @@ mod tests {
     /// Seed `count` archives whose embedded timestamps ascend, oldest first.
     fn seed_archives(dir: &Path, live: &str, count: u64) {
         for n in 1..=count {
-            std::fs::write(dir.join(format!("{live}.{n:020}")), "x").unwrap();
+            kernal_api::platform::fs::write_file(dir.join(format!("{live}.{n:020}")), "x").unwrap();
         }
     }
 
@@ -441,7 +441,7 @@ mod tests {
     fn rotating_moves_the_live_log_aside_and_reopens_it() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("audit.jsonl");
-        std::fs::write(&path, "original\n").unwrap();
+        kernal_api::platform::fs::write_file(&path, "original\n").unwrap();
 
         let fresh = rotate_audit_log(&path).expect("rotation must succeed");
         drop(fresh);
@@ -471,7 +471,7 @@ mod tests {
     fn gc_keeps_the_newest_archives_and_drops_the_oldest() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("audit.jsonl");
-        std::fs::write(&path, "live").unwrap();
+        kernal_api::platform::fs::write_file(&path, "live").unwrap();
         seed_archives(temp.path(), "audit.jsonl", AUDIT_MAX_FILES as u64 + 2);
 
         gc_audit_logs(&path, "audit.jsonl");
@@ -500,10 +500,14 @@ mod tests {
     fn gc_follows_a_renamed_event_log() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("custom.jsonl");
-        std::fs::write(&path, "live").unwrap();
+        kernal_api::platform::fs::write_file(&path, "live").unwrap();
         seed_archives(temp.path(), "custom.jsonl", AUDIT_MAX_FILES as u64 + 1);
         // An unrelated neighbour that must not be touched.
-        std::fs::write(temp.path().join("audit.jsonl.00000000000000000001"), "x").unwrap();
+        kernal_api::platform::fs::write_file(
+            temp.path().join("audit.jsonl.00000000000000000001"),
+            "x",
+        )
+        .unwrap();
 
         gc_audit_logs(&path, "custom.jsonl");
 

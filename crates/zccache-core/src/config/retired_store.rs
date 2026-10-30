@@ -266,7 +266,7 @@ pub fn sweep_retired_version_store_with_mode(
             return report;
         }
     }
-    match std::fs::metadata(store) {
+    match kernal_api::platform::fs::path_metadata(store) {
         Ok(metadata) if metadata.is_dir() => {}
         _ => {
             report.failed += 1;
@@ -287,8 +287,9 @@ pub fn sweep_retired_version_store_with_mode(
     };
 
     if mode == RetiredSweepMode::Routine {
-        let marker_recent = std::fs::metadata(store.join(LAST_ACTIVE_MARKER_FILE))
-            .is_ok_and(|metadata| !is_older_than(&metadata, now, max_age));
+        let marker_recent =
+            kernal_api::platform::fs::path_metadata(store.join(LAST_ACTIVE_MARKER_FILE))
+                .is_ok_and(|metadata| !is_older_than(&metadata, now, max_age));
         if marker_recent {
             report.stores_recently_active += 1;
             return report;
@@ -311,7 +312,7 @@ pub fn sweep_retired_version_store_with_mode(
     drop(lock_guard);
 
     if only_markers_remain {
-        match std::fs::remove_dir_all(store) {
+        match kernal_api::platform::fs::remove_dir_all(store) {
             Ok(()) => report.stores_removed += 1,
             // Best-effort, mirroring `prune_stale_version_dirs_in`: a
             // removal that fails here (most often a lingering Windows
@@ -455,7 +456,7 @@ fn sweep_directory_contents(
         if is_dir {
             sweep_directory_contents(&path, store_root, now, max_age, mode, report);
             if is_dir_empty(&path) {
-                let _ = std::fs::remove_dir(&path);
+                let _ = kernal_api::platform::fs::remove_dir(&path);
             }
             continue;
         }
@@ -468,7 +469,9 @@ fn sweep_directory_contents(
 /// directory symlink or junction needs `remove_dir`, which removes the link
 /// and never the target's contents. No bytes are credited.
 fn remove_link_entry(path: &Path, report: &mut RetiredStoreSweepReport) {
-    if std::fs::remove_file(path).is_ok() || std::fs::remove_dir(path).is_ok() {
+    if kernal_api::platform::fs::remove_file(path).is_ok()
+        || kernal_api::platform::fs::remove_dir(path).is_ok()
+    {
         report.files_removed += 1;
     } else {
         report.failed += 1;
@@ -513,7 +516,7 @@ fn sweep_regular_file(
     if !should_delete {
         return;
     }
-    match std::fs::remove_file(path) {
+    match kernal_api::platform::fs::remove_file(path) {
         Ok(()) => {
             report.files_removed += 1;
             // Only credit bytes when removal provably frees space: the
