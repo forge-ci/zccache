@@ -192,7 +192,7 @@ def test_release_and_build_preserve_explicit_global_read_only_policy() -> None:
     assert f"save-cache: {guard.COMPOSITE_SAVE_CACHE_POLICY}" in source
     assert 'default: "false"' in source
     release = yaml.safe_load(
-        (ROOT / ".github/workflows/release-auto.yml").read_text(encoding="utf-8")
+        (ROOT / ".github/workflows/auto-release.yml").read_text(encoding="utf-8")
     )
     release_steps = [
         step for job in release["jobs"].values() for step in job.get("steps", [])
