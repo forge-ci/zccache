@@ -928,19 +928,19 @@ fn full_maintenance_due(cache_dir: &Path, now: SystemTime) -> bool {
 }
 
 fn record_full_maintenance(cache_dir: &Path, now: SystemTime) -> io::Result<()> {
-    std::fs::create_dir_all(cache_dir)?;
+    kernal_api::platform::fs::create_dir_all(cache_dir)?;
     let marker = full_marker_path(cache_dir);
     let temp = cache_dir.join(format!("{FULL_MARKER}.{}.tmp", std::process::id()));
     let now_secs = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    std::fs::write(&temp, format!("{now_secs}\n"))?;
-    match std::fs::rename(&temp, &marker) {
+    kernal_api::platform::fs::write_file(&temp, format!("{now_secs}\n"))?;
+    match kernal_api::platform::fs::rename(&temp, &marker) {
         Ok(()) => Ok(()),
         Err(error) if marker.exists() => {
-            std::fs::remove_file(&marker)?;
-            std::fs::rename(&temp, &marker).map_err(|_| error)
+            kernal_api::platform::fs::remove_file(&marker)?;
+            kernal_api::platform::fs::rename(&temp, &marker).map_err(|_| error)
         }
         Err(error) => Err(error),
     }

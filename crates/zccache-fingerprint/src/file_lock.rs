@@ -1,5 +1,5 @@
 use kernal_api::platform::fs::FileLock;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -19,7 +19,7 @@ fn lock_path(cache_path: &Path) -> NormalizedPath {
 fn open_lock_file(cache_path: &Path) -> io::Result<File> {
     let path = lock_path(cache_path);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
     OpenOptions::new()
         .read(true)

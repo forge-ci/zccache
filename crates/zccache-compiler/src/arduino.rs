@@ -7,7 +7,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 use zccache_core::blocking_sync::Mutex;
@@ -104,7 +103,15 @@ pub fn generate_ino_cpp(
     ensure_libclang_env()?;
 
     let normalized_input = NormalizedPath::from(input);
-    let source = fs::read_to_string(input).map_err(|source| ArduinoError::ReadFile {
+    let source = kernal_api::platform::fs::read_context_regular_file_bounded(
+        input,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )
+    .and_then(|observed| {
+        String::from_utf8(observed.bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })
+    .map_err(|source| ArduinoError::ReadFile {
         path: normalized_input.clone(),
         source,
     })?;

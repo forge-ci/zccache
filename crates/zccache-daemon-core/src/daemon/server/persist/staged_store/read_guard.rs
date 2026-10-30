@@ -1,7 +1,6 @@
 //! Shared staged-generation ownership for cache-hit materialization.
 
 use super::{is_staged_link_or_reparse, open_store_lock, pointer_path, staged_root, STAGED_ROOT};
-use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -207,7 +206,7 @@ pub(in crate::daemon::server) fn acquire_staged_materialization_guard_if_present
     let wait_started = Instant::now();
     validate_key(key_hex)?;
     let pointer = pointer_path(artifact_dir, key_hex);
-    match fs::symlink_metadata(&pointer) {
+    match kernal_api::platform::fs::context_path_metadata_no_follow(&pointer) {
         Ok(_) if is_staged_link_or_reparse(&pointer) => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
@@ -229,7 +228,7 @@ pub(in crate::daemon::server) fn acquire_staged_materialization_guard_if_present
     let wait_started = Instant::now();
     validate_key(key_hex)?;
     let pointer = pointer_path(artifact_dir, key_hex);
-    match fs::symlink_metadata(&pointer) {
+    match kernal_api::platform::fs::context_path_metadata_no_follow(&pointer) {
         Ok(_) if is_staged_link_or_reparse(&pointer) => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
@@ -328,7 +327,7 @@ mod tests {
     fn a_key_without_a_staged_pointer_acquires_no_guard() {
         let dir = tempfile::tempdir().unwrap();
         let root = staged_root(dir.path());
-        std::fs::create_dir_all(&root).unwrap();
+        zccache_core::config::create_dir_all_private(&root).unwrap();
         reset_test_shared_lock_acquisitions(&root);
 
         let guard =
@@ -358,7 +357,7 @@ mod slot_wait_tests {
         )
         .unwrap();
         let artifact_dir = state.artifact_dir.clone();
-        fs::create_dir_all(staged_root(artifact_dir.as_path())).unwrap();
+        zccache_core::config::create_dir_all_private(&staged_root(artifact_dir.as_path())).unwrap();
         let paused = super::super::hook::StagedHookGuard::arm(
             artifact_dir.as_path(),
             super::super::hook::StagedHookPoint::MaterializationStoreLockPending,

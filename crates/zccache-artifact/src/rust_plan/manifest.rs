@@ -70,10 +70,10 @@ pub(super) fn write_bundle_manifest(
 ) -> Result<(), RustPlanError> {
     let mut bytes = Vec::new();
     manifest_to_proto(manifest).encode(&mut bytes)?;
-    std::fs::write(bundle_dir.join(BUNDLE_MANIFEST_NAME), bytes)?;
+    kernal_api::platform::fs::write_file(bundle_dir.join(BUNDLE_MANIFEST_NAME), bytes)?;
     let legacy_manifest = bundle_dir.join(LEGACY_BUNDLE_MANIFEST_NAME);
     if legacy_manifest.exists() {
-        std::fs::remove_file(legacy_manifest)?;
+        kernal_api::platform::fs::remove_file(legacy_manifest)?;
     }
     Ok(())
 }

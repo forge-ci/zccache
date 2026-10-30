@@ -101,15 +101,19 @@ async fn collect_compile_outputs_blocking(
                 paths
                     .into_iter()
                     .filter_map(|path| {
-                        let metadata = std::fs::metadata(&path).ok()?;
-                        if !metadata.is_file() {
+                        let observation =
+                            kernal_api::platform::fs::context_path_metadata_no_follow(&path)
+                                .ok()?;
+                        if observation.kind
+                            != kernal_api::platform::fs::ContextPathKind::RegularFile
+                        {
                             return None;
                         }
                         let name = path.file_name()?.to_string_lossy().into_owned();
                         Some(RustcOutputFile {
                             name,
                             path,
-                            size: metadata.len(),
+                            size: observation.len?,
                         })
                     })
                     .collect()
@@ -124,7 +128,16 @@ async fn collect_compile_outputs_blocking(
             }
             Ok(CompileOutputCollection::Rustc(outputs))
         } else {
-            std::fs::read(&output_path).map(CompileOutputCollection::Bytes)
+            // One bounded read, which is also the coherence check: the facade
+            // re-identifies the final component after reading, so a compiler
+            // output replaced mid-read is rejected instead of cached
+            // (`crates/zccache-daemon-core/src/daemon/server/directory_link.rs`
+            // takes the same route for staged bundles).
+            kernal_api::platform::fs::read_context_regular_file_bounded(
+                &output_path,
+                kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+            )
+            .map(|observation| CompileOutputCollection::Bytes(observation.bytes))
         }
     })
     .detach_on_drop()

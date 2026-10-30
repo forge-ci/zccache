@@ -83,7 +83,7 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
         crate::compiler::is_dylint_driver(&compiler.to_string_lossy()),
     );
     // The scanner must see coalesced identities as well as the actual compiler.
-    std::fs::write(
+    kernal_api::platform::fs::write_file(
         overlay_path,
         serde_json::to_vec(&document).map_err(|error| fail(error.to_string()))?,
     )
@@ -148,7 +148,8 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
         }
     }
     let bytes = serde_json::to_vec(&document).map_err(|error| fail(error.to_string()))?;
-    std::fs::write(overlay_path, bytes).map_err(|error| fail(error.to_string()))
+    kernal_api::platform::fs::write_file(overlay_path, bytes)
+        .map_err(|error| fail(error.to_string()))
 }
 
 /// Different PCHs can record different spellings for the same underlying file.
@@ -175,9 +176,11 @@ fn coalesce_roots(
                 continue;
             }
             let verify = || -> std::io::Result<bool> {
-                Ok(std::fs::metadata(&snapshot)?.modified()?
-                    == std::fs::metadata(shared)?.modified()?
-                    && std::fs::read(&snapshot)? == std::fs::read(shared)?)
+                Ok(
+                    kernal_api::platform::fs::path_metadata(&snapshot)?.modified()?
+                        == kernal_api::platform::fs::path_metadata(shared)?.modified()?
+                        && std::fs::read(&snapshot)? == std::fs::read(shared)?,
+                )
             };
             if !verify().map_err(|error| refusal(Path::new(&original), error))? {
                 return Err(refusal(

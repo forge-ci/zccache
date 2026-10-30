@@ -516,7 +516,7 @@ impl ArtifactStore {
         let bytes = bincode::serialize(&snapshot)
             .map_err(|e| std::io::Error::other(format!("bincode serialize: {e}")))?;
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         let name = self
             .path
@@ -530,7 +530,7 @@ impl ArtifactStore {
         let target = self.path.as_path();
         let result = write_atomic_durable(&tmp, target, &bytes);
         if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = kernal_api::platform::fs::remove_file(&tmp);
         }
         if result.is_ok() {
             tracing::info!(
@@ -580,7 +580,7 @@ fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Res
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(tmp, target)?;
+    kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
         if let Ok(dir) = std::fs::File::open(parent) {
             let _ = dir.sync_all();
@@ -633,7 +633,7 @@ mod tests {
             total_size: 4,
             stored_at_secs: 42,
         };
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &path,
             bincode::serialize(&vec![("legacy".to_string(), legacy)]).unwrap(),
         )
@@ -799,7 +799,7 @@ mod tests {
     fn open_corrupt_file_starts_empty_but_flags_itself_for_reconciliation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.bin");
-        std::fs::write(&path, b"not valid bincode").unwrap();
+        kernal_api::platform::fs::write_file(&path, b"not valid bincode").unwrap();
 
         let store = ArtifactStore::open(&path).unwrap();
         assert_eq!(store.len(), 0, "the unreadable blob still yields no rows");
@@ -837,7 +837,7 @@ mod tests {
     fn a_corrupt_index_records_a_durable_event_beside_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.bin");
-        std::fs::write(&path, b"not valid bincode").unwrap();
+        kernal_api::platform::fs::write_file(&path, b"not valid bincode").unwrap();
 
         let store = ArtifactStore::open(&path).unwrap();
         assert_eq!(store.len(), 0, "a corrupt blob still starts empty");
@@ -879,10 +879,14 @@ mod tests {
         let store = ArtifactStore::open(&path).unwrap();
         store.insert("a", &sample_meta());
         store.flush().unwrap();
-        let first = std::fs::metadata(&path).unwrap().len();
+        let first = kernal_api::platform::fs::path_metadata(&path)
+            .unwrap()
+            .len();
         store.insert("b", &sample_meta());
         store.flush().unwrap();
-        let second = std::fs::metadata(&path).unwrap().len();
+        let second = kernal_api::platform::fs::path_metadata(&path)
+            .unwrap()
+            .len();
         assert!(second > first);
     }
 

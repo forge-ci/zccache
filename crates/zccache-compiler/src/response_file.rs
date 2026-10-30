@@ -299,7 +299,7 @@ pub fn write_response_file_if_needed(
     let Some(content) = content else {
         return Ok(None);
     };
-    std::fs::write(&rsp_path, content)?;
+    kernal_api::platform::fs::write_file(&rsp_path, content)?;
 
     Ok(Some(TempResponseFile { path: rsp_path }))
 }
@@ -318,7 +318,7 @@ impl TempResponseFile {
 
 impl Drop for TempResponseFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = kernal_api::platform::fs::remove_file(&self.path);
     }
 }
 
@@ -538,8 +538,8 @@ mod tests {
         let path_a = dir.path().join("a.rsp");
         let path_b = dir.path().join("b.rsp");
 
-        std::fs::write(&path_a, format!("@{}", path_b.display())).unwrap();
-        std::fs::write(&path_b, format!("@{}", path_a.display())).unwrap();
+        kernal_api::platform::fs::write_file(&path_a, format!("@{}", path_b.display())).unwrap();
+        kernal_api::platform::fs::write_file(&path_b, format!("@{}", path_a.display())).unwrap();
 
         let args = s(&["-c", "foo.cpp", &format!("@{}", path_a.display())]);
         let result = expand_response_files(&args);
@@ -555,7 +555,7 @@ mod tests {
     fn expand_self_reference_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("self.rsp");
-        std::fs::write(&path, format!("-O2 @{}", path.display())).unwrap();
+        kernal_api::platform::fs::write_file(&path, format!("-O2 @{}", path.display())).unwrap();
 
         let args = s(&[&format!("@{}", path.display())]);
         let result = expand_response_files(&args);
@@ -619,7 +619,7 @@ mod tests {
     fn expand_in_resolves_relative_against_base_dir() {
         let dir = tempfile::tempdir().unwrap();
         let rsp_path = dir.path().join("flags.rsp");
-        std::fs::write(&rsp_path, "-O2 -Wall").unwrap();
+        kernal_api::platform::fs::write_file(&rsp_path, "-O2 -Wall").unwrap();
 
         // Use relative name, resolve against dir
         let args = s(&["@flags.rsp", "-c", "foo.cpp"]);
@@ -631,7 +631,7 @@ mod tests {
     fn expand_in_absolute_path_ignores_base_dir() {
         let dir = tempfile::tempdir().unwrap();
         let rsp_path = dir.path().join("flags.rsp");
-        std::fs::write(&rsp_path, "-O2").unwrap();
+        kernal_api::platform::fs::write_file(&rsp_path, "-O2").unwrap();
 
         let abs_ref = format!("@{}", rsp_path.display());
         let args = s(&[&abs_ref, "-c", "foo.cpp"]);
@@ -648,13 +648,13 @@ mod tests {
         // But inner.rsp is in same dir as outer.rsp, so it resolves correctly.
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
+        kernal_api::platform::fs::create_dir_all(&sub).unwrap();
 
         let inner_path = sub.join("inner.rsp");
-        std::fs::write(&inner_path, "-DINNER=1").unwrap();
+        kernal_api::platform::fs::write_file(&inner_path, "-DINNER=1").unwrap();
 
         let outer_path = sub.join("outer.rsp");
-        std::fs::write(&outer_path, "-DOUTER=1 @inner.rsp").unwrap();
+        kernal_api::platform::fs::write_file(&outer_path, "-DOUTER=1 @inner.rsp").unwrap();
 
         // Resolve @sub/outer.rsp against base dir
         let args = s(&["-c", "foo.cpp", "@sub/outer.rsp"]);
@@ -668,10 +668,14 @@ mod tests {
         // subdir/inner.rsp exists relative to outer.rsp's directory
         let dir = tempfile::tempdir().unwrap();
         let subdir = dir.path().join("subdir");
-        std::fs::create_dir_all(&subdir).unwrap();
+        kernal_api::platform::fs::create_dir_all(&subdir).unwrap();
 
-        std::fs::write(subdir.join("inner.rsp"), "-DINNER=1").unwrap();
-        std::fs::write(dir.path().join("outer.rsp"), "@subdir/inner.rsp -DOUTER=1").unwrap();
+        kernal_api::platform::fs::write_file(subdir.join("inner.rsp"), "-DINNER=1").unwrap();
+        kernal_api::platform::fs::write_file(
+            dir.path().join("outer.rsp"),
+            "@subdir/inner.rsp -DOUTER=1",
+        )
+        .unwrap();
 
         let args = s(&["@outer.rsp"]);
         let result = expand_response_files_in(&args, dir.path()).unwrap();
@@ -683,10 +687,12 @@ mod tests {
         // base_dir/sub/outer.rsp references @../sibling.rsp
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
+        kernal_api::platform::fs::create_dir_all(&sub).unwrap();
 
-        std::fs::write(dir.path().join("sibling.rsp"), "-DSIBLING=1").unwrap();
-        std::fs::write(sub.join("outer.rsp"), "@../sibling.rsp -DOUTER=1").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("sibling.rsp"), "-DSIBLING=1")
+            .unwrap();
+        kernal_api::platform::fs::write_file(sub.join("outer.rsp"), "@../sibling.rsp -DOUTER=1")
+            .unwrap();
 
         let args = s(&["@sub/outer.rsp"]);
         let result = expand_response_files_in(&args, dir.path()).unwrap();
@@ -698,13 +704,13 @@ mod tests {
         // @relative.rsp contains @/absolute/path.rsp â€” absolute ref ignores parent dir
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
+        kernal_api::platform::fs::create_dir_all(&sub).unwrap();
 
         let abs_rsp = sub.join("abs.rsp");
-        std::fs::write(&abs_rsp, "-DABS=1").unwrap();
+        kernal_api::platform::fs::write_file(&abs_rsp, "-DABS=1").unwrap();
 
         // outer.rsp in base_dir references abs.rsp by absolute path
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             dir.path().join("outer.rsp"),
             format!("@{} -DOUTER=1", abs_rsp.display()),
         )
@@ -722,11 +728,11 @@ mod tests {
         let a = dir.path().join("a");
         let ab = a.join("b");
         let abc = ab.join("c");
-        std::fs::create_dir_all(&abc).unwrap();
+        kernal_api::platform::fs::create_dir_all(&abc).unwrap();
 
-        std::fs::write(abc.join("3.rsp"), "-DLEVEL3=1").unwrap();
-        std::fs::write(ab.join("2.rsp"), "@c/3.rsp -DLEVEL2=1").unwrap();
-        std::fs::write(a.join("1.rsp"), "@b/2.rsp -DLEVEL1=1").unwrap();
+        kernal_api::platform::fs::write_file(abc.join("3.rsp"), "-DLEVEL3=1").unwrap();
+        kernal_api::platform::fs::write_file(ab.join("2.rsp"), "@c/3.rsp -DLEVEL2=1").unwrap();
+        kernal_api::platform::fs::write_file(a.join("1.rsp"), "@b/2.rsp -DLEVEL1=1").unwrap();
 
         let args = s(&["@a/1.rsp"]);
         let result = expand_response_files_in(&args, dir.path()).unwrap();
@@ -757,8 +763,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.rsp");
         let b = dir.path().join("b.rsp");
-        std::fs::write(&a, format!("@{}", b.display())).unwrap();
-        std::fs::write(&b, format!("@{}", a.display())).unwrap();
+        kernal_api::platform::fs::write_file(&a, format!("@{}", b.display())).unwrap();
+        kernal_api::platform::fs::write_file(&b, format!("@{}", a.display())).unwrap();
 
         let args = s(&["@a.rsp"]);
         let err = expand_response_files_in(&args, dir.path()).unwrap_err();
@@ -779,7 +785,7 @@ mod tests {
             } else {
                 format!("@{}.rsp", i + 1)
             };
-            std::fs::write(dir.path().join(name), content).unwrap();
+            kernal_api::platform::fs::write_file(dir.path().join(name), content).unwrap();
         }
 
         let args = s(&["@0.rsp"]);
@@ -957,7 +963,7 @@ mod tests {
     fn temp_response_file_cleanup_on_drop() {
         let dir = tempfile::tempdir().unwrap();
         let rsp_path = dir.path().join("test.rsp");
-        std::fs::write(&rsp_path, "test").unwrap();
+        kernal_api::platform::fs::write_file(&rsp_path, "test").unwrap();
         assert!(rsp_path.exists());
 
         let rsp = TempResponseFile {

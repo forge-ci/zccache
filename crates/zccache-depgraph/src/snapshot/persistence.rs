@@ -179,19 +179,19 @@ pub fn save_to_file_with(
     // Atomic write: write to .tmp, then rename.
     let tmp_path = path.with_extension("bin.tmp");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
 
     let written = write_tmp(&tmp_path, &payload, opts.fail_injection);
     if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         return Err(e);
     }
 
     // Windows: remove target before rename (rename doesn't overwrite on Windows).
-    let _ = std::fs::remove_file(path);
-    if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    let _ = kernal_api::platform::fs::remove_file(path);
+    if let Err(e) = kernal_api::platform::fs::rename(&tmp_path, path) {
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         return Err(e.into());
     }
 

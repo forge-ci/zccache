@@ -104,7 +104,9 @@ pub fn resolve_hit_mtime(
     cache_file: &Path,
     pass: SiblingFloorPass,
 ) -> std::io::Result<HitMtime> {
-    let object = FileTime::from_last_modification_time(&std::fs::metadata(cache_file)?);
+    let object = FileTime::from_last_modification_time(&kernal_api::platform::fs::path_metadata(
+        cache_file,
+    )?);
     if pass == SiblingFloorPass::BatchFollows {
         return Ok(HitMtime {
             mtime: object,
@@ -215,7 +217,9 @@ pub fn apply_batch_policy_with<'a>(
 
     let mut max_mtime = seed;
     for path in outputs.iter().copied().chain(inputs.iter().copied()) {
-        let Ok(mtime) = std::fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+        let Ok(mtime) =
+            kernal_api::platform::fs::path_metadata(path).and_then(|metadata| metadata.modified())
+        else {
             continue;
         };
         if mtime > max_mtime {
@@ -225,7 +229,9 @@ pub fn apply_batch_policy_with<'a>(
 
     let ft = FileTime::from_system_time(max_mtime);
     for path in outputs {
-        let Ok(current) = std::fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+        let Ok(current) =
+            kernal_api::platform::fs::path_metadata(path).and_then(|metadata| metadata.modified())
+        else {
             continue;
         };
         if current < max_mtime {

@@ -168,7 +168,7 @@ where
         finalize(&mut claimed);
         write_atomic_inner(cache_path, &claimed)?;
         if still_ours {
-            let _ = std::fs::remove_file(&pending);
+            let _ = kernal_api::platform::fs::remove_file(&pending);
         }
         Ok(())
     })
@@ -213,12 +213,12 @@ fn write_atomic_inner<T: Serialize>(path: &Path, data: &T) -> Result<()> {
     let json = serde_json::to_string(data)?;
     let tmp = tmp_path(path);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&tmp, json.as_bytes())?;
+    kernal_api::platform::fs::write_file(&tmp, json.as_bytes())?;
     // Windows: remove target before rename (rename doesn't overwrite on Windows).
-    let _ = std::fs::remove_file(path);
-    std::fs::rename(&tmp, path)?;
+    let _ = kernal_api::platform::fs::remove_file(path);
+    kernal_api::platform::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -227,15 +227,15 @@ fn promote_pending_inner(cache_path: &Path) -> Result<()> {
     if !pending.exists() {
         return Ok(());
     }
-    let _ = std::fs::remove_file(cache_path);
-    std::fs::rename(&pending, cache_path)?;
+    let _ = kernal_api::platform::fs::remove_file(cache_path);
+    kernal_api::platform::fs::rename(&pending, cache_path)?;
     Ok(())
 }
 
 fn remove_cache_inner(cache_path: &Path) {
-    let _ = std::fs::remove_file(cache_path);
-    let _ = std::fs::remove_file(pending_path(cache_path));
-    let _ = std::fs::remove_file(tmp_path(cache_path));
+    let _ = kernal_api::platform::fs::remove_file(cache_path);
+    let _ = kernal_api::platform::fs::remove_file(pending_path(cache_path));
+    let _ = kernal_api::platform::fs::remove_file(tmp_path(cache_path));
 }
 
 // ── Path helpers ─────────────────────────────────────────────────
@@ -264,7 +264,7 @@ pub fn now_ns() -> u64 {
 }
 
 pub fn mtime_ns(path: &Path) -> std::io::Result<u64> {
-    let meta = std::fs::metadata(path)?;
+    let meta = kernal_api::platform::fs::path_metadata(path)?;
     Ok(meta
         .modified()?
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -273,7 +273,7 @@ pub fn mtime_ns(path: &Path) -> std::io::Result<u64> {
 }
 
 pub fn file_size(path: &Path) -> std::io::Result<u64> {
-    Ok(std::fs::metadata(path)?.len())
+    Ok(kernal_api::platform::fs::path_metadata(path)?.len())
 }
 
 /// Return the maximum mtime (in nanoseconds) across a set of files.
@@ -343,7 +343,7 @@ mod tests {
     fn corrupt_json_returns_none() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("bad.json");
-        std::fs::write(&path, "not json{{{").unwrap();
+        kernal_api::platform::fs::write_file(&path, "not json{{{").unwrap();
 
         let result: Option<HashCacheData> = read_json(&path).unwrap();
         assert!(result.is_none());
@@ -410,7 +410,7 @@ mod tests {
         // Valid JSON but wrong schema → fail-open.
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("bad_schema.json");
-        std::fs::write(&path, "{}").unwrap();
+        kernal_api::platform::fs::write_file(&path, "{}").unwrap();
 
         let result: Option<HashCacheData> = read_json(&path).unwrap();
         // serde will fail because required fields are missing.
@@ -422,7 +422,7 @@ mod tests {
         // Simulate a crash mid-write that leaves truncated JSON.
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("trunc.json");
-        std::fs::write(&path, r#"{"version": 1, "hash": "abc"#).unwrap();
+        kernal_api::platform::fs::write_file(&path, r#"{"version": 1, "hash": "abc"#).unwrap();
 
         let result: Option<HashCacheData> = read_json(&path).unwrap();
         assert!(result.is_none());
@@ -512,7 +512,7 @@ mod tests {
     fn mtime_ns_of_real_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.txt");
-        std::fs::write(&path, "hello").unwrap();
+        kernal_api::platform::fs::write_file(&path, "hello").unwrap();
 
         let mtime = mtime_ns(&path).unwrap();
         assert!(mtime > 0);
@@ -522,7 +522,7 @@ mod tests {
     fn file_size_of_known_content() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("sized.txt");
-        std::fs::write(&path, "12345").unwrap();
+        kernal_api::platform::fs::write_file(&path, "12345").unwrap();
 
         assert_eq!(file_size(&path).unwrap(), 5);
     }
@@ -531,7 +531,7 @@ mod tests {
     fn file_size_of_empty_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty.txt");
-        std::fs::write(&path, "").unwrap();
+        kernal_api::platform::fs::write_file(&path, "").unwrap();
 
         assert_eq!(file_size(&path).unwrap(), 0);
     }
@@ -541,7 +541,7 @@ mod tests {
         // JSON array instead of object.
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("array.json");
-        std::fs::write(&path, "[1, 2, 3]").unwrap();
+        kernal_api::platform::fs::write_file(&path, "[1, 2, 3]").unwrap();
 
         let result: Option<HashCacheData> = read_json(&path).unwrap();
         assert!(result.is_none());
@@ -577,7 +577,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cache = dir.path().join("fp.json");
         let pending = cache.with_extension("pending");
-        std::fs::write(&pending, "not json").unwrap();
+        kernal_api::platform::fs::write_file(&pending, "not json").unwrap();
         assert_eq!(detect_pending_type(&cache), None);
     }
 
@@ -599,7 +599,7 @@ mod tests {
         // Forward compatibility: extra fields should be silently ignored.
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("extra.json");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &path,
             r#"{"version":1,"hash":"xx","status":"success","timestamp_ns":0,"file_count":1,"extra_field":"ignored"}"#,
         )

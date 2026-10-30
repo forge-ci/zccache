@@ -321,7 +321,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         replace_staged_path(&temporary, path)
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     result
 }
@@ -431,7 +431,7 @@ fn validate_staged_generation(
         }
         seen[output.index] = true;
         let path = output_path(&generation, output.index);
-        if fs::metadata(&path)?.len() != output.size {
+        if kernal_api::platform::fs::path_metadata(&path)?.len() != output.size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "staged output size does not match its manifest",
@@ -513,7 +513,7 @@ fn persist_staged_generation(
     #[cfg(test)]
     hook::pause(artifact_dir, StagedHookPoint::PublicationStoreLocked);
     let key_root = root.join(key_hex);
-    fs::create_dir_all(&key_root)
+    kernal_api::platform::fs::create_dir_all(&key_root)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
     let publish_lock = OpenOptions::new()
         .read(true)
@@ -533,7 +533,7 @@ fn persist_staged_generation(
     #[cfg(test)]
     fault::inject(artifact_dir, StagedFaultPoint::GenerationCreate)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    fs::create_dir(&temporary_generation)
+    kernal_api::platform::fs::create_dir(&temporary_generation)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
 
     let result = (|| {
@@ -740,15 +740,17 @@ fn persist_staged_generation(
         #[cfg(test)]
         fault::inject(artifact_dir, StagedFaultPoint::ManifestWrite)
             .map_err(|error| publish_error(StagedPublishFailure::Manifest, error))?;
-        fs::write(&temporary_manifest, manifest_bytes).map_err(|error| {
-            publish_error(
-                StagedPublishFailure::Manifest,
-                io::Error::new(
-                    error.kind(),
-                    format!("staged manifest write failed: {error}"),
-                ),
-            )
-        })?;
+        kernal_api::platform::fs::write_file(&temporary_manifest, manifest_bytes).map_err(
+            |error| {
+                publish_error(
+                    StagedPublishFailure::Manifest,
+                    io::Error::new(
+                        error.kind(),
+                        format!("staged manifest write failed: {error}"),
+                    ),
+                )
+            },
+        )?;
         #[cfg(test)]
         fault::inject(artifact_dir, StagedFaultPoint::ManifestSync)
             .map_err(|error| publish_error(StagedPublishFailure::Manifest, error))?;
@@ -782,7 +784,7 @@ fn persist_staged_generation(
             Ok(()) => generation_renamed = true,
             Err(error) if final_generation.exists() => {
                 let _ = error;
-                let _ = fs::remove_dir_all(&temporary_generation);
+                let _ = kernal_api::platform::fs::remove_dir_all(&temporary_generation);
             }
             Err(error) => {
                 return Err(publish_error(
@@ -870,7 +872,7 @@ fn persist_staged_generation(
     })();
 
     if result.is_err() {
-        let _ = fs::remove_dir_all(&temporary_generation);
+        let _ = kernal_api::platform::fs::remove_dir_all(&temporary_generation);
     }
     result
 }
@@ -926,7 +928,7 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
                 name.starts_with(".") && name != STORE_LOCK
             })
         {
-            fs::remove_file(path)?;
+            kernal_api::platform::fs::remove_file(path)?;
             removed += 1;
             continue;
         }
@@ -952,9 +954,9 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
                             && current.as_deref() != Some(child_name.as_str())));
                 if remove {
                     if child_path.is_dir() {
-                        fs::remove_dir_all(child_path)?;
+                        kernal_api::platform::fs::remove_dir_all(child_path)?;
                     } else {
-                        fs::remove_file(child_path)?;
+                        kernal_api::platform::fs::remove_file(child_path)?;
                     }
                     removed += 1;
                 }

@@ -444,8 +444,9 @@ mod tests {
     use zccache_hash::hash_bytes;
 
     fn write(path: &Path, bytes: &str) {
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
-        std::fs::write(path, bytes).expect("fixture file");
+        kernal_api::platform::fs::create_dir_all(path.parent().expect("parent"))
+            .expect("directory");
+        kernal_api::platform::fs::write_file(path, bytes).expect("fixture file");
     }
 
     fn context(source: &Path) -> CompileContext {

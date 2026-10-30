@@ -6,7 +6,6 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use zccache_core::path::NormalizedPath;
 
@@ -424,8 +423,8 @@ pub fn audit_cache_root(
     context: LogAuditContext,
     options: &AuditOptions,
 ) -> Result<AuditReport, AuditError> {
-    let metadata = fs::metadata(root)?;
-    if !metadata.is_dir() {
+    let root_kind = kernal_api::platform::fs::context_path_metadata_no_follow(root)?;
+    if root_kind.kind != kernal_api::platform::fs::ContextPathKind::Directory {
         return Err(AuditError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("audit cache root is not a directory: {}", root.display()),
@@ -755,7 +754,14 @@ fn parse_sources(root: &Path) -> Result<ParsedSources, AuditError> {
         let Some(source_kind) = classify_source(path.as_path()) else {
             continue;
         };
-        let content = fs::read_to_string(path.as_path())?;
+        let content = kernal_api::platform::fs::read_context_regular_file_bounded(
+            path.as_path(),
+            kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+        )
+        .and_then(|observed| {
+            String::from_utf8(observed.bytes)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        })?;
         for (offset, text) in content.lines().enumerate() {
             if text.trim().is_empty() {
                 continue;
@@ -800,16 +806,16 @@ fn parse_sources(root: &Path) -> Result<ParsedSources, AuditError> {
 }
 
 fn collect_files(directory: &Path, output: &mut Vec<NormalizedPath>) -> Result<(), AuditError> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let path: NormalizedPath = entry.path().into();
-        let kind = entry.file_type()?;
-        if kind.is_symlink() {
+    let mut cursor = kernal_api::platform::fs::DirectoryCursor::open(directory)?;
+    while let Some(entry) = cursor.next_entry()? {
+        let kind = entry.kind();
+        if kind == kernal_api::platform::fs::ContextPathKind::Symlink {
             continue;
         }
-        if kind.is_dir() {
+        let path: NormalizedPath = entry.path().into();
+        if kind == kernal_api::platform::fs::ContextPathKind::Directory {
             collect_files(path.as_path(), output)?;
-        } else if kind.is_file() {
+        } else if kind == kernal_api::platform::fs::ContextPathKind::RegularFile {
             output.push(path);
         }
     }
@@ -914,6 +920,7 @@ mod source_fixture_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {

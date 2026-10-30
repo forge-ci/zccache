@@ -131,7 +131,7 @@ pub fn publish_service_definition(daemon_binary: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let binary = match std::fs::canonicalize(daemon_binary) {
+    let binary = match kernal_api::platform::fs::canonical_context_path(daemon_binary) {
         Ok(p) => p,
         Err(err) => {
             tracing::warn!(

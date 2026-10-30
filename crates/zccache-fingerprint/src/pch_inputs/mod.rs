@@ -214,8 +214,8 @@ impl PchServePlan {
         let hash = input
             .content_xxh3
             .ok_or_else(|| refuse(input, PchRefusalReason::MtimeUnverifiable))?;
-        let metadata =
-            std::fs::metadata(path).map_err(|_| refuse(input, PchRefusalReason::Missing))?;
+        let metadata = kernal_api::platform::fs::path_metadata(path)
+            .map_err(|_| refuse(input, PchRefusalReason::Missing))?;
         if !metadata.is_file() || metadata.len() != input.size {
             return Err(refuse(
                 input,
@@ -271,7 +271,10 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (
+        kernal_api::platform::fs::canonical_context_path(a),
+        kernal_api::platform::fs::canonical_context_path(b),
+    ) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -307,7 +310,7 @@ pub fn plan_pch_serve(
         if !path.is_absolute() {
             return Err(refuse(input, PchRefusalReason::RelativePath));
         }
-        let meta = match std::fs::metadata(path) {
+        let meta = match kernal_api::platform::fs::path_metadata(path) {
             Ok(meta) if meta.is_file() => meta,
             _ => return Err(refuse(input, PchRefusalReason::Missing)),
         };
@@ -381,7 +384,7 @@ pub fn inputs_stat_match(inputs: &[PchInput]) -> bool {
         .iter()
         .filter(|input| !input.overridden && !input.transient)
         .all(|input| {
-            std::fs::metadata(&input.path).is_ok_and(|meta| {
+            kernal_api::platform::fs::path_metadata(&input.path).is_ok_and(|meta| {
                 meta.is_file()
                     && meta.len() == input.size
                     && (input.mtime_secs == 0

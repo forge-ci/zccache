@@ -26,7 +26,7 @@ pub(in crate::daemon::server) fn remove_output_file(path: &Path) -> std::io::Res
             ));
         }
     }
-    std::fs::remove_file(path)
+    kernal_api::platform::fs::remove_file(path)
 }
 
 fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -42,7 +42,7 @@ fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
             ));
         }
     }
-    std::fs::rename(from, to)
+    kernal_api::platform::fs::rename(from, to)
 }
 
 #[cfg(test)]
@@ -66,7 +66,7 @@ pub(in crate::daemon::server) fn fail_detach_rename_for_test(path: &Path) {
 pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
     path: &Path,
 ) -> std::io::Result<()> {
-    match std::fs::metadata(path) {
+    match kernal_api::platform::fs::path_metadata(path) {
         Ok(meta) if meta.is_file() => {}
         Ok(_) => return Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -113,7 +113,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
             Ok(()) => {
                 let registration = prepare_registered_detach(path);
                 if let Err(error) = crate::platform::fs::permissions::make_writable(path) {
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(error);
                 }
                 if let Err(e) = remove_output_file(path) {
@@ -123,7 +123,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                             readonly_enabled(),
                         );
                     }
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(e);
                 }
                 if let Err(e) = rename_detached_output(&tmp_path, path) {
@@ -134,7 +134,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                         );
                         commit_registered_detach(*id, path);
                     }
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(e);
                 }
                 if let Some((id, _)) = &registration {
@@ -153,7 +153,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                 last_err = Some(e);
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp_path);
+                let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                 return Err(e);
             }
         }

@@ -354,8 +354,15 @@ pub(super) fn scan_rustc_deps(
     if rustc_args.emit_types.iter().any(|t| t == "dep-info") {
         if let Some(depfile_path) = rustc_depfile_output_path(rustc_args, cwd) {
             if depfile_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&depfile_path) {
-                    return parse_rustc_depinfo(&content, source_path, cwd);
+                let read = kernal_api::platform::fs::read_context_regular_file_bounded(
+                    &depfile_path,
+                    kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+                );
+                if let Ok(observation) = read {
+                    // `read_to_string` refused invalid UTF-8; keep that refusal.
+                    if let Ok(content) = String::from_utf8(observation.bytes) {
+                        return parse_rustc_depinfo(&content, source_path, cwd);
+                    }
                 }
             }
         }
@@ -891,13 +898,27 @@ pub(super) fn dylint_cdylib_has_complete_output_identity(
         .is_some()
 }
 
+/// Size of a candidate rustc output, observed through the kernal-api `fs`
+/// capability without following a final symlink.
+///
+/// `None` when the path is absent, unreadable, or is anything but a regular
+/// file. Every caller here already treated those cases as "silently skip this
+/// candidate" (soldr#2148, soldr#2349), so the probes stay opportunistic.
+fn regular_file_size(path: &Path) -> Option<u64> {
+    let observation = kernal_api::platform::fs::context_path_metadata_no_follow(path).ok()?;
+    if observation.kind != kernal_api::platform::fs::ContextPathKind::RegularFile {
+        return None;
+    }
+    observation.len
+}
+
 /// Collect output file metadata from a rustc compilation without reading bytes.
 pub(super) fn collect_rustc_output_files(
     rustc_args: &crate::depgraph::RustcParsedArgs,
     primary_output_path: &Path,
     cwd: &Path,
 ) -> Vec<RustcOutputFile> {
-    let Ok(primary_meta) = std::fs::metadata(primary_output_path) else {
+    let Some(primary_size) = regular_file_size(primary_output_path) else {
         return Vec::new();
     };
     let primary_name = primary_output_path
@@ -908,7 +929,7 @@ pub(super) fn collect_rustc_output_files(
     let mut outputs = vec![RustcOutputFile {
         name: primary_name,
         path: NormalizedPath::new(primary_output_path),
-        size: primary_meta.len(),
+        size: primary_size,
     }];
 
     // Find additional outputs based on --emit types
@@ -956,14 +977,12 @@ pub(super) fn collect_rustc_output_files(
                 .into_owned();
             // Avoid duplicates
             if !outputs.iter().any(|existing| existing.name == name) {
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    if meta.is_file() {
-                        outputs.push(RustcOutputFile {
-                            name,
-                            path: path.into(),
-                            size: meta.len(),
-                        });
-                    }
+                if let Some(size) = regular_file_size(&path) {
+                    outputs.push(RustcOutputFile {
+                        name,
+                        path: path.into(),
+                        size,
+                    });
                 }
             }
         }
@@ -977,14 +996,12 @@ pub(super) fn collect_rustc_output_files(
                 .to_string_lossy()
                 .into_owned();
             if !outputs.iter().any(|existing| existing.name == name) {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    if meta.is_file() {
-                        outputs.push(RustcOutputFile {
-                            name,
-                            path: path.clone(),
-                            size: meta.len(),
-                        });
-                    }
+                if let Some(size) = regular_file_size(path) {
+                    outputs.push(RustcOutputFile {
+                        name,
+                        path: path.clone(),
+                        size,
+                    });
                 }
             }
         }
@@ -996,39 +1013,35 @@ pub(super) fn collect_rustc_output_files(
     // other -- which is worse than losing it consistently, because it makes
     // the bug look intermittent.
     if let Some(pdb) = msvc_pdb_sidecar_output_path(primary_output_path) {
-        if let Ok(meta) = std::fs::metadata(&pdb) {
-            if meta.is_file() {
-                let name = pdb
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                if !outputs.iter().any(|existing| existing.name == name) {
-                    outputs.push(RustcOutputFile {
-                        name,
-                        path: pdb,
-                        size: meta.len(),
-                    });
-                }
+        if let Some(size) = regular_file_size(&pdb) {
+            let name = pdb
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if !outputs.iter().any(|existing| existing.name == name) {
+                outputs.push(RustcOutputFile {
+                    name,
+                    path: pdb,
+                    size,
+                });
             }
         }
     }
 
     if let Some(dwp) = linux_packed_dwarf_sidecar_output_path(rustc_args, primary_output_path) {
-        if let Ok(meta) = std::fs::metadata(&dwp) {
-            if meta.is_file() {
-                let name = dwp
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                if !outputs.iter().any(|existing| existing.name == name) {
-                    outputs.push(RustcOutputFile {
-                        name,
-                        path: dwp,
-                        size: meta.len(),
-                    });
-                }
+        if let Some(size) = regular_file_size(&dwp) {
+            let name = dwp
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if !outputs.iter().any(|existing| existing.name == name) {
+                outputs.push(RustcOutputFile {
+                    name,
+                    path: dwp,
+                    size,
+                });
             }
         }
     }
@@ -1039,20 +1052,18 @@ pub(super) fn collect_rustc_output_files(
         msvc_dll_implib_sidecar_output_paths(rustc_args, primary_output_path)
     {
         for candidate in implib_files {
-            if let Ok(meta) = std::fs::metadata(&candidate) {
-                if meta.is_file() {
-                    let name = candidate
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
-                    if !outputs.iter().any(|existing| existing.name == name) {
-                        outputs.push(RustcOutputFile {
-                            name,
-                            path: candidate,
-                            size: meta.len(),
-                        });
-                    }
+            if let Some(size) = regular_file_size(&candidate) {
+                let name = candidate
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                if !outputs.iter().any(|existing| existing.name == name) {
+                    outputs.push(RustcOutputFile {
+                        name,
+                        path: candidate,
+                        size,
+                    });
                 }
             }
         }

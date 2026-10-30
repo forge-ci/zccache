@@ -114,7 +114,12 @@ fn absolute_path(path: &NormalizedPath, cwd: &Path) -> NormalizedPath {
 }
 
 fn find_time_macro_in_file(path: &Path) -> Option<&'static str> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = kernal_api::platform::fs::read_context_regular_file_bounded(
+        path,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )
+    .ok()?
+    .bytes;
     let text = std::str::from_utf8(&bytes).ok()?;
     find_time_macro_in_text(text)
 }

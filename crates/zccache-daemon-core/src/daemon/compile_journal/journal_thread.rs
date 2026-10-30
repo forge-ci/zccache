@@ -182,7 +182,7 @@ pub(super) fn rotate_journal(path: &Path) -> Option<(std::fs::File, u64)> {
     let ts = super::log_io::format_timestamp(std::time::SystemTime::now()).replace(':', "-");
     let rotated = path.with_file_name(format!("compile_journal.jsonl.{ts}"));
     // Rename current file to rotated name.
-    if fs::rename(path, &rotated).is_err() {
+    if kernal_api::platform::fs::rename(path, &rotated).is_err() {
         return None;
     }
     // Open a fresh file.
@@ -219,6 +219,6 @@ pub(super) fn gc_journal_files(path: &Path) {
     rotated.sort();
     let to_remove = rotated.len() - JOURNAL_MAX_FILES;
     for p in rotated.into_iter().take(to_remove) {
-        let _ = fs::remove_file(p);
+        let _ = kernal_api::platform::fs::remove_file(p);
     }
 }

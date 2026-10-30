@@ -89,7 +89,7 @@ pub fn save_rust_plan_local(
     if bundle_dir.exists() {
         remove_bundle_dir(&bundle_dir)?;
     }
-    std::fs::create_dir_all(&files_dir)?;
+    kernal_api::platform::fs::create_dir_all(&files_dir)?;
 
     let artifacts = bundle_selected_artifacts(&selected, &files_dir)?;
     summary.saved_file_count += artifacts.len() as u64;
@@ -161,7 +161,7 @@ fn bundle_one_artifact(
 ) -> Result<RustBundledArtifact, RustPlanError> {
     let dst = safe_join(files_dir, &sel.relative_path)?;
     if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
     snapshot_to_bundle(&sel.source_path, &dst)?;
     snapshot_selected_artifact(sel)
@@ -170,7 +170,7 @@ fn bundle_one_artifact(
 fn snapshot_selected_artifact(
     sel: &SelectedArtifact,
 ) -> Result<RustBundledArtifact, RustPlanError> {
-    let metadata = std::fs::metadata(&sel.source_path)?;
+    let metadata = kernal_api::platform::fs::path_metadata(&sel.source_path)?;
     let size = metadata.len();
     let content_hash = zccache_hash::hash_file(&sel.source_path)?.to_hex();
     Ok(RustBundledArtifact {
@@ -251,7 +251,7 @@ fn restore_manifest_artifacts(
             }
         };
         if dst.exists() {
-            std::fs::remove_file(&dst)?;
+            kernal_api::platform::fs::remove_file(&dst)?;
         }
     }
 
@@ -385,7 +385,7 @@ fn restore_one_artifact(
             };
         }
     };
-    let Ok(metadata) = std::fs::metadata(&src) else {
+    let Ok(metadata) = kernal_api::platform::fs::path_metadata(&src) else {
         return RestoreArtifactOutcome::Skipped {
             path,
             reason: "restored_payload_missing_or_corrupt",
@@ -416,12 +416,13 @@ fn restore_one_artifact(
         }
     }
     if dst.exists() && !allow_overwrite_existing {
-        let matches_manifest = std::fs::metadata(&dst).is_ok_and(|metadata| {
-            metadata.len() == artifact.size
-                && zccache_hash::hash_file(&dst)
-                    .map(|hash| hash.to_hex() == artifact.content_hash)
-                    .unwrap_or(false)
-        });
+        let matches_manifest =
+            kernal_api::platform::fs::path_metadata(&dst).is_ok_and(|metadata| {
+                metadata.len() == artifact.size
+                    && zccache_hash::hash_file(&dst)
+                        .map(|hash| hash.to_hex() == artifact.content_hash)
+                        .unwrap_or(false)
+            });
         return RestoreArtifactOutcome::Skipped {
             path,
             reason: if matches_manifest {
@@ -434,7 +435,7 @@ fn restore_one_artifact(
     }
     let result = (|| -> std::io::Result<()> {
         if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         restore_bundle_file(&src, &dst)?;
         // The manifest records the packed object's mtime (#1771 contract); a
@@ -505,7 +506,7 @@ pub fn save_rust_plan_delta_local(
     if delta_bundle_dir.exists() {
         remove_bundle_dir(&delta_bundle_dir)?;
     }
-    std::fs::create_dir_all(&delta_files_dir)?;
+    kernal_api::platform::fs::create_dir_all(&delta_files_dir)?;
 
     let mut current_paths = BTreeSet::new();
     let mut artifacts = Vec::new();
@@ -525,7 +526,7 @@ pub fn save_rust_plan_delta_local(
         }
         let dst = safe_join(&delta_files_dir, &sel.relative_path)?;
         if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         snapshot_to_bundle(&sel.source_path, &dst)?;
         artifacts.push(snapshot);
@@ -633,7 +634,7 @@ pub(super) fn copy_bundle_file(
     {
         // Replace, like `std::fs::copy` would: a restore may land on an
         // existing target file, and a failed clone may leave a partial one.
-        let _ = std::fs::remove_file(dst);
+        let _ = kernal_api::platform::fs::remove_file(dst);
         mode.copy_file(src, dst)?;
     }
     Ok(())
@@ -641,7 +642,7 @@ pub(super) fn copy_bundle_file(
 
 fn snapshot_to_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
     copy_bundle_file(src, dst, bundle_mode()?)?;
-    let mut permissions = std::fs::metadata(dst)?.permissions();
+    let mut permissions = kernal_api::platform::fs::path_metadata(dst)?.permissions();
     permissions.set_readonly(true);
     std::fs::set_permissions(dst, permissions)
 }
@@ -680,7 +681,7 @@ fn remove_bundle_dir(path: &Path) -> std::io::Result<()> {
     // only adds the owner-write bit — a benign change for files about to be
     // deleted — and on Windows it clears the attribute exactly as before.
     clear_readonly(path)?;
-    std::fs::remove_dir_all(path)
+    kernal_api::platform::fs::remove_dir_all(path)
 }
 
 fn clear_readonly(path: &Path) -> std::io::Result<()> {

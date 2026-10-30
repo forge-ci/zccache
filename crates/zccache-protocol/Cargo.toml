@@ -11,7 +11,7 @@ readme = "README.md"
 description = "Internal daemon protocol types and wire codecs for zccache"
 
 [dependencies]
-kernal-api = { workspace = true, features = ["daemon-frame-v1"] }
+kernal-api = { workspace = true, features = ["daemon-frame-v1", "fs"] }
 zccache-core = { workspace = true }
 zccache-depgraph = { workspace = true }
 

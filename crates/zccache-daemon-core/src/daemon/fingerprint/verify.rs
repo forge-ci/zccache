@@ -42,7 +42,7 @@ pub(super) struct FileObservation {
 /// syscalls per file — the same count as the separate `persist::mtime_ns` and
 /// `persist::file_size` calls this replaced.
 pub(super) fn observe(path: &std::path::Path) -> Option<FileObservation> {
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
     let mtime_ns = metadata
         .modified()
         .ok()

@@ -45,7 +45,7 @@ impl DigestSidecarGuard {
         }
         match &self.previous {
             Some(bytes) => {
-                let _ = std::fs::write(&self.path, bytes);
+                let _ = kernal_api::platform::fs::write_file(&self.path, bytes);
             }
             None => remove_authoritative_blob_digest(blob_path),
         }
@@ -66,13 +66,14 @@ pub(in crate::daemon::server) fn persist_artifact_output(
     payload: &[u8],
 ) -> std::io::Result<()> {
     if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| enrich_persist_err(e, None, cache_path))?;
+        kernal_api::platform::fs::create_dir_all(parent)
+            .map_err(|e| enrich_persist_err(e, None, cache_path))?;
     }
     let tmp_path = artifact_persist_tmp_path(cache_path);
     let mut digest = DigestSidecarGuard::for_blob(cache_path)
         .map_err(|e| enrich_persist_err(e, None, cache_path))?;
     let result = (|| {
-        std::fs::write(&tmp_path, payload)?;
+        kernal_api::platform::fs::write_file(&tmp_path, payload)?;
         crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
         // Write the digest sidecar for cache_path's *final* name while the
         // bytes are still private at tmp_path, so the rename that publishes
@@ -86,7 +87,7 @@ pub(in crate::daemon::server) fn persist_artifact_output(
     })();
     if let Err(e) = result {
         let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         digest.restore_on_failure(cache_path);
         return Err(enrich_persist_err(e, None, cache_path));
     }
@@ -115,7 +116,7 @@ pub(in crate::daemon::server) fn enrich_persist_err(
     let mut msg = String::new();
     if let Some(src) = src {
         use std::fmt::Write as _;
-        let (exists_now, size_now) = match std::fs::metadata(src) {
+        let (exists_now, size_now) = match kernal_api::platform::fs::path_metadata(src) {
             Ok(meta) => (true, Some(meta.len())),
             Err(_) => (false, None),
         };
@@ -258,7 +259,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
     mode: MaterializationMode,
 ) -> std::io::Result<PersistArtifactFileStats> {
     if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent)
+        kernal_api::platform::fs::create_dir_all(parent)
             .map_err(|e| enrich_persist_err(e, Some(source_path), cache_path))?;
     }
 
@@ -292,8 +293,10 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         // A failed reflink attempt may have left a partial tmp file behind
         // (platform-dependent); clear it defensively before the next tier,
         // since std::fs::hard_link fails if the destination already exists.
-        let _ = std::fs::remove_file(&tmp_path);
-        if store_plan.hardlink && std::fs::hard_link(source_path, &tmp_path).is_ok() {
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
+        if store_plan.hardlink
+            && kernal_api::platform::fs::hard_link(source_path, &tmp_path).is_ok()
+        {
             // The hardlink shares the compiler output's inode. Changing its
             // read-only bit through `tmp_path` would also make the still-live
             // source path read-only (and on Windows changes its FILE_ATTRIBUTE_READONLY),
@@ -310,7 +313,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         }
         // The byte-copy tier creates its destination exclusively; clear any
         // leftover temporary (e.g. from a crashed store) first.
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         let copy_bytes = mode.copy_file(source_path, &tmp_path)?;
         crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
         digest.write_for(&tmp_path, cache_path)?;
@@ -325,7 +328,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         Ok(stats) => Ok(stats),
         Err(e) => {
             let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
-            let _ = std::fs::remove_file(&tmp_path);
+            let _ = kernal_api::platform::fs::remove_file(&tmp_path);
             digest.restore_on_failure(cache_path);
             Err(enrich_persist_err(e, Some(source_path), cache_path))
         }

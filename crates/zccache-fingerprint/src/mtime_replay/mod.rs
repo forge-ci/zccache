@@ -232,8 +232,8 @@ fn rel_to_posix(rel: &Path) -> String {
 /// post-edit content (exactly the #1595 stale-object bug).
 fn snapshot_one(absolute: &NormalizedPath, relative: &str) -> Result<Option<MtimeEntry>> {
     let path = absolute.as_path();
-    let before = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
+    let before = match observe_path(path) {
+        Ok(observation) => observation,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(FingerprintError::Io(err)),
     };
@@ -242,27 +242,39 @@ fn snapshot_one(absolute: &NormalizedPath, relative: &str) -> Result<Option<Mtim
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(FingerprintError::Io(err)),
     };
-    let after = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
+    let after = match observe_path(path) {
+        Ok(observation) => observation,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(FingerprintError::Io(err)),
     };
 
-    if before.len() != after.len() {
+    if before.len != after.len {
         return Ok(None);
     }
-    let before_mtime = FileTime::from_last_modification_time(&before);
-    let after_mtime = FileTime::from_last_modification_time(&after);
-    if before_mtime != after_mtime {
+    if before.modified != after.modified {
         return Ok(None);
     }
+    // A non-regular entry, or a host reporting neither a size nor a
+    // modification time, cannot be recorded: the manifest exists to replay a
+    // mtime, so the file is dropped rather than stored with invented values.
+    let (Some(size), Some(after_mtime)) = (after.len, after.modified) else {
+        return Ok(None);
+    };
+    let after_mtime = FileTime::from_system_time(after_mtime);
 
     Ok(Some(MtimeEntry {
         path: relative.to_string(),
-        size: after.len(),
+        size,
         mtime_ns: filetime_to_ns(after_mtime),
         blake3: hash.to_hex(),
     }))
+}
+
+/// Observation of `path`'s final component without following a symlink
+/// (kernal-api `fs` capability), the same view `symlink_metadata` gave this
+/// module: kind, size and modification time, no handle opened.
+fn observe_path(path: &Path) -> std::io::Result<kernal_api::platform::fs::ContextPathMetadata> {
+    kernal_api::platform::fs::context_path_metadata_no_follow(path)
 }
 
 /// `FileTime` -> signed nanoseconds since the Unix epoch, clamped (not
@@ -283,7 +295,11 @@ pub fn write_manifest(path: &Path, manifest: &MtimeManifest) -> Result<()> {
 /// [`FingerprintError::Json`]; a version mismatch as
 /// [`FingerprintError::Manifest`].
 pub fn read_manifest(path: &Path) -> Result<MtimeManifest> {
-    let bytes = std::fs::read(path)?;
+    let bytes = kernal_api::platform::fs::read_context_regular_file_bounded(
+        path,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )?
+    .bytes;
     let manifest: MtimeManifest = serde_json::from_slice(&bytes)?;
     if manifest.version != MANIFEST_VERSION {
         return Err(FingerprintError::Manifest {
@@ -333,14 +349,14 @@ fn replay_one_with(
     }
     let target = workspace.join(&entry.path);
 
-    let meta = match std::fs::symlink_metadata(&target) {
-        Ok(meta) => meta,
+    let observation = match observe_path(&target) {
+        Ok(observation) => observation,
         Err(_) => return ReplayOutcome::Missing,
     };
-    if !meta.is_file() {
+    if observation.kind != kernal_api::platform::fs::ContextPathKind::RegularFile {
         return ReplayOutcome::Missing;
     }
-    if meta.len() != entry.size {
+    if observation.len != Some(entry.size) {
         return ReplayOutcome::SizeMismatch;
     }
 

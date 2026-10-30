@@ -348,7 +348,7 @@ fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     result
 }
@@ -450,7 +450,7 @@ mod tests {
             String::from_utf8_lossy(&old_generated),
             a_text
         );
-        std::fs::write(&depfile, original).expect("dep-info fixture");
+        kernal_api::platform::fs::write_file(&depfile, original).expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
         let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert!(text.contains(&String::from_utf8_lossy(&new_generated).into_owned()));
@@ -473,7 +473,7 @@ mod tests {
             quote_make_depfile_path(a.join("bindgen.rs").to_string_lossy().as_bytes());
         let new_generated =
             quote_make_depfile_path(b.join("bindgen.rs").to_string_lossy().as_bytes());
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &depfile,
             format!(
                 "libsqlite3_sys.d: {}\n# env-dep:OUT_DIR={a_text}\n",
@@ -503,7 +503,7 @@ mod tests {
             "libsqlite3_sys.d: src/lib.rs\n# env-dep:OUT_DIR={}\n",
             a.display()
         );
-        std::fs::write(&depfile, &original).expect("dep-info fixture");
+        kernal_api::platform::fs::write_file(&depfile, &original).expect("dep-info fixture");
         assert!(rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).is_err());
         assert_eq!(
             std::fs::read(&depfile).expect("original dep-info"),
@@ -523,7 +523,7 @@ mod tests {
             quote_make_depfile_path(a.join("private.rs").to_string_lossy().as_bytes());
         let new_generated =
             quote_make_depfile_path(b.join("private.rs").to_string_lossy().as_bytes());
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &depfile,
             format!(
                 "serde.d: {}\n# env-dep:OUT_DIR={a_text}\n",
@@ -551,7 +551,7 @@ mod tests {
         original.extend_from_slice(b"\r\n# env-dep:OUT_DIR=");
         original.extend_from_slice(a.to_string_lossy().as_bytes());
         original.extend_from_slice(b"\r\n");
-        std::fs::write(&depfile, original).expect("dep-info fixture");
+        kernal_api::platform::fs::write_file(&depfile, original).expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
         let bytes = std::fs::read(&depfile).expect("rebased dep-info");
         let new_generated = b.join("bindgen.rs");
@@ -574,7 +574,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let depfile = temp.path().join("libsqlite3_sys.d");
         let original = b"b.d: /checkout-a/out/bindgen.rs\n";
-        std::fs::write(&depfile, original).expect("dep-info fixture");
+        kernal_api::platform::fs::write_file(&depfile, original).expect("dep-info fixture");
         assert!(rehydrate_rustc_out_dir_depfile(
             &depfile,
             Path::new("/checkout-b/out"),
@@ -660,7 +660,7 @@ mod tests {
     fn depfile_rehydration_atomically_replaces_complete_contents() {
         let temp = tempfile::tempdir().unwrap();
         let depfile = temp.path().join("foo.d");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &depfile,
             format!("{STAGED_OUTPUT_REMAP_ROOT}/foo.o: input.h\n"),
         )
@@ -698,13 +698,14 @@ mod tests {
         }
         let temp = tempfile::tempdir().unwrap();
         let private_root = temp.path().join("cache root # $");
-        std::fs::create_dir_all(&private_root).unwrap();
+        kernal_api::platform::fs::create_dir_all(&private_root).unwrap();
         let staged_depfile = private_root.join("custom deps.mk");
         let escaped_staged_output = format!(
             r"{}/cache\ root\ \#\ $$/object\ name\ \#\ $$.o: source.h",
             temp.path().display()
         );
-        std::fs::write(&staged_depfile, format!("{escaped_staged_output}\n")).unwrap();
+        kernal_api::platform::fs::write_file(&staged_depfile, format!("{escaped_staged_output}\n"))
+            .unwrap();
 
         let requested_root = temp.path().join("workspace root # $");
         let requested_depfile: NormalizedPath = requested_root.join("custom deps.mk").into();
@@ -736,7 +737,7 @@ mod tests {
     fn logical_depfile_canonicalization_preserves_non_utf8_bytes() {
         let temp = tempfile::tempdir().unwrap();
         let private_root = temp.path().join("private");
-        std::fs::create_dir_all(&private_root).unwrap();
+        kernal_api::platform::fs::create_dir_all(&private_root).unwrap();
         let staged_depfile = private_root.join("custom.mk");
         let staged_output = private_root.join("libfixture.rlib");
         let requested_depfile: NormalizedPath = temp.path().join("requested/custom.mk").into();
@@ -745,7 +746,7 @@ mod tests {
         bytes.extend_from_slice(staged_depfile.to_string_lossy().as_bytes());
         bytes.extend_from_slice(b": ");
         bytes.extend_from_slice(staged_output.to_string_lossy().as_bytes());
-        std::fs::write(&staged_depfile, bytes).unwrap();
+        kernal_api::platform::fs::write_file(&staged_depfile, bytes).unwrap();
 
         canonicalize_logical_depfile(&staged_depfile, &private_root, &requested_depfile).unwrap();
         let canonical = std::fs::read(&staged_depfile).unwrap();

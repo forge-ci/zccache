@@ -107,7 +107,7 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
                         }
                     }
                     if matches!(depfile_strategy, DepfileStrategy::Injected { .. }) {
-                        let _ = std::fs::remove_file(path);
+                        let _ = kernal_api::platform::fs::remove_file(path);
                     }
                     // A parsed compiler depfile is authoritative: never rescan
                     // includes here (zccache#1668). System headers omitted by
@@ -123,7 +123,7 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
                     used_static_fallback = true;
                     depfile_parse_warning = Some(format!("path={} error={e}", path.display()));
                     if matches!(depfile_strategy, DepfileStrategy::Injected { .. }) {
-                        let _ = std::fs::remove_file(path);
+                        let _ = kernal_api::platform::fs::remove_file(path);
                     }
                     crate::depgraph::scanner::scan_recursive_cached(
                         &source_path,
@@ -136,7 +136,7 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
         DepfileStrategy::InjectedMmd { path } => {
             match crate::depgraph::depfile::parse_depfile_path(path, &source_path, &cwd_path) {
                 Ok(result) => {
-                    let _ = std::fs::remove_file(path);
+                    let _ = kernal_api::platform::fs::remove_file(path);
                     if let Some(compiler_scan) = compiler_dependency_scan {
                         crate::depgraph::depfile::merge_scan_results(result, compiler_scan)
                     } else {
@@ -146,7 +146,7 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
                 Err(e) => {
                     used_static_fallback = true;
                     depfile_parse_warning = Some(format!("path={} error={e}", path.display()));
-                    let _ = std::fs::remove_file(path);
+                    let _ = kernal_api::platform::fs::remove_file(path);
                     let fallback = crate::depgraph::scanner::scan_recursive_cached(
                         &source_path,
                         &include_search,
@@ -219,9 +219,9 @@ mod tests {
         let source = temp.path().join("main.c");
         let header = temp.path().join("system.h");
         let depfile = temp.path().join("main.d");
-        std::fs::write(&source, "#include <system.h>\n").unwrap();
-        std::fs::write(&header, "#define VALUE 1\n").unwrap();
-        std::fs::write(&depfile, [0xff, 0xfe]).unwrap();
+        kernal_api::platform::fs::write_file(&source, "#include <system.h>\n").unwrap();
+        kernal_api::platform::fs::write_file(&header, "#define VALUE 1\n").unwrap();
+        kernal_api::platform::fs::write_file(&depfile, [0xff, 0xfe]).unwrap();
         let header: NormalizedPath = header.into();
 
         let collection = collect_compile_scan(CompileScanRequest {
@@ -262,15 +262,15 @@ mod tests {
         let unlisted = temp.path().join("unlisted.h");
         let sys_header = temp.path().join("sys.h");
         let depfile = temp.path().join("main.d");
-        std::fs::write(
+        kernal_api::platform::fs::write_file(
             &source,
             "#include \"a.h\"\n#include \"unlisted.h\"\n#include <sys.h>\n",
         )
         .unwrap();
-        std::fs::write(&a_header, "#define A 1\n").unwrap();
-        std::fs::write(&unlisted, "#define U 1\n").unwrap();
-        std::fs::write(&sys_header, "#define SYS 1\n").unwrap();
-        std::fs::write(&depfile, "main.o: main.c a.h\n").unwrap();
+        kernal_api::platform::fs::write_file(&a_header, "#define A 1\n").unwrap();
+        kernal_api::platform::fs::write_file(&unlisted, "#define U 1\n").unwrap();
+        kernal_api::platform::fs::write_file(&sys_header, "#define SYS 1\n").unwrap();
+        kernal_api::platform::fs::write_file(&depfile, "main.o: main.c a.h\n").unwrap();
 
         let collection = collect_compile_scan(CompileScanRequest {
             is_rustc: false,

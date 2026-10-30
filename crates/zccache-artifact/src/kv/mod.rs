@@ -312,7 +312,7 @@ fn namespace_gate(dir: &Path) -> &'static zccache_core::blocking_sync::RwLock<()
 fn write_value(dir: &Path, dest: &Path, value: &[u8]) -> KvResult<()> {
     use std::io::Write;
 
-    std::fs::create_dir_all(dir)?;
+    kernal_api::platform::fs::create_dir_all(dir)?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(&encode_header(value))?;
     tmp.write_all(value)?;
@@ -424,7 +424,7 @@ impl KvStore {
     /// over the same directory concurrently.
     pub fn open<P: AsRef<Path>>(dir: P) -> KvResult<Self> {
         let mut dir = NormalizedPath::new(dir.as_ref());
-        std::fs::create_dir_all(&dir)?;
+        kernal_api::platform::fs::create_dir_all(&dir)?;
         // On Windows, normalize to a `\\?\`-prefixed (verbatim) form so that
         // every value path joined off `cache_dir` exceeds `MAX_PATH` safely.
         // No-op on Unix.
@@ -529,7 +529,7 @@ impl KvStore {
     pub fn remove(&self, namespace: &str, key: &Key) -> KvResult<()> {
         check_namespace(namespace)?;
         let path = self.value_path(namespace, key);
-        match std::fs::remove_file(&path) {
+        match kernal_api::platform::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(KvError::Io(e)),
@@ -564,7 +564,7 @@ impl KvStore {
 
         let mut attempt = 1;
         loop {
-            match std::fs::remove_dir_all(dir.as_path()) {
+            match kernal_api::platform::fs::remove_dir_all(dir.as_path()) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(e)

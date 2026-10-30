@@ -53,7 +53,7 @@ pub struct MinidumpHandle {
 /// from a recoverable error that still warrants postmortem).
 pub fn write_crash_dump(panic_info: &str, backtrace: &str) -> Option<NormalizedPath> {
     let crash_dir = crate::core::config::crash_dump_dir();
-    std::fs::create_dir_all(&crash_dir).ok()?;
+    kernal_api::platform::fs::create_dir_all(&crash_dir).ok()?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -80,7 +80,7 @@ pub fn write_crash_dump(panic_info: &str, backtrace: &str) -> Option<NormalizedP
         arch = crate::platform::host::arch(),
         pid = std::process::id(),
     );
-    std::fs::write(&path, content).ok()?;
+    kernal_api::platform::fs::write_file(&path, content.as_bytes()).ok()?;
     Some(path)
 }
 

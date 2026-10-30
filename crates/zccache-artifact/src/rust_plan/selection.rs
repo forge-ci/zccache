@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path};
 
+use kernal_api::platform::fs::{ContextPathKind, DirectoryCursor};
+
 use zccache_core::NormalizedPath;
 
 use super::schema::{
@@ -306,19 +308,23 @@ pub(super) fn collect_files(
         return Ok(());
     }
 
+    // The kernal-api directory cursor owns both the enumeration handle and the
+    // non-following entry classification, so this walk no longer re-derives
+    // directory reading and file typing for the host.
+    let mut cursor = DirectoryCursor::open(root)?;
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        entries.push(entry?);
+    while let Some(entry) = cursor.next_entry()? {
+        entries.push(entry);
     }
-    entries.sort_by_key(|entry| entry.file_name());
+    drop(cursor);
+    entries.sort_by(|a, b| a.file_name().cmp(b.file_name()));
 
     for entry in entries {
         let path = NormalizedPath::new(entry.path());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_files(path.as_path(), files)?;
-        } else if file_type.is_file() {
-            files.push(path);
+        match entry.kind() {
+            ContextPathKind::Directory => collect_files(path.as_path(), files)?,
+            ContextPathKind::RegularFile => files.push(path),
+            ContextPathKind::Symlink | ContextPathKind::Other => {}
         }
     }
     Ok(())

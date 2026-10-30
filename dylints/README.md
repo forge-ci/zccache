@@ -3,6 +3,7 @@
 Custom Rust lints used by this workspace.
 
 - `ban_std_pathbuf`: bans new uses of `std::path::PathBuf` outside the explicit legacy allowlist.
+- `ban_std_fs_outside_adapters`: bans `std::fs` outside the approved platform adapters and the legacy allowlist; kernal-api fs capabilities (durable directory sync, shared append, opaque file identity, mapped-file access, private-directory permissions) replace it.
 - `ban_unrooted_tempdir`: bans tempdir/temp-file creation under `$TMPDIR` instead of `zccache_core::config::default_cache_dir()`.
 - `ban_raw_subprocess_in_daemon`: bans raw subprocess spawns in daemon code paths.
 - `ban_tmp_literal`: bans hardcoded `/tmp` path string literals — they only exist on POSIX (#828).
@@ -15,7 +16,7 @@ Custom Rust lints used by this workspace.
 
 - `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
 
-All eleven libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
+All twelve libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

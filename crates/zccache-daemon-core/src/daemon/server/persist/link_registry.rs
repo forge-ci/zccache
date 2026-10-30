@@ -33,7 +33,7 @@ static OUTPUT_IDS: OnceLock<dashmap::DashMap<NormalizedPath, FileIdentity>> = On
 static WATCHER_AVAILABLE: AtomicBool = AtomicBool::new(true);
 
 fn stat_signature(path: &Path) -> Option<StatSignature> {
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = kernal_api::platform::fs::path_metadata(path).ok()?;
     let mtime = kernal_api::platform::fs::FileTime::from_last_modification_time(&metadata);
     let mtime_ns =
         i128::from(mtime.unix_seconds()) * 1_000_000_000 + i128::from(mtime.nanoseconds());
@@ -154,7 +154,7 @@ impl Drop for AuthoritativeBlobDigest {
                 .map(|bytes| bytes.as_slice() == self.digest.as_slice())
                 .unwrap_or(false);
             if matches {
-                let _ = std::fs::remove_file(path);
+                let _ = kernal_api::platform::fs::remove_file(path);
             }
         }
     }
@@ -216,7 +216,7 @@ fn write_digest_sidecar(
         break (temp_path, result);
     };
     if let Err(error) = result {
-        let _ = std::fs::remove_file(&temp_path);
+        let _ = kernal_api::platform::fs::remove_file(&temp_path);
         return Err(error);
     }
 
@@ -235,7 +235,7 @@ fn replace_digest_sidecar(temp_path: &Path, final_path: &Path) -> std::io::Resul
 /// the rename that would have made the blob visible — avoids leaving a
 /// stray digest sidecar with no corresponding blob.
 pub(in crate::daemon::server) fn remove_authoritative_blob_digest(blob_path: &Path) {
-    let _ = std::fs::remove_file(digest_path(blob_path));
+    let _ = kernal_api::platform::fs::remove_file(digest_path(blob_path));
 }
 
 fn read_authoritative_blob_digest(blob_path: &Path) -> std::io::Result<Option<[u8; 32]>> {
@@ -715,7 +715,7 @@ pub(in crate::daemon::server) fn unregister_blob_id(id: FileIdentity) {
 
 pub(in crate::daemon::server) fn remove_registered_blob(blob_path: &Path) -> std::io::Result<()> {
     let registration = registered_blob_id(blob_path);
-    let was_readonly = std::fs::metadata(blob_path)
+    let was_readonly = kernal_api::platform::fs::path_metadata(blob_path)
         .map(|metadata| crate::platform::fs::permissions::is_sealed(&metadata))
         .unwrap_or(false);
     let restore_readonly = was_readonly || readonly_enabled();
@@ -729,7 +729,7 @@ pub(in crate::daemon::server) fn remove_registered_blob(blob_path: &Path) -> std
     if let Some(id) = registration {
         unregister_blob_id(id);
     }
-    let _ = std::fs::remove_file(digest_path(blob_path));
+    let _ = kernal_api::platform::fs::remove_file(digest_path(blob_path));
     Ok(())
 }
 

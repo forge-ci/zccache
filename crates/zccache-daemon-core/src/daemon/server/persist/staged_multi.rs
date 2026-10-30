@@ -278,7 +278,7 @@ impl StagedMultiUnitPlan {
                 MULTI_PLAN_COUNTER.fetch_add(1, Ordering::Relaxed)
             ))
             .into();
-        if let Err(source) = std::fs::create_dir_all(&root) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(&root) {
             return StagedPlanOutcome::Error(StagedPlanError {
                 reason: StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -361,7 +361,7 @@ impl StagedMultiUnitPlan {
                 .map_err(|error| materialization_error(error, observed))?;
             }
             if let Some(parent) = output.requested.parent() {
-                std::fs::create_dir_all(parent)
+                kernal_api::platform::fs::create_dir_all(parent)
                     .map_err(|error| materialization_error(error, observed))?;
             }
             let output_stats = materialize_independent_with_mode(
@@ -407,32 +407,34 @@ impl StagedMultiUnitPlan {
     pub(in crate::daemon::server) fn validated_output_sizes(&self) -> std::io::Result<Vec<u64>> {
         self.outputs
             .iter()
-            .map(|output| match std::fs::metadata(&output.staged) {
-                Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(metadata.len()),
-                Ok(metadata) if metadata.is_file() => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "compiler produced empty output {}",
-                        output.requested.display()
-                    ),
-                )),
-                Ok(_) => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "compiler produced non-file output {}",
-                        output.requested.display()
-                    ),
-                )),
-                Err(error) => Err(std::io::Error::new(
-                    error.kind(),
-                    format!("compiler omitted {}: {error}", output.requested.display()),
-                )),
-            })
+            .map(
+                |output| match kernal_api::platform::fs::path_metadata(&output.staged) {
+                    Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(metadata.len()),
+                    Ok(metadata) if metadata.is_file() => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "compiler produced empty output {}",
+                            output.requested.display()
+                        ),
+                    )),
+                    Ok(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "compiler produced non-file output {}",
+                            output.requested.display()
+                        ),
+                    )),
+                    Err(error) => Err(std::io::Error::new(
+                        error.kind(),
+                        format!("compiler omitted {}: {error}", output.requested.display()),
+                    )),
+                },
+            )
             .collect()
     }
 
     pub(in crate::daemon::server) fn cleanup(&self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
+        kernal_api::platform::fs::remove_dir_all(&self.root).or_else(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 Ok(())
             } else {
@@ -869,7 +871,7 @@ mod tests {
             StagedPlanOutcome::Enabled(plan) => plan,
             other => panic!("expected enabled plan, got {other:?}"),
         };
-        std::fs::write(&plan.outputs[0].staged, []).unwrap();
+        kernal_api::platform::fs::write_file(&plan.outputs[0].staged, []).unwrap();
 
         let error = plan.validated_output_sizes().unwrap_err();
 

@@ -36,7 +36,7 @@ pub fn is_ready(symbols_dir: &Path) -> bool {
 /// Drop the `.ready` sentinel into `symbols_dir`. Caller has already
 /// extracted the archive into this directory.
 pub fn mark_ready(symbols_dir: &Path) -> std::io::Result<()> {
-    std::fs::write(symbols_dir.join(READY_SENTINEL), b"")
+    kernal_api::platform::fs::write_file(symbols_dir.join(READY_SENTINEL).as_path(), b"")
 }
 
 /// Write a `<dump>.symref` next to `dump_path` whose contents are the
@@ -48,7 +48,7 @@ pub fn write_symref_sidecar(dump_path: &Path, symbols_dir: &Path) -> std::io::Re
     sidecar.push(".symref");
     let sidecar_path = PathBuf::from(sidecar);
     let body = format!("{}\n", symbols_dir.display());
-    std::fs::write(&sidecar_path, body)?;
+    kernal_api::platform::fs::write_file(&sidecar_path, body.as_bytes())?;
     Ok(sidecar_path)
 }
 
@@ -66,7 +66,7 @@ mod tests {
     fn ready_sentinel_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("symbols");
-        std::fs::create_dir_all(&dir).unwrap();
+        kernal_api::platform::fs::create_dir_all(&dir).unwrap();
         assert!(!is_ready(&dir));
         mark_ready(&dir).unwrap();
         assert!(is_ready(&dir));
@@ -76,12 +76,15 @@ mod tests {
     fn symref_sidecar_records_absolute_path() {
         let tmp = tempfile::tempdir().unwrap();
         let dump = tmp.path().join("crash-1700000000.dmp");
-        std::fs::write(&dump, b"fake dump").unwrap();
+        kernal_api::platform::fs::write_file(&dump, b"fake dump").unwrap();
         let symbols = tmp.path().join("symbols").join("1.7.2-host");
-        std::fs::create_dir_all(&symbols).unwrap();
+        kernal_api::platform::fs::create_dir_all(&symbols).unwrap();
         let sidecar = write_symref_sidecar(&dump, &symbols).unwrap();
         assert_eq!(sidecar.file_name().unwrap(), "crash-1700000000.dmp.symref");
-        let content = std::fs::read_to_string(&sidecar).unwrap();
+        let observation =
+            kernal_api::platform::fs::read_context_regular_file_bounded(&sidecar, 4 * 1024)
+                .unwrap();
+        let content = String::from_utf8(observation.bytes).unwrap();
         assert!(content.contains(symbols.to_str().unwrap()));
         assert!(content.ends_with('\n'));
     }

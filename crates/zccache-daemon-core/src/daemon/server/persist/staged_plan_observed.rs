@@ -2,6 +2,7 @@
 
 use super::staged_plan::StagedCompilePlan;
 use crate::core::path::NormalizedPath;
+use kernal_api::platform::fs::{ContextPathKind, DirectoryCursor};
 use std::io;
 
 impl StagedCompilePlan {
@@ -31,28 +32,35 @@ impl StagedCompilePlan {
             };
             let mut prefix = declared_name.to_os_string();
             prefix.push(".");
-            let candidates: Vec<_> = std::fs::read_dir(&self.root)?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.is_file()
-                        && !declared_staged_paths
-                            .iter()
-                            .any(|declared| declared.as_path() == path)
-                        && path.file_name().is_some_and(|name| {
-                            name.to_string_lossy()
-                                .starts_with(prefix.to_string_lossy().as_ref())
-                        })
-                })
-                .collect();
+            let mut cursor = DirectoryCursor::open(&self.root)?;
+            let mut candidates: Vec<NormalizedPath> = Vec::new();
+            while let Some(entry) = cursor.next_entry()? {
+                if entry.kind() != ContextPathKind::RegularFile {
+                    continue;
+                }
+                let path = entry.path().to_path_buf();
+                if declared_staged_paths
+                    .iter()
+                    .any(|declared| declared.as_path() == path.as_path())
+                {
+                    continue;
+                }
+                let matches_prefix = path.file_name().is_some_and(|name| {
+                    name.to_string_lossy()
+                        .starts_with(prefix.to_string_lossy().as_ref())
+                });
+                if matches_prefix {
+                    candidates.push(path.into());
+                }
+            }
             if candidates.len() != 1 {
                 continue;
             }
             let observed = &candidates[0];
-            let Some(observed_name) = observed.file_name() else {
+            let Some(observed_name) = observed.as_path().file_name() else {
                 continue;
             };
-            output.staged = observed.into();
+            output.staged = observed.clone();
             output.requested = output.requested.parent().map_or_else(
                 || output.requested.clone(),
                 |parent| parent.join(observed_name).into(),

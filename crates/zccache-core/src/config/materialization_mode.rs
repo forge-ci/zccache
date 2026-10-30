@@ -145,7 +145,7 @@ fn byte_copy(source: &std::path::Path, destination: &std::path::Path) -> std::io
     // Only a file this call created is removed on failure.
     let result = fill(&mut reader, writer, &metadata, destination);
     if result.is_err() {
-        let _ = std::fs::remove_file(destination);
+        let _ = kernal_api::platform::fs::remove_file(destination);
     }
     result
 }

@@ -347,7 +347,7 @@ impl SystemIncludeCache {
     pub fn get(&self, compiler: &Path) -> Option<&[NormalizedPath]> {
         let key = NormalizedPath::new(compiler);
         let entry = self.cache.get(&key)?;
-        let metadata = std::fs::metadata(compiler).ok()?;
+        let metadata = kernal_api::platform::fs::path_metadata(compiler).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
         if !entry.paths.is_empty() && entry.mtime == mtime && entry.size == size {
@@ -369,7 +369,7 @@ impl SystemIncludeCache {
         if paths.is_empty() {
             return;
         }
-        let Ok(metadata) = std::fs::metadata(compiler.as_path()) else {
+        let Ok(metadata) = kernal_api::platform::fs::path_metadata(compiler.as_path()) else {
             return;
         };
         let Ok(mtime) = metadata.modified() else {
@@ -394,7 +394,7 @@ impl SystemIncludeCache {
         let compiler_key = NormalizedPath::new(compiler);
         let stat_match = self.cache.get(&compiler_key).is_some_and(|entry| {
             !entry.paths.is_empty()
-                && std::fs::metadata(compiler)
+                && kernal_api::platform::fs::path_metadata(compiler)
                     .ok()
                     .and_then(|m| m.modified().ok().map(|mt| (mt, m.len())))
                     .is_some_and(|(mt, size)| mt == entry.mtime && size == entry.size)
@@ -486,7 +486,7 @@ impl SystemIncludeCache {
             .map_err(|e| std::io::Error::other(format!("bincode serialize: {e}")))?;
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         let name = path
             .file_name()
@@ -496,7 +496,7 @@ impl SystemIncludeCache {
 
         let result = write_atomic_durable(&tmp, path, &bytes);
         if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = kernal_api::platform::fs::remove_file(&tmp);
         }
         if result.is_ok() {
             tracing::info!(
@@ -570,7 +570,7 @@ fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Res
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(tmp, target)?;
+    kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
         if let Ok(dir) = std::fs::File::open(parent) {
             let _ = dir.sync_all();
@@ -660,7 +660,7 @@ End of search list.
     }
 
     fn touch(path: &Path, content: &[u8]) {
-        std::fs::write(path, content).unwrap();
+        kernal_api::platform::fs::write_file(path, content).unwrap();
     }
 
     #[test]
@@ -783,7 +783,7 @@ End of search list.
         let compiler = tmp.path().join("clang++");
         let snapshot = tmp.path().join("system_includes.bin");
         touch(&compiler, b"#!/bin/sh\n# compiler\n");
-        let metadata = std::fs::metadata(&compiler).unwrap();
+        let metadata = kernal_api::platform::fs::path_metadata(&compiler).unwrap();
         let mut cache = SystemIncludeCache::new();
         cache.cache.insert(
             NormalizedPath::new(&compiler),
@@ -812,7 +812,7 @@ End of search list.
             entries: Vec::new(),
         };
         let bytes = bincode::serialize(&bad).unwrap();
-        std::fs::write(&snapshot, bytes).unwrap();
+        kernal_api::platform::fs::write_file(&snapshot, bytes).unwrap();
 
         let err = SystemIncludeCache::load_from_disk(&snapshot).unwrap_err();
         assert!(err.to_string().contains("version mismatch"));
@@ -1002,7 +1002,7 @@ InstalledDir: /usr/bin
         fn insert_marks_dirty_until_taken() {
             let tmp = tempfile::tempdir().unwrap();
             let compiler = tmp.path().join("cc");
-            std::fs::write(&compiler, b"fake compiler").unwrap();
+            kernal_api::platform::fs::write_file(&compiler, b"fake compiler").unwrap();
             let mut cache = SystemIncludeCache::new();
 
             cache.insert(
@@ -1018,7 +1018,7 @@ InstalledDir: /usr/bin
         fn insert_with_empty_paths_does_not_mark_dirty() {
             let tmp = tempfile::tempdir().unwrap();
             let compiler = tmp.path().join("cc");
-            std::fs::write(&compiler, b"fake compiler").unwrap();
+            kernal_api::platform::fs::write_file(&compiler, b"fake compiler").unwrap();
             let mut cache = SystemIncludeCache::new();
 
             cache.insert(NormalizedPath::new(&compiler), Vec::new());
@@ -1032,7 +1032,7 @@ InstalledDir: /usr/bin
         fn merge_from_does_not_mark_dirty() {
             let tmp = tempfile::tempdir().unwrap();
             let compiler = tmp.path().join("cc");
-            std::fs::write(&compiler, b"fake compiler").unwrap();
+            kernal_api::platform::fs::write_file(&compiler, b"fake compiler").unwrap();
             let mut loaded = SystemIncludeCache::new();
             loaded.insert(
                 NormalizedPath::new(&compiler),

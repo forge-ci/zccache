@@ -184,11 +184,10 @@ pub(super) fn write_session_log(sessions: &SessionManager, session_id: &SessionI
     if let Some(session) = sessions.get(session_id) {
         if let Some(ref log_path) = session.log_file {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_path)
-            {
+            // Shared append is a kernal-api capability: the facade owns the
+            // create-without-truncate open and the Windows sharing mode that
+            // lets a second writer in.
+            if let Ok(mut f) = kernal_api::platform::fs::open_shared_append(log_path.as_path()) {
                 let _ = writeln!(f, "{message}");
             }
         }

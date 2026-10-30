@@ -1,0 +1,16 @@
+error: `std::fs` is not allowed outside the approved platform adapters; use the kernal-api filesystem capability that owns durability, identity and permission semantics
+  --> $DIR/disallowed.rs:2:21
+   |
+LL |     let _contents = std::fs::read_to_string("src/foo.c");
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_std_fs_outside_adapters)]` on by default
+
+error: `std::fs` is not allowed outside the approved platform adapters; use the kernal-api filesystem capability that owns durability, identity and permission semantics
+  --> $DIR/disallowed.rs:3:25
+   |
+LL |     let _handle: Option<std::fs::File> = None;
+   |                         ^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

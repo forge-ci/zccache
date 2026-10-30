@@ -57,7 +57,7 @@ struct PrivateHeaderTrace {
 
 impl Drop for PrivateHeaderTrace {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(self.path.as_path());
+        let _ = kernal_api::platform::fs::remove_file(self.path.as_path());
     }
 }
 

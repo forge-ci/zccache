@@ -1,0 +1,24 @@
+[package]
+name = "ban_std_fs_outside_adapters"
+# 2026-10-28: starts at 0.1.0. Bump the version on any change to
+# src/allowlist.txt: setup-soldr's dylint cache key hashes the manifest but not
+# the allowlist, so a content-only edit would otherwise re-use the cached
+# compiled plugin and the OLD allowlist would stay in effect.
+version = "0.1.0"
+description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.0.3"
+
+[dev-dependencies]
+dylint_testing = "=6.0.3"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]

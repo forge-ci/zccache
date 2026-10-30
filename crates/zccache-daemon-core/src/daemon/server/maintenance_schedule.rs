@@ -442,7 +442,7 @@ impl MaintenanceSchedule {
                         };
                         waited = Duration::ZERO;
                         if let Some(parent) = path.parent() {
-                            std::fs::create_dir_all(parent).ok();
+                            zccache_core::config::create_dir_all_private(parent).ok();
                         }
                         let save_path = path.clone();
                         match run_depgraph_save_with(

@@ -235,7 +235,7 @@ impl Drop for FsFixture {
                     "select vdisk file=\"{}\"\r\ndetach vdisk\r\n",
                     image.as_path().display()
                 );
-                let _ = std::fs::write(&script, body);
+                let _ = kernal_api::platform::fs::write_file(&script, body);
                 let _ = Command::new("diskpart")
                     .args(["/s", &script.to_string_lossy()])
                     .output_for(zccache_core::wait::PROBE);
@@ -290,7 +290,7 @@ fn windows_vhd_sized(name: &'static str, filesystem: &str, maximum_mb: u32) -> F
         .map_err(|error| skip(name, error.to_string()))?;
     let image = temp.path().join(format!("{filesystem}.vhdx"));
     let mount = temp.path().join("mount");
-    std::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
+    kernal_api::platform::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
     let script = temp.path().join("create.txt");
     let body = format!(
         "create vdisk file=\"{}\" maximum={maximum_mb} type=expandable\r\nselect vdisk file=\"{}\"\r\nattach vdisk\r\ncreate partition primary\r\nformat fs={} quick label=zccache\r\nassign mount=\"{}\"\r\n",
@@ -299,12 +299,15 @@ fn windows_vhd_sized(name: &'static str, filesystem: &str, maximum_mb: u32) -> F
         filesystem,
         mount.display()
     );
-    std::fs::write(&script, body).map_err(|error| skip(name, error.to_string()))?;
+    kernal_api::platform::fs::write_file(&script, body)
+        .map_err(|error| skip(name, error.to_string()))?;
     let output = Command::new("diskpart")
         .args(["/s", &script.to_string_lossy()])
         .output_for(zccache_core::wait::PROBE)
         .map_err(|error| skip(name, format!("diskpart unavailable: {error}")))?;
-    if output.exit.raw_code() != 0 || std::fs::write(mount.join("probe"), b"probe").is_err() {
+    if output.exit.raw_code() != 0
+        || kernal_api::platform::fs::write_file(mount.join("probe"), b"probe").is_err()
+    {
         return Err(skip(name, command_error("diskpart", &output)));
     }
     Ok(FsFixture {
@@ -361,7 +364,7 @@ fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult
         return Err(skip(name, command_error(mkfs, &format_output)));
     }
     let mount = temp.path().join("mount");
-    std::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
+    kernal_api::platform::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
     let mount_str = mount.to_string_lossy().into_owned();
     // FAT-family filesystems (vfat) have no POSIX permission bits: every
     // file is owned by whoever mounted it, and a later `chmod` on the
@@ -406,7 +409,7 @@ fn mac_image(name: &'static str, filesystem: &str) -> FixtureResult {
         .tempdir()
         .map_err(|error| skip(name, error.to_string()))?;
     let mount = temp.path().join("mount");
-    std::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
+    kernal_api::platform::fs::create_dir(&mount).map_err(|error| skip(name, error.to_string()))?;
     let image = create_macos_image(&temp, filesystem).map_err(|reason| skip(name, reason))?;
     let attach = Command::new("hdiutil")
         .args([
@@ -564,8 +567,8 @@ mod log_audit_tests {
     fn unknown_event_helper_is_strict_and_has_a_named_escape_hatch() {
         let root = tempfile::tempdir().unwrap();
         let logs = root.path().join("logs");
-        std::fs::create_dir_all(&logs).unwrap();
-        std::fs::write(
+        kernal_api::platform::fs::create_dir_all(&logs).unwrap();
+        kernal_api::platform::fs::write_file(
             logs.join("compile_journal.jsonl"),
             "{\"outcome\":\"miss\",\"miss_reason\":\"unknown\"}\n",
         )

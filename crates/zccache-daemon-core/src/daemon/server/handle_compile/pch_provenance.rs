@@ -77,7 +77,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
     let bytes = std::fs::read(pch)?;
     let records = imports(&bytes)?;
     if records.is_empty() {
-        match std::fs::remove_file(sidecar_path(logical_output)) {
+        match kernal_api::platform::fs::remove_file(sidecar_path(logical_output)) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -146,7 +146,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
     let parent = destination
         .parent()
         .ok_or_else(|| invalid("sidecar has no parent directory"))?;
-    std::fs::create_dir_all(parent)?;
+    kernal_api::platform::fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer(temporary.as_file_mut(), &provenance).map_err(invalid)?;
     temporary.as_file_mut().flush()?;

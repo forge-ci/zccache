@@ -1478,9 +1478,9 @@ dependencies = [
 
 [[package]]
 name = "kernal-api"
-version = "0.1.33"
+version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12e468c71f4b47168e9897f04c3ef23c863aad335d0a387888b44873a6f2428d"
+checksum = "3c0c34b10de410310873a124f42f7c1cba76d1bc0f8d11112fb0fcc53fadc1ae"
 dependencies = [
  "blake3",
  "crash-handler",
@@ -3971,6 +3971,7 @@ dependencies = [
 name = "zccache-audit"
 version = "1.15.9"
 dependencies = [
+ "kernal-api",
  "serde",
  "serde_json",
  "tempfile",
@@ -4035,6 +4036,7 @@ dependencies = [
 name = "zccache-compile-trace"
 version = "1.15.9"
 dependencies = [
+ "kernal-api",
  "zccache-audit",
  "zccache-core",
 ]
@@ -4256,6 +4258,7 @@ dependencies = [
 name = "zccache-symbols"
 version = "1.15.9"
 dependencies = [
+ "kernal-api",
  "tempfile",
  "zccache-core",
 ]
@@ -4264,6 +4267,7 @@ dependencies = [
 name = "zccache-test-support"
 version = "1.15.9"
 dependencies = [
+ "kernal-api",
  "tempfile",
  "zccache-audit",
  "zccache-core",

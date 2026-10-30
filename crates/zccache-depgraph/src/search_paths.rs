@@ -44,7 +44,7 @@ impl IncludeSearchPaths {
             paths
                 .iter()
                 .map(|path| {
-                    std::fs::canonicalize(path.as_path())
+                    kernal_api::platform::fs::canonical_context_path(path.as_path())
                         .map(NormalizedPath::from)
                         .unwrap_or_else(|_| path.clone())
                 })

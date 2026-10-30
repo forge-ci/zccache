@@ -221,7 +221,7 @@ pub(super) fn remove_staged_tree(path: &Path) -> io::Result<u64> {
         for entry in fs::read_dir(path)?.flatten() {
             removed += remove_staged_tree(&entry.path())?;
         }
-        fs::remove_dir(path)?;
+        kernal_api::platform::fs::remove_dir(path)?;
         return Ok(removed);
     }
     let size = metadata.len();
@@ -260,8 +260,9 @@ mod bounded_lock_tests {
     fn maintenance_contention_defers_eviction_without_waiting_for_the_reader() {
         let directory = tempfile::tempdir().unwrap();
         let root = staged_root(directory.path());
-        fs::create_dir_all(root.join("aa")).unwrap();
-        fs::write(root.join("aa/payload"), b"preserve while in use").unwrap();
+        kernal_api::platform::fs::create_dir_all(root.join("aa")).unwrap();
+        kernal_api::platform::fs::write_file(root.join("aa/payload"), b"preserve while in use")
+            .unwrap();
         let file = open_store_lock(&root).unwrap();
         let reader = kernal_api::platform::fs::try_lock_shared(&file).unwrap();
         let expected = HashMap::from([("aa".to_string(), None)]);

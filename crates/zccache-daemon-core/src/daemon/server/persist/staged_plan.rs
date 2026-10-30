@@ -199,7 +199,7 @@ impl StagedCompilePlan {
                 PLAN_COUNTER.fetch_add(1, Ordering::Relaxed)
             ))
             .into();
-        if let Err(source) = std::fs::create_dir_all(&root) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(&root) {
             return StagedPlanOutcome::Error(planning_error(
                 StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -363,7 +363,7 @@ impl StagedCompilePlan {
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
-            let _ = std::fs::remove_dir_all(&root);
+            let _ = kernal_api::platform::fs::remove_dir_all(&root);
         }
         result.unwrap_or_else(StagedPlanOutcome::Error)
     }
@@ -409,7 +409,7 @@ impl StagedCompilePlan {
                 PLAN_COUNTER.fetch_add(1, Ordering::Relaxed)
             ))
             .into();
-        if let Err(source) = std::fs::create_dir_all(&root) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(&root) {
             return StagedPlanOutcome::Error(planning_error(
                 StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -535,7 +535,7 @@ impl StagedCompilePlan {
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
-            let _ = std::fs::remove_dir_all(&root);
+            let _ = kernal_api::platform::fs::remove_dir_all(&root);
         }
         result.unwrap_or_else(StagedPlanOutcome::Error)
     }
@@ -559,7 +559,7 @@ impl StagedCompilePlan {
                 PLAN_COUNTER.fetch_add(1, Ordering::Relaxed)
             ))
             .into();
-        if let Err(source) = std::fs::create_dir_all(&root) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(&root) {
             return StagedPlanOutcome::Error(planning_error(
                 StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -606,7 +606,7 @@ impl StagedCompilePlan {
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
-            let _ = std::fs::remove_dir_all(&root);
+            let _ = kernal_api::platform::fs::remove_dir_all(&root);
         }
         result.unwrap_or_else(StagedPlanOutcome::Error)
     }
@@ -634,7 +634,7 @@ impl StagedCompilePlan {
                 PLAN_COUNTER.fetch_add(1, Ordering::Relaxed)
             ))
             .into();
-        if let Err(source) = std::fs::create_dir_all(&root) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(&root) {
             return StagedPlanOutcome::Error(planning_error(
                 StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -712,7 +712,7 @@ impl StagedCompilePlan {
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
-            let _ = std::fs::remove_dir_all(&root);
+            let _ = kernal_api::platform::fs::remove_dir_all(&root);
         }
         result.unwrap_or_else(StagedPlanOutcome::Error)
     }
@@ -830,7 +830,7 @@ impl StagedCompilePlan {
                 .map_err(|error| materialization_error(error, stats))?;
             }
             if let Some(parent) = output.requested.parent() {
-                std::fs::create_dir_all(parent)
+                kernal_api::platform::fs::create_dir_all(parent)
                     .map_err(|error| materialization_error(error, stats))?;
             }
             let output_stats = crate::daemon::server::persist::materialize_independent_with_mode(
@@ -904,7 +904,7 @@ impl StagedCompilePlan {
     }
 
     pub(in crate::daemon::server) fn cleanup(&self) -> io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
+        kernal_api::platform::fs::remove_dir_all(&self.root).or_else(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 Ok(())
             } else {

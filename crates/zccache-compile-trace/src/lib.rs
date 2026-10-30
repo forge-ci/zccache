@@ -67,7 +67,7 @@ fn init() -> Option<Mutex<std::fs::File>> {
     let path = std::env::var_os(ENV_VAR)?;
     let path = PathBuf::from(path);
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = kernal_api::platform::fs::create_dir_all(parent);
     }
     match std::fs::OpenOptions::new()
         .create(true)

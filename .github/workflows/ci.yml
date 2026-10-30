@@ -227,6 +227,9 @@ jobs:
       - name: Check Dylint Library Formatting (ban_std_pathbuf)
         working-directory: dylints/ban_std_pathbuf
         run: soldr cargo fmt --all -- --check
+      - name: Check Dylint Library Formatting (ban_std_fs_outside_adapters)
+        working-directory: dylints/ban_std_fs_outside_adapters
+        run: soldr cargo fmt --all -- --check
       - name: Check Dylint Library Formatting (ban_unrooted_tempdir)
         working-directory: dylints/ban_unrooted_tempdir
         run: soldr cargo fmt --all -- --check
@@ -246,6 +249,15 @@ jobs:
         # All lint libraries share one target dir, so their common
         # dylint_linting / clippy_utils / dylint_testing deps build once.
         working-directory: dylints/ban_std_pathbuf
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
+        run: |
+          export PATH="${DYLINT_CARGO_SHIM}:${PATH}"
+          export RUSTC="$(soldr rustup which --toolchain nightly-2026-05-28 rustc)"
+          export RUSTUP_TOOLCHAIN=nightly-2026-05-28
+          soldr rustup run nightly-2026-05-28 cargo test
+      - name: Test Dylint Library (ban_std_fs_outside_adapters)
+        working-directory: dylints/ban_std_fs_outside_adapters
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
         run: |
