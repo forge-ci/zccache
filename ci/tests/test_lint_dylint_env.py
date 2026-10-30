@@ -27,7 +27,7 @@ def test_setup_soldr_run_leaves_the_dylint_scope_to_soldr(monkeypatch) -> None:
     """SOLDR_DYLINT_TOOLCHAIN marks a *nested* Dylint scope. Under setup-soldr it
     must be absent, or soldr never writes the success marker and setup-soldr
     skips the dylint-cache and dylint-output-cache saves."""
-    for env in _captured_envs(monkeypatch, "nightly-2026-05-28"):
+    for env in _captured_envs(monkeypatch, "nightly-2026-08-15"):
         assert "SOLDR_DYLINT_TOOLCHAIN" not in env
 
 

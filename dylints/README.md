@@ -15,14 +15,14 @@ Custom Rust lints used by this workspace.
 
 - `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
 
-All eleven libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
+All eleven libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 
 Run from the repository root:
 
 ```bash
-env -u RUSTUP_TOOLCHAIN -u RUSTFLAGS SOLDR_DYLINT_TOOLCHAIN=nightly-2026-05-28 soldr dylint prepare
+env -u RUSTUP_TOOLCHAIN -u RUSTFLAGS SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare
 ./lint
 ```
 
