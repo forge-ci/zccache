@@ -673,6 +673,40 @@ impl HostFamily {
     }
 }
 
+/// Dylint's own truthiness rule (`dylint_internal::env::enabled`): set and
+/// not `"0"`.
+fn dylint_env_enabled(env: &[(String, String)], name: &str) -> bool {
+    env.iter().any(|(key, value)| key == name && value != "0")
+}
+
+/// Whether `dylint-link` writes the `<crate>@<toolchain>` copy itself.
+///
+/// zccache#2023: Dylint 6.2.0's `dylint-link` skips the copy while
+/// `cargo-dylint` builds libraries (`DYLINT_BUILDING_LIBRARIES`) and leaves
+/// it to `cargo-dylint` after the build, unless
+/// `DYLINT_LINK_ENABLE_COPY_LIBRARY` forces it back on. Dylint 6.0.x never
+/// sets `DYLINT_BUILDING_LIBRARIES` and always copies, so this is `true`
+/// for it.
+fn dylint_link_writes_toolchain_copy(env: &[(String, String)]) -> bool {
+    !dylint_env_enabled(env, "DYLINT_BUILDING_LIBRARIES")
+        || dylint_env_enabled(env, "DYLINT_LINK_ENABLE_COPY_LIBRARY")
+}
+
+/// A `dylint-link` cdylib whose linker writes no toolchain copy: its output
+/// set is the cdylib alone, which is complete.
+fn dylint_link_skips_toolchain_copy(
+    rustc_args: &crate::depgraph::RustcParsedArgs,
+    client_env: Option<&[(String, String)]>,
+) -> bool {
+    let is_dylint_link = rustc_args
+        .linker
+        .as_ref()
+        .and_then(|linker| linker.file_stem())
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("dylint-link"));
+    is_dylint_link && client_env.is_some_and(|env| !dylint_link_writes_toolchain_copy(env))
+}
+
 /// The `<crate>@<toolchain>` copy `dylint-link` writes beside the lint
 /// cdylib — `lib`-prefixed on unix, bare on Windows — the second half of
 /// the Dylint output set, without which a replayed hit would leave dylint
@@ -701,6 +735,9 @@ fn dylint_library_sidecar_output_path(
         return None;
     }
     let env = client_env?;
+    if !dylint_link_writes_toolchain_copy(env) {
+        return None;
+    }
     let env_value = |name: &str| {
         env.iter()
             .find_map(|(key, value)| (key == name).then_some(value.as_str()))
@@ -881,6 +918,7 @@ pub(super) fn dylint_cdylib_has_complete_output_identity(
     client_env: Option<&[(String, String)]>,
 ) -> bool {
     rustc_args.crate_types != ["cdylib"]
+        || dylint_link_skips_toolchain_copy(rustc_args, client_env)
         || dylint_library_sidecar_output_path(
             rustc_args,
             primary_output_path,
