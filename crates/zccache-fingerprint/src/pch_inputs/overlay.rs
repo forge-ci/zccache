@@ -23,10 +23,13 @@ pub fn write_pch_overlay(
     plan: &PchServePlan,
     directory: &Path,
 ) -> Result<NormalizedPath, PchRefusal> {
-    let directory = std::fs::canonicalize(directory).map_err(|error| PchRefusal {
-        path: directory.to_string_lossy().into_owned(),
-        reason: PchRefusalReason::ReplayFailed(error.to_string()),
-    })?;
+    let directory =
+        kernal_api::platform::fs::canonical_context_path(directory).map_err(|error| {
+            PchRefusal {
+                path: directory.to_string_lossy().into_owned(),
+                reason: PchRefusalReason::ReplayFailed(error.to_string()),
+            }
+        })?;
     // LLVM's VFS uses ordinary Windows absolute names, including UNC names.
     let directory = NormalizedPath::new(zccache_core::path::strip_verbatim_prefix(&directory));
     let mut roots = Vec::with_capacity(plan.replays.len());

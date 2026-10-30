@@ -86,7 +86,7 @@ where
         // age reclaims it regardless of what currently holds that number.
         let expired = dir_is_older_than(&path, max_age);
         if !is_alive(pid) || expired {
-            match std::fs::remove_dir_all(&path) {
+            match kernal_api::platform::fs::remove_dir_all(&path) {
                 Ok(()) => {
                     cleaned += 1;
                     tracing::info!(
@@ -114,7 +114,7 @@ where
 /// costs disk until the next sweep; reclaiming a live daemon's depfile
 /// directory breaks its build. Same bias as the staging-root age gate.
 fn dir_is_older_than(path: &Path, max_age: Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = kernal_api::platform::fs::path_metadata(path) else {
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -136,7 +136,7 @@ fn cleanup_legacy_temp_cache_dir(temp_root: &Path, current_cache_dir: &Path) -> 
         return 0;
     }
 
-    match std::fs::remove_dir_all(&legacy_cache_dir) {
+    match kernal_api::platform::fs::remove_dir_all(&legacy_cache_dir) {
         Ok(()) => {
             tracing::info!(path = %legacy_cache_dir.display(), "removed legacy temp cache dir");
             1
@@ -182,7 +182,7 @@ where
             continue;
         }
 
-        match std::fs::remove_dir_all(&path) {
+        match kernal_api::platform::fs::remove_dir_all(&path) {
             Ok(()) => {
                 cleaned += 1;
                 tracing::info!(path = %path.display(), "removed legacy temp depfile dir");
@@ -214,11 +214,11 @@ fn path_is_or_contains(parent: &Path, child: &Path) -> bool {
         return true;
     }
 
-    let parent = match std::fs::canonicalize(parent) {
+    let parent = match kernal_api::platform::fs::canonical_context_path(parent) {
         Ok(parent) => parent,
         Err(_) => return false,
     };
-    std::fs::canonicalize(child)
+    kernal_api::platform::fs::canonical_context_path(child)
         .map(|child| child.starts_with(parent))
         .unwrap_or(false)
 }

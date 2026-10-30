@@ -54,7 +54,8 @@ fn collect_inputs(
         let bytes = std::fs::read(pch).map_err(|error| fail(error.to_string()))?;
         let records = parse_pch_inputs(&bytes).map_err(|error| fail(error.to_string()))?;
         if records.is_some() {
-            let metadata = std::fs::metadata(pch).map_err(|error| fail(error.to_string()))?;
+            let metadata = kernal_api::platform::fs::path_metadata(pch)
+                .map_err(|error| fail(error.to_string()))?;
             let seconds =
                 kernal_api::platform::fs::FileTime::from_last_modification_time(&metadata)
                     .unix_seconds();

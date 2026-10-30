@@ -125,10 +125,11 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
             "metadata cache save during Clear failed: {e}"
         );
     }
-    let _ = std::fs::remove_file(state.metadata_path.as_path());
+    let _ = kernal_api::platform::fs::remove_file(state.metadata_path.as_path());
 
     // Delete on-disk depgraph snapshot.
-    let _ = std::fs::remove_file(depgraph_file_path_for_cache_dir(&state.cache_dir));
+    let _ =
+        kernal_api::platform::fs::remove_file(depgraph_file_path_for_cache_dir(&state.cache_dir));
 
     // Purge the CLI-side meson-configure cache (issue #710). The daemon
     // does not write this directory itself — `zccache meson configure`
@@ -138,7 +139,7 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     // on the next configure-cache hit. Best-effort: silently skip if the
     // directory does not exist.
     if let Some(cache_root) = state.artifact_dir.parent() {
-        let _ = std::fs::remove_dir_all(cache_root.join("meson-configure"));
+        let _ = kernal_api::platform::fs::remove_dir_all(cache_root.join("meson-configure"));
     }
 
     tracing::info!(

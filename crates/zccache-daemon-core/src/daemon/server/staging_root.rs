@@ -57,7 +57,7 @@ impl StagingRoot {
             .map(|root| root.join(CONFIGURED_STAGING_CHILD))
             .unwrap_or_else(|| cache_dir.join("staging"));
         let path = parent.join(format!("{}-{instance}-{nonce}", std::process::id()));
-        std::fs::create_dir_all(&path)?;
+        kernal_api::platform::fs::create_dir_all(&path)?;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -113,7 +113,7 @@ impl StagingRoot {
                     // daemon that died before writing one. Only age tells them
                     // apart, and guessing wrong deletes live output.
                     if staging_dir_is_older_than(&path, min_age) {
-                        std::fs::remove_dir_all(&path)?;
+                        kernal_api::platform::fs::remove_dir_all(&path)?;
                         removed += 1;
                     }
                     continue;
@@ -131,7 +131,7 @@ impl StagingRoot {
             if !staging_tree_is_quiet_for(&path, STAGING_ABANDONED_QUIET_PERIOD) {
                 continue;
             }
-            std::fs::remove_dir_all(&path)?;
+            kernal_api::platform::fs::remove_dir_all(&path)?;
             removed += 1;
         }
         Ok(removed)
@@ -145,7 +145,7 @@ impl StagingRoot {
 /// look like it is from the future, both return false. Skipping real debris
 /// costs disk until the next pass; removing a live root costs a failed build.
 fn staging_dir_is_older_than(path: &Path, min_age: std::time::Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = kernal_api::platform::fs::path_metadata(path) else {
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -190,7 +190,7 @@ impl Drop for StagingRoot {
         if let Some(lock) = self.lock.take() {
             drop(lock);
         }
-        let _ = std::fs::remove_dir_all(self.path.as_path());
+        let _ = kernal_api::platform::fs::remove_dir_all(self.path.as_path());
     }
 }
 

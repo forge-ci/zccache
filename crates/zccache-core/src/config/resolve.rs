@@ -215,7 +215,7 @@ pub fn write_last_version_marker_in(top_level: &std::path::Path) -> std::io::Res
     // #1171: this is the first thing to create the top-level cache root on a
     // fresh install, so it decides that directory's mode for good.
     super::paths::create_dir_all_private(top_level)?;
-    std::fs::write(
+    kernal_api::platform::fs::write_file(
         top_level.join(LAST_VERSION_MARKER),
         format!("{}\n", crate::VERSION),
     )
@@ -286,7 +286,7 @@ pub fn prune_stale_version_dirs_in(top_level: &std::path::Path, keep: &str) -> P
         if name == keep || !is_version_dir_name(&name) {
             continue;
         }
-        match std::fs::remove_dir_all(entry.path()) {
+        match kernal_api::platform::fs::remove_dir_all(entry.path()) {
             Ok(()) => report.removed.push(name),
             Err(_) => report.skipped.push(name),
         }
@@ -454,8 +454,8 @@ mod version_hygiene_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let top = tmp.path();
         for name in ["v1.12.13", "v1.12.14", "v1.12.15", "logs", "crashes"] {
-            std::fs::create_dir_all(top.join(name)).unwrap();
-            std::fs::write(top.join(name).join("marker"), b"x").unwrap();
+            kernal_api::platform::fs::create_dir_all(top.join(name)).unwrap();
+            kernal_api::platform::fs::write_file(top.join(name).join("marker"), b"x").unwrap();
         }
         // Keep v1.12.15 (the "current" version); prune the two older siblings.
         let report = prune_stale_version_dirs_in(top, "v1.12.15");

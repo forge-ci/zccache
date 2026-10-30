@@ -865,7 +865,9 @@ pub(super) async fn handle_link_ephemeral(
                         )));
                     }
                 }
-                let output_mode = crate::platform::fs::permissions::mode(&std::fs::metadata(path)?);
+                let output_mode = crate::platform::fs::permissions::mode(
+                    &kernal_api::platform::fs::path_metadata(path)?,
+                );
                 Ok((
                     ArtifactOutput {
                         name: name.clone(),
