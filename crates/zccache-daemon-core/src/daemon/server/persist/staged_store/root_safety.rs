@@ -21,12 +21,12 @@ pub(super) fn remove_staged_link_or_reparse(
         // A reparse point that is a directory (Windows junctions) is removed
         // with `remove_dir`; every other link form is a file to `remove_file`.
         if metadata.is_dir() {
-            fs::remove_dir(path)
+            kernal_api::platform::fs::remove_dir(path)
         } else {
-            fs::remove_file(path)
+            kernal_api::platform::fs::remove_file(path)
         }
     } else {
-        fs::remove_file(path)
+        kernal_api::platform::fs::remove_file(path)
     }
 }
 

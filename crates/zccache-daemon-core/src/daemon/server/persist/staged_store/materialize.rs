@@ -1,6 +1,7 @@
 //! Independent requested-path materialization and physical-work observations.
 
 use crate::core::config::MaterializationMode;
+#[cfg(test)]
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -25,10 +26,10 @@ fn copy_independent(
     }
     // A failed reflink probe may leave a partial destination, including
     // platform-specific attributes. Remove it before attempting the copy tier.
-    if fs::metadata(destination).is_ok() {
+    if kernal_api::platform::fs::path_metadata(destination).is_ok() {
         let _ = crate::platform::fs::permissions::make_writable(destination);
     }
-    let _ = fs::remove_file(destination);
+    let _ = kernal_api::platform::fs::remove_file(destination);
     #[cfg(test)]
     super::fault::inject(destination, super::StagedFaultPoint::MaterializeCopy)?;
     let bytes = mode.copy_file(source, destination)?;
@@ -42,13 +43,13 @@ fn copy_output_with(
     destination: &Path,
     mode: MaterializationMode,
 ) -> io::Result<(bool, u64)> {
-    let source_metadata = fs::metadata(source)?;
+    let source_metadata = kernal_api::platform::fs::path_metadata(source)?;
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
     let result = copy_independent(source, destination, mode);
     if result.is_err() {
-        let _ = fs::remove_file(destination);
+        let _ = kernal_api::platform::fs::remove_file(destination);
         return result;
     }
     // Keep the destination writable while restoring timestamps. On Windows,
@@ -91,9 +92,9 @@ impl StagedSource<'_> {
             StagedSource::Path(source) => copy_output_with(source, destination, mode),
             StagedSource::Bytes(bytes) => {
                 if let Some(parent) = destination.parent() {
-                    fs::create_dir_all(parent)?;
+                    kernal_api::platform::fs::create_dir_all(parent)?;
                 }
-                fs::write(destination, bytes)?;
+                kernal_api::platform::fs::write_file(destination, bytes)?;
                 Ok((false, bytes.len() as u64))
             }
         }
@@ -153,7 +154,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
 ) -> io::Result<StagedMaterializationStats> {
     #[cfg(test)]
     super::hook::pause(destination, super::StagedHookPoint::MaterializeOutput);
-    if let Ok(metadata) = fs::metadata(destination) {
+    if let Ok(metadata) = kernal_api::platform::fs::path_metadata(destination) {
         if metadata.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::IsADirectory,
@@ -194,7 +195,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
         }
         #[cfg(test)]
         super::hook::pause(destination, super::StagedHookPoint::MaterializePublish);
-        if fs::metadata(destination).is_ok() {
+        if kernal_api::platform::fs::path_metadata(destination).is_ok() {
             let _ = crate::platform::fs::permissions::make_writable(destination);
         }
         super::replace_staged_path(&temporary, destination)?;
@@ -213,7 +214,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
     match &result {
         Ok(_) => crate::daemon::spawn_exclusion::await_publishable(destination),
         Err(_) => {
-            let _ = fs::remove_file(&temporary);
+            let _ = kernal_api::platform::fs::remove_file(&temporary);
         }
     }
     result

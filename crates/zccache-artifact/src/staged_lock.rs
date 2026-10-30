@@ -85,7 +85,7 @@ pub fn validate_staged_root_path(root: &Path) -> io::Result<bool> {
 /// Open (creating if needed) the store lock file for an already-validated root.
 pub fn open_store_lock(root: &Path) -> io::Result<File> {
     if !validate_staged_root_path(root)? {
-        fs::create_dir_all(root)?;
+        kernal_api::platform::fs::create_dir_all(root)?;
         if !validate_staged_root_path(root)? {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn an_existing_staged_root_yields_a_guard() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
         let guard = StagedReadGuard::acquire_if_present(dir.path()).unwrap();
 
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn two_readers_hold_the_lock_at_once() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
         let first = StagedReadGuard::acquire(dir.path()).unwrap();
         let second = StagedReadGuard::acquire(dir.path()).unwrap();
@@ -191,7 +191,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let root = staged_root(dir.path());
-        fs::create_dir_all(root.as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(root.as_path()).unwrap();
 
         let exclusive = kernal_api::platform::fs::lock_exclusive_owned(
             open_store_lock(root.as_path()).unwrap(),

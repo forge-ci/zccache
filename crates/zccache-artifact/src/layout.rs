@@ -96,7 +96,7 @@ pub fn resolve_artifact_payloads(
             LegacyArtifactAccessPurpose::CompatibilityRead,
             call_site,
         );
-        match fs::metadata(&legacy) {
+        match kernal_api::platform::fs::path_metadata(&legacy) {
             Ok(metadata) if metadata.is_file() && metadata.len() == expected_size => {
                 payloads.push(ResolvedArtifactPayload::File(legacy));
             }
@@ -213,7 +213,7 @@ fn verify_generation_outputs(generation: &PublishedGeneration) -> io::Result<Vec
         // `dir` is already a `NormalizedPath`, so `join` yields one — the
         // `.into()` this replaced became a no-op when the field changed type.
         let path = generation.dir.join(format!("output-{}", output.index));
-        if fs::metadata(&path)?.len() != output.size {
+        if kernal_api::platform::fs::path_metadata(&path)?.len() != output.size {
             return Err(invalid_data(
                 "staged output size does not match its manifest",
             ));
@@ -288,7 +288,7 @@ pub(crate) fn copy_artifact_generation(
     let payloads = resolve_artifact_payloads(source, key, sizes, false, "snapshot::export")?
         .ok_or_else(|| invalid_data("snapshot payload is missing or invalid"))?;
     let root = destination.join(STAGED_ROOT);
-    fs::create_dir_all(&root)?;
+    kernal_api::platform::fs::create_dir_all(&root)?;
     let pending = tempfile::Builder::new()
         .prefix(".snapshot-generation-")
         .tempdir_in(&root)?;
@@ -297,7 +297,7 @@ pub(crate) fn copy_artifact_generation(
         .any(|p| matches!(p, ResolvedArtifactPayload::Bytes(_)))
     {
         Some(zccache_core::mtime::FileTime::from_last_modification_time(
-            &fs::metadata(source.join(format!("{key}.pack")))?,
+            &kernal_api::platform::fs::path_metadata(source.join(format!("{key}.pack")))?,
         ))
     } else {
         None
@@ -344,7 +344,7 @@ pub(crate) fn copy_artifact_generation(
     drop(file);
     kernal_api::platform::fs::sync_directory_if_supported(pending.path())?;
     let target = root.join(key).join(&generation_hex);
-    fs::create_dir_all(root.join(key))?;
+    kernal_api::platform::fs::create_dir_all(root.join(key))?;
     kernal_api::platform::fs::replacement::rename_generation(pending.path(), &target)?;
     publish_snapshot_pointer(destination, key, &generation_hex, sizes)
 }
@@ -368,7 +368,7 @@ fn copy_staged_generation(
     let root = destination.join(STAGED_ROOT);
     let key_dir = root.join(key);
     let target = key_dir.join(generation_name);
-    fs::create_dir_all(&target)?;
+    kernal_api::platform::fs::create_dir_all(&target)?;
     let manifest = generation.dir.join("manifest.bin");
     for path in paths
         .iter()
@@ -406,7 +406,7 @@ fn write_blob_digest_sidecar(blob: &Path, digest_hex: &str) -> io::Result<()> {
 }
 
 fn copy_snapshot_file(source: &Path, destination: &Path) -> io::Result<()> {
-    let metadata = fs::metadata(source)?;
+    let metadata = kernal_api::platform::fs::path_metadata(source)?;
     let mut input = fs::File::open(source)?;
     let mut output = fs::File::create(destination)?;
     io::copy(&mut input, &mut output)?;
@@ -497,7 +497,7 @@ pub fn verified_staged_generation(
         // `0..len` with no repeats, so this cannot panic or overwrite.
         sizes[output.index] = output.size;
     }
-    let stored_at = fs::metadata(generation.dir.join("manifest.bin"))?
+    let stored_at = kernal_api::platform::fs::path_metadata(generation.dir.join("manifest.bin"))?
         .modified()
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     Ok(Some((sizes, stored_at)))
@@ -649,13 +649,13 @@ pub mod fixtures {
     use super::{
         generation_digest, StagedManifest, StagedOutput, STAGED_MANIFEST_VERSION, STAGED_ROOT,
     };
-    use std::fs;
     use std::path::Path;
 
     /// Seed the existing pack encoding for shared layout-conformance tests.
     pub fn seed_pack(artifact_dir: &Path, key: &str, payloads: &[&[u8]]) {
-        fs::create_dir_all(artifact_dir).expect("create pack fixture directory");
-        fs::write(
+        kernal_api::platform::fs::create_dir_all(artifact_dir)
+            .expect("create pack fixture directory");
+        kernal_api::platform::fs::write_file(
             artifact_dir.join(format!("{key}.pack")),
             build_pack(payloads),
         )
@@ -703,10 +703,14 @@ pub mod fixtures {
             .join(STAGED_ROOT)
             .join(key_hex)
             .join(&generation_hex);
-        fs::create_dir_all(&generation_dir).expect("create staged generation dir");
+        kernal_api::platform::fs::create_dir_all(&generation_dir)
+            .expect("create staged generation dir");
         for (index, payload) in payloads.iter().enumerate() {
-            fs::write(generation_dir.join(format!("output-{index}")), payload)
-                .expect("write staged output");
+            kernal_api::platform::fs::write_file(
+                generation_dir.join(format!("output-{index}")),
+                payload,
+            )
+            .expect("write staged output");
         }
         let manifest = StagedManifest {
             version: STAGED_MANIFEST_VERSION,
@@ -714,12 +718,12 @@ pub mod fixtures {
             generation_hex: generation_hex.clone(),
             outputs,
         };
-        fs::write(
+        kernal_api::platform::fs::write_file(
             generation_dir.join("manifest.bin"),
             bincode::serialize(&manifest).expect("serialize staged manifest"),
         )
         .expect("write staged manifest");
-        fs::write(
+        kernal_api::platform::fs::write_file(
             artifact_dir
                 .join(STAGED_ROOT)
                 .join(format!("{key_hex}.current")),
@@ -751,8 +755,12 @@ mod tests {
         let legacy_key = "1".repeat(64);
         let pack_key = "2".repeat(64);
         let staged_key = "3".repeat(64);
-        fs::write(root.path().join(format!("{legacy_key}_0")), b"legacy").expect("write legacy");
-        fs::write(
+        kernal_api::platform::fs::write_file(
+            root.path().join(format!("{legacy_key}_0")),
+            b"legacy",
+        )
+        .expect("write legacy");
+        kernal_api::platform::fs::write_file(
             root.path().join(format!("{pack_key}.pack")),
             build_pack(&[b"packed-a", b"packed-b"]),
         )
@@ -806,7 +814,7 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let key = "b".repeat(64);
         let generation = seed_staged(root.path(), &key, &[b"valid"]);
-        fs::write(
+        kernal_api::platform::fs::write_file(
             root.path()
                 .join(STAGED_ROOT)
                 .join(&key)
@@ -815,7 +823,8 @@ mod tests {
             b"corrupt",
         )
         .expect("corrupt output");
-        fs::write(root.path().join(format!("{key}_0")), b"valid").expect("write legacy");
+        kernal_api::platform::fs::write_file(root.path().join(format!("{key}_0")), b"valid")
+            .expect("write legacy");
 
         let error = resolve_artifact_payloads(root.path(), &key, &[5], true, "test::corrupt")
             .expect_err("corrupt selected generation must be loud");
@@ -826,7 +835,7 @@ mod tests {
     fn rejects_incomplete_or_size_mismatched_pack() {
         let root = tempfile::tempdir().expect("tempdir");
         let key = "c".repeat(64);
-        fs::write(
+        kernal_api::platform::fs::write_file(
             root.path().join(format!("{key}.pack")),
             build_pack(&[b"only-one"]),
         )
