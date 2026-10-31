@@ -14,7 +14,7 @@ def test_integration_publishes_its_own_store_after_all_consumers() -> None:
         (ROOT / ".github/workflows/integration.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["integration"]["steps"]
-    setup = next(step for step in steps if step.get("uses") == "zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703")
+    setup = next(step for step in steps if step.get("uses") == "zackees/setup-soldr@v0")
     assert setup.get("id") == "soldr"
     assert setup["with"]["cache-key-suffix"] == "integration"
     assert setup["with"]["prebuild-deps"] == "none"

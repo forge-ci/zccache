@@ -48,7 +48,7 @@ jobs:
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
 
-      - uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
@@ -97,7 +97,7 @@ jobs:
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
 
-      - uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
@@ -175,7 +175,7 @@ jobs:
         uses: ./.github/actions/wait-cache-pre-prune
       - uses: astral-sh/setup-uv@v6
 
-      - uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)

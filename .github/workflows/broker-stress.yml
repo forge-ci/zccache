@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
-      - uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
           s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
           s3-endpoint: sfo3.digitaloceanspaces.com

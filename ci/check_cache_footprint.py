@@ -79,7 +79,6 @@ JUSTIFIED_SUFFIXES: dict[str, str] = {
 # with `auto` (the default) skipping durable saves on pull_request
 # (zackees/setup-soldr#527).  Add the new ref on each pin bump.
 SAVE_CACHE_REFS: dict[str, str] = {
-    "9337570234850b50322e696037127fa3cf8ac703": "setup-soldr #629 (S3 remote build cache)",
     "v0": "setup-soldr v0 (floating major, v0.9.82 or later)",
     "a07bab94f16124b5c6857b137a237a53a61e06d1": "setup-soldr v0.9.82",
     "4df8db93438594f50505574d9dc8117505d33362": "setup-soldr v0.9.80",
@@ -90,7 +89,6 @@ SAVE_CACHE_REFS: dict[str, str] = {
 # setup-soldr refs whose main action honors `cook-delta: true|false`
 # (zackees/setup-soldr#528).  Add the new ref on each pin bump.
 COOK_DELTA_REFS: dict[str, str] = {
-    "9337570234850b50322e696037127fa3cf8ac703": "setup-soldr #629 (S3 remote build cache)",
     "v0": "setup-soldr v0 (floating major, v0.9.82 or later)",
     "a07bab94f16124b5c6857b137a237a53a61e06d1": "setup-soldr v0.9.82",
     "4df8db93438594f50505574d9dc8117505d33362": "setup-soldr v0.9.80",
@@ -120,7 +118,6 @@ SAVE_CACHE_POLICY = "auto"
 REMOTE_SAVE_CACHE_POLICY = MAIN_PUSH_ONLY_SAVE
 COMPOSITE_SAVE_CACHE_POLICY = "${{ inputs.save_cache }}"
 REMOTE_SAVE_CACHE_REFS: dict[str, str] = {
-    "9337570234850b50322e696037127fa3cf8ac703": "setup-soldr #629 (S3 remote build cache)",
     "v0": "gated setup-soldr v0 promotion with #565 remote permission",
     "d17a58eb2cea17a89af0824fb7c6b24ee68f5083": "published setup-soldr #565",
 }

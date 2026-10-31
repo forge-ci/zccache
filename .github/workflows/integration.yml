@@ -116,7 +116,7 @@ jobs:
           # Avoid the anonymous latest-release API lookup in isolated replay.
           version: "0.12.13"
       - id: soldr
-        uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+        uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
           s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
           s3-endpoint: sfo3.digitaloceanspaces.com
@@ -175,7 +175,7 @@ jobs:
           soldr cargo test --workspace --features "$ZCCACHE_INTEGRATION_FEATURES" --no-fail-fast --no-run
           soldr cargo build -p zccache --features ci-bin --bin zccache-ci
       - name: Stop setup-soldr builder cache before tests
-        uses: zackees/setup-soldr/cleanup@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
+        uses: zackees/setup-soldr/cleanup@v0 # v0.9.82 or later (floating major)
       - name: Remove seeded runtime journals before tests
         shell: bash
         env:
