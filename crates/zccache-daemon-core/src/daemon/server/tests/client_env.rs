@@ -1,6 +1,10 @@
 //! Tests for `apply_client_env_builder` / `apply_client_env_sync` — verify that
 //! stale jobserver vars are stripped before the daemon spawns a compiler
 //! or tool subprocess, and that lineage env-vars are propagated.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 
 use super::super::*;
 

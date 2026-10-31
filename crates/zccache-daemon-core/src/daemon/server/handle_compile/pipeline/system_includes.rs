@@ -327,7 +327,18 @@ async fn run_discovery_command(
     lineage: &crate::daemon::lineage::Lineage,
     compiler_priority: CompilePriority,
 ) -> std::io::Result<std::process::Output> {
-    let builder = kernal_api::SpawnSpec::new(compiler.as_path()).args(args);
+    // An include probe changes the job type (`-###`, `-v -E`): it is an
+    // internal scan (#2027). Its callers already fail open to the uncached
+    // bypass when it yields nothing.
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let (builder, _response_file) = super::super::super::compiler_spawn::internal_scan_spawn(
+        compiler.as_path(),
+        crate::compiler::detect_family(&compiler.to_string_lossy()),
+        &args,
+        None,
+        None,
+    )?
+    .into_parts();
     let builder = lineage.apply_to_async_builder(builder, None);
     crate::daemon::process::async_builder_output_with_priority_timeout(
         builder,

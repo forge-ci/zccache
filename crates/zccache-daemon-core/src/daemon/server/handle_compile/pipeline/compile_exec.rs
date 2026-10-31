@@ -49,6 +49,8 @@ pub(super) struct CompileExecOutcome {
 pub(super) enum CompileExecResult {
     Ok(CompileExecOutcome),
     Error(Response),
+    /// An internal scan failed: run the compile through the uncached bypass.
+    Uncached,
 }
 
 struct PrivateHeaderTrace {
@@ -267,12 +269,12 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     }
     let break_outputs_ns = t_break_outputs.elapsed().as_nanos() as u64;
 
-    let mut builder = kernal_api::SpawnSpec::new(compiler);
-    if let Some(ref rsp) = _rsp_guard {
-        builder = builder.arg(rsp.at_arg()).current_dir(cwd);
-    } else {
-        builder = builder.args(rsp_args).current_dir(cwd);
-    }
+    let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
+        compiler.as_path(),
+        cwd,
+        rsp_args,
+        _rsp_guard.as_ref(),
+    );
     builder = apply_client_env_builder(
         builder,
         client_env,
@@ -334,7 +336,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     // The preprocessor pass is a compiler child too: it shares the same
     // bounded admission as the actual compile instead of bypassing the gate.
     if let Some(overlay) = pch_overlay {
-        if let Err(refusal) = super::super::pch_overlay_aliases::extend_overlay_aliases(
+        if let Err(error) = super::super::pch_overlay_aliases::extend_overlay_aliases(
             overlay,
             compiler,
             effective_args,
@@ -345,9 +347,13 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         )
         .await
         {
-            return CompileExecResult::Error(Response::Error {
-                message: format!("PCH alias validation failed: {refusal}"),
-            });
+            // #2027: fail open. A failed internal scan gives up the cached
+            // path for this compile, never the compile itself.
+            crate::daemon::server::compiler_spawn::log_internal_scan_failure(
+                "PCH include alias scan",
+                &error,
+            );
+            return CompileExecResult::Uncached;
         }
     }
 

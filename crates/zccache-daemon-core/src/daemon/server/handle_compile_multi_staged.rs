@@ -198,12 +198,12 @@ pub(super) async fn try_handle_staged_misses(
                 });
             }
         };
-        let mut builder = kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd.as_path());
-        if let Some(response_file) = &rsp_guard {
-            builder = builder.arg(response_file.at_arg());
-        } else {
-            builder = builder.args(&compiler_args);
-        }
+        let builder = super::compiler_spawn::user_compile_spawn(
+            compiler.as_path(),
+            cwd.as_path(),
+            &compiler_args,
+            rsp_guard.as_ref(),
+        );
         let builder = apply_client_env_builder(
             builder,
             client_env,
