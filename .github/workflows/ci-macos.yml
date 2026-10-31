@@ -59,6 +59,7 @@ jobs:
   macos:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: macos-15
       run_check: false
