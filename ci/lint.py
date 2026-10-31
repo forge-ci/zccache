@@ -21,7 +21,7 @@ from ci.release_checks import ReleaseCheckError, validate_release_metadata
 from ci.soldr import cargo_command, rust_tool_command, self_build_env
 
 SCRIPT_DIR = Path(__file__).parent.parent.resolve()
-DYLINT_TOOLCHAIN = "nightly-2026-05-28"
+DYLINT_TOOLCHAIN = "nightly-2026-08-15"
 DYLINT_COMPONENTS = ["llvm-tools-preview", "rust-src", "rustc-dev"]
 # Dylint's late lints only see cfg-selected code, so a host-only pass misses
 # the other operating systems' modules (#1740). One triple per OS is enough:
