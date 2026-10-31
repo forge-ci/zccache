@@ -28,6 +28,7 @@ pub(super) fn dependency_flags() -> Vec<String> {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     let mut flags = vec!["--edition=2021".into()];
+    flags.extend(dependency_dirs(&messages));
     for name in ["zccache_core", "kernal_api", "tokio"] {
         let artifact = messages
             .iter()
@@ -43,11 +44,30 @@ pub(super) fn dependency_flags() -> Vec<String> {
             })
             .unwrap_or_else(|| panic!("Cargo JSON missing {name} artifact"));
         let artifact = std::path::Path::new(artifact);
-        flags.push(format!(
-            "-Ldependency={}",
-            artifact.parent().unwrap().display()
-        ));
         flags.push(format!("--extern={name}={}", artifact.display()));
     }
     flags
+}
+
+/// One `-Ldependency` per artifact directory: Cargo's new build-dir layout
+/// gives every unit its own output directory, so an rlib's parent no longer
+/// holds its transitive dependencies (rlibs and proc-macro dylibs).
+fn dependency_dirs(messages: &[serde_json::Value]) -> Vec<String> {
+    let mut dirs = std::collections::BTreeSet::new();
+    for message in messages {
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        for name in message["filenames"].as_array().into_iter().flatten() {
+            if let Some(dir) = name
+                .as_str()
+                .and_then(|name| std::path::Path::new(name).parent())
+            {
+                dirs.insert(dir.to_path_buf());
+            }
+        }
+    }
+    dirs.into_iter()
+        .map(|dir| format!("-Ldependency={}", dir.display()))
+        .collect()
 }
