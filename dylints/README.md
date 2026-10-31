@@ -10,12 +10,13 @@ Custom Rust lints used by this workspace.
 - `ban_normalized_path_deref_containment`: bans `std::path::Path` containment methods (`starts_with`, `strip_prefix`) resolved through `NormalizedPath`'s `Deref` autoderef instead of its inherent normalized methods.
 - `ban_dashmap_guard_across_blocking`: bans holding a `DashMap::get` guard across awaits, filesystem/process work, or a mutation of the same map.
 - `ban_discarded_write_result`: bans discarding the `Result` of a write-ish call (`let _ = …` / statement-position `.ok();`) in the daemon's persistence modules (#1163 / #1177).
+- `ban_client_refusal_in_scan`: bans building `PchRefusal`/`PchRefusalReason`, `Response::Error` or `CompileExecResult::Error` inside internal compiler scan modules; scans fail open (#2027).
 - `enforce_platform_boundary`: confines host-platform cfg/native APIs to approved product adapters over kernal-api, pre-expansion, with a ratcheting exact-occurrence baseline (#1365 / #1366).
 - `ban_registered_env_read`: confines environment access to registered, auditable call sites.
 
 - `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
 
-All eleven libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
+All twelve libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

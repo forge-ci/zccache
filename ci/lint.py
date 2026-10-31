@@ -306,6 +306,7 @@ def lint_workspace():
             "dylints/ban_normalized_path_deref_containment/Cargo.toml",
             "dylints/ban_dashmap_guard_across_blocking/Cargo.toml",
             "dylints/ban_discarded_write_result/Cargo.toml",
+            "dylints/ban_client_refusal_in_scan/Cargo.toml",
             "dylints/enforce_platform_boundary/Cargo.toml",
             "dylints/ban_registered_env_read/Cargo.toml",
             "dylints/ban_unbounded_sync/Cargo.toml",

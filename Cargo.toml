@@ -34,6 +34,7 @@ exclude = [
     "dylints/ban_normalized_path_deref_containment",
     "dylints/ban_dashmap_guard_across_blocking",
     "dylints/ban_discarded_write_result",
+    "dylints/ban_client_refusal_in_scan",
     "dylints/enforce_platform_boundary",
     "dylints/ban_registered_env_read",
     "dylints/ban_unbounded_sync",
