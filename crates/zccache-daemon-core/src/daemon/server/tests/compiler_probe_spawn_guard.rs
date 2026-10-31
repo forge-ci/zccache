@@ -1,4 +1,8 @@
 //! soldr#3836: a running compiler probe cannot own spawn admission.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 
 use super::{output_within, output_within_async, ProbeOutcome};
 use std::time::{Duration, Instant};

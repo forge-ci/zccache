@@ -773,13 +773,12 @@ pub(super) async fn handle_compile_multi(
         session_client_pid(&state, &sid),
         Some(sid.to_string()),
     );
-    let mut builder =
-        kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd_path.as_path());
-    if let Some(ref rsp) = _rsp_guard {
-        builder = builder.arg(rsp.at_arg());
-    } else {
-        builder = builder.args(&compiler_args);
-    }
+    let builder = super::compiler_spawn::user_compile_spawn(
+        compiler.as_path(),
+        cwd_path.as_path(),
+        &compiler_args,
+        _rsp_guard.as_ref(),
+    );
     let builder = apply_client_env_builder(
         builder,
         &client_env,

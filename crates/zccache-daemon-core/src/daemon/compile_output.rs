@@ -340,6 +340,10 @@ fn capture_limit() -> usize {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 mod tests {
     use super::*;
     use crate::daemon::process::CompilePriority;

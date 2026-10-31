@@ -1,4 +1,8 @@
 //! Portable subprocess regression for the generic linker/exec/tool path.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 use super::*;
 use std::time::{Duration, Instant};
 

@@ -1,0 +1,26 @@
+# zccache-daemon-core clippy config. Clippy reads only the nearest config, so
+# this file repeats the workspace `.clippy.toml` settings; keep them in sync.
+
+msrv = "1.95.0"
+
+# Workspace clippy config — see #944.
+#
+# The workspace [lints.clippy] policy (Cargo.toml) denies unwrap_used /
+# unwrap_in_result / panic_in_result_fn and warns on expect_used. These
+# knobs keep test code ergonomic by exempting #[cfg(test)] modules,
+# #[test] functions, and const contexts where panicking is the only
+# option at evaluation time.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+
+allow-unwrap-in-consts = true
+allow-expect-in-consts = true
+
+# #2027: every compiler child goes through `daemon::server::compiler_spawn`
+# (`user_compile_spawn` / `internal_scan_spawn`), so an internal scan always
+# gets the unused-argument suppression and the fail-open contract. Non-compiler
+# tools and tests opt out with `#[allow(clippy::disallowed_methods, reason)]`.
+disallowed-methods = [
+    { path = "kernal_api::SpawnSpec::new", reason = "spawn compilers through daemon::server::compiler_spawn (#2027)" },
+]
