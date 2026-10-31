@@ -331,6 +331,18 @@ jobs:
           export RUSTC="$(soldr rustup which --toolchain nightly-2026-08-15 rustc)"
           export RUSTUP_TOOLCHAIN=nightly-2026-08-15
           soldr rustup run nightly-2026-08-15 cargo test
+      - name: Check Dylint Library Formatting (ban_client_refusal_in_scan)
+        working-directory: dylints/ban_client_refusal_in_scan
+        run: soldr cargo fmt --all -- --check
+      - name: Test Dylint Library (ban_client_refusal_in_scan)
+        working-directory: dylints/ban_client_refusal_in_scan
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
+        run: |
+          export PATH="${DYLINT_CARGO_SHIM}:${PATH}"
+          export RUSTC="$(soldr rustup which --toolchain nightly-2026-08-15 rustc)"
+          export RUSTUP_TOOLCHAIN=nightly-2026-08-15
+          soldr rustup run nightly-2026-08-15 cargo test
       - name: Check Dylint Library Formatting (enforce_platform_boundary)
         working-directory: dylints/enforce_platform_boundary
         run: soldr cargo fmt --all -- --check
@@ -361,6 +373,12 @@ jobs:
         # ci.lint runs the Linux host pass plus one cross-target pass per
         # other OS: late lints only see cfg-selected code (#1740).
         run: uv run python -m ci.lint --dylint-only
+      - name: Enforce compiler spawn ownership (clippy disallowed-methods)
+        # #2027: crates/zccache-daemon-core/clippy.toml bans
+        # kernal_api::SpawnSpec::new outside daemon::server::compiler_spawn.
+        # The Clippy workflow runs only on main pushes without -D warnings
+        # (#944), so the ban is enforced here for every PR and merge group.
+        run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |
