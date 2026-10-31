@@ -593,6 +593,10 @@ use coalescing::*;
 
 // ─── Spawn + capture ────────────────────────────────────────────────────
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: generic cached exec tools are not compilers"
+)]
 async fn spawn_tool(
     tool: &Path,
     args: &[String],

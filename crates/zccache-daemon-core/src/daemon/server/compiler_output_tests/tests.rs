@@ -77,6 +77,71 @@ fn packed_dwarf_declaration_is_target_and_link_kind_aware() {
 mod dylint_sidecar_tests {
     use super::*;
 
+    fn building_libraries_case() -> (crate::depgraph::RustcParsedArgs, std::path::PathBuf) {
+        let cwd = Path::new("/repo");
+        let out_dir = "/repo/target/dylint/tests/nightly/debug/deps";
+        let args = vec![
+            "--crate-name=lint".to_string(),
+            "--crate-type=cdylib".to_string(),
+            "--emit=link".to_string(),
+            format!("--out-dir={out_dir}"),
+            "-Clinker=/tools/dylint-link".to_string(),
+            "src/lib.rs".to_string(),
+        ];
+        let parsed = crate::depgraph::parse_rustc_args(&args, cwd);
+        (parsed, Path::new(out_dir).join("liblint.so"))
+    }
+
+    fn dylint_env(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut env = vec![
+            ("CARGO_PKG_NAME".to_string(), "lint".to_string()),
+            (
+                "RUSTUP_TOOLCHAIN".to_string(),
+                "nightly-2026-08-15-x86_64-unknown-linux-gnu".to_string(),
+            ),
+        ];
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        env
+    }
+
+    /// zccache#2023: Dylint 6.2.0's dylint-link writes no toolchain copy while
+    /// cargo-dylint builds libraries, so the link's only output is the
+    /// cdylib — and that output set is complete, so the link stays cacheable.
+    #[test]
+    fn dylint_building_libraries_predicts_no_toolchain_copy() {
+        let cwd = Path::new("/repo");
+        let (parsed, primary) = building_libraries_case();
+        let env = dylint_env(&[("DYLINT_BUILDING_LIBRARIES", "1")]);
+
+        let outputs = rustc_expected_output_paths(&parsed, &primary, cwd, Some(&env));
+        assert_eq!(outputs, vec![NormalizedPath::new(&primary)]);
+        assert!(dylint_cdylib_has_complete_output_identity(
+            &parsed,
+            &primary,
+            cwd,
+            Some(&env)
+        ));
+    }
+
+    /// `DYLINT_LINK_ENABLE_COPY_LIBRARY` forces dylint-link to copy again, and
+    /// `"0"` disables a switch (dylint_internal's truthiness rule).
+    #[test]
+    fn dylint_copy_override_and_zero_values_restore_the_toolchain_copy() {
+        let cwd = Path::new("/repo");
+        let (parsed, primary) = building_libraries_case();
+        for extra in [
+            &[
+                ("DYLINT_BUILDING_LIBRARIES", "1"),
+                ("DYLINT_LINK_ENABLE_COPY_LIBRARY", "1"),
+            ][..],
+            &[("DYLINT_BUILDING_LIBRARIES", "0")][..],
+        ] {
+            let env = dylint_env(extra);
+            let outputs = rustc_expected_output_paths(&parsed, &primary, cwd, Some(&env));
+            assert_eq!(outputs.len(), 2, "{extra:?}: {outputs:?}");
+        }
+    }
+
     /// soldr#2349: this used to bail out with `if is_windows() { return; }`
     /// because `dylint_library_sidecar_output_path` unconditionally
     /// returned `None` on a Windows host, making `outputs.len()` 1 instead

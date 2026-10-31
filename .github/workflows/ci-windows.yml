@@ -49,6 +49,7 @@ jobs:
   x86:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: windows-latest
       run_check: false
@@ -56,6 +57,7 @@ jobs:
   arm:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: windows-11-arm
       run_check: false

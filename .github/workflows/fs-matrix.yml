@@ -50,6 +50,9 @@ jobs:
       contents: read
 
   matrix:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: cache-pre-prune
     strategy:
       fail-fast: false
@@ -64,6 +67,8 @@ jobs:
       - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         if: matrix.os != 'windows-latest'
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
           # Global auto keeps local saves warm; the remote permission preserves
@@ -155,6 +160,9 @@ jobs:
           --runner macos-15 --job "matrix (macos-15)" --token "$GITHUB_TOKEN"
 
   large-cow:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: cache-pre-prune
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     timeout-minutes: 15
@@ -169,6 +177,8 @@ jobs:
         uses: ./.github/actions/wait-cache-pre-prune
       - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
           save-cache: auto
