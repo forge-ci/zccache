@@ -96,6 +96,9 @@ jobs:
       contents: read
 
   integration:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: [cache-pre-prune, ci-mode]
     # GATE-008/010: skipped only for a PR head attested by the local gate's
     # isolated `tests` lane, which replays this workflow through Bosn
@@ -113,8 +116,10 @@ jobs:
           # Avoid the anonymous latest-release API lookup in isolated replay.
           version: "0.12.13"
       - id: soldr
-        uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+        uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cache-key-suffix: integration # isolated full-workspace profile (#1885/#1867)
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
@@ -170,7 +175,7 @@ jobs:
           soldr cargo test --workspace --features "$ZCCACHE_INTEGRATION_FEATURES" --no-fail-fast --no-run
           soldr cargo build -p zccache --features ci-bin --bin zccache-ci
       - name: Stop setup-soldr builder cache before tests
-        uses: zackees/setup-soldr/cleanup@v0 # v0.9.82 or later (floating major)
+        uses: zackees/setup-soldr/cleanup@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
       - name: Remove seeded runtime journals before tests
         shell: bash
         env:

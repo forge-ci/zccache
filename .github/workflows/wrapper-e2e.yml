@@ -56,6 +56,9 @@ jobs:
       contents: read
 
   wrapper-e2e:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: cache-pre-prune
     strategy:
       fail-fast: false
@@ -79,7 +82,7 @@ jobs:
 
       - name: setup soldr with cook prebuild (Unix)
         if: runner.os != 'Windows'
-        uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+        uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
         with:
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
@@ -107,8 +110,10 @@ jobs:
 
       - name: setup soldr without cook prebuild (Windows)
         if: runner.os == 'Windows'
-        uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+        uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
           save-cache: auto
@@ -250,7 +255,7 @@ jobs:
           Add-Content $env:GITHUB_PATH $installDir
 
       - name: Stop setup-soldr builder cache before wrapper smoke test
-        uses: zackees/setup-soldr/cleanup@v0 # v0.9.82 or later (floating major)
+        uses: zackees/setup-soldr/cleanup@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
 
       - name: smoke compile through wrapper (Unix)
         if: runner.os != 'Windows'

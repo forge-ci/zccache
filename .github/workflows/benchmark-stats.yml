@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+      - uses: zackees/setup-soldr@9337570234850b50322e696037127fa3cf8ac703 # setup-soldr #629 (S3 remote build cache; v0 not yet promoted)
         with:
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
