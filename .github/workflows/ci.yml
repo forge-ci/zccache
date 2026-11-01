@@ -565,3 +565,26 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: .ci-lint
         run: python3 -m ci_lint cache janitor --repo .
+
+  # The single required check (ruleset `main merge queue`). Decides from this
+  # run attempt's full job list (ci/ci_summary.py), not needs.*.result, since a
+  # reusable-workflow job can end cancelled while its caller reports success.
+  # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
+  ci-summary:
+    name: CI summary
+    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Aggregate job conclusions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m ci.ci_summary
