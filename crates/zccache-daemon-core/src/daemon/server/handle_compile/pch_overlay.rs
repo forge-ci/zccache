@@ -51,7 +51,8 @@ fn collect_inputs(
         // Parse and freeze one byte identity before the producer executes.
         // Post-compile capture cannot distinguish a same-second replacement
         // from the unsigned imported AST actually consumed by Clang.
-        let bytes = std::fs::read(pch).map_err(|error| fail(error.to_string()))?;
+        let bytes =
+            kernal_api::platform::fs::read_file(pch).map_err(|error| fail(error.to_string()))?;
         let records = parse_pch_inputs(&bytes).map_err(|error| fail(error.to_string()))?;
         if records.is_some() {
             let metadata = kernal_api::platform::fs::path_metadata(pch)

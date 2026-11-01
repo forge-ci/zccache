@@ -637,7 +637,7 @@ fn snapshot_output_files(
     let mut all_captured = true;
     for (declared, actual) in output_files.iter().zip(actual_paths) {
         let abs: PathBuf = absolutize(actual.as_path(), cwd);
-        match std::fs::read(&abs) {
+        match kernal_api::platform::fs::read_file(&abs) {
             Ok(bytes) => {
                 let payload = ArtifactPayload::Bytes(Arc::new(bytes));
                 captured_outputs.push(ArtifactOutput {
@@ -789,7 +789,7 @@ fn try_exec_cache_hit_blocking(
             // code substituted an empty payload, so a client asking for a
             // cached artifact got zero bytes reported as a hit. A wrong answer
             // is worse than a miss.
-            CachedPayload::File(_) => match std::fs::read(abs.as_path()) {
+            CachedPayload::File(_) => match kernal_api::platform::fs::read_file(abs.as_path()) {
                 Ok(b) => Arc::new(b),
                 Err(error) => {
                     tracing::warn!(

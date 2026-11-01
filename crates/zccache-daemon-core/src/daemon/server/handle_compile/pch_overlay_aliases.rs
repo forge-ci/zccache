@@ -35,7 +35,8 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
     stdin: Option<&[u8]>,
 ) -> Result<(), AliasScanError> {
     let fail = |error| refusal(overlay_path, error);
-    let bytes = std::fs::read(overlay_path).map_err(|error| fail(error.to_string()))?;
+    let bytes = kernal_api::platform::fs::read_file(overlay_path)
+        .map_err(|error| fail(error.to_string()))?;
     let mut document: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| fail(error.to_string()))?;
     let roots = document
@@ -112,8 +113,8 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    let dependencies =
-        std::fs::read_to_string(&depfile).map_err(|error| fail(error.to_string()))?;
+    let dependencies = kernal_api::platform::fs::read_to_string(&depfile)
+        .map_err(|error| fail(error.to_string()))?;
     // parse_depfile canonicalizes symlinks. Raw tokens preserve precisely the
     // include spellings that need the same virtual file identity.
     let roots = document["roots"]
@@ -143,8 +144,10 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
             {
                 continue;
             }
-            let alias_bytes = std::fs::read(path).map_err(|error| refusal(path, error))?;
-            let snapshot_bytes = std::fs::read(snapshot).map_err(|error| refusal(path, error))?;
+            let alias_bytes =
+                kernal_api::platform::fs::read_file(path).map_err(|error| refusal(path, error))?;
+            let snapshot_bytes = kernal_api::platform::fs::read_file(snapshot)
+                .map_err(|error| refusal(path, error))?;
             if alias_bytes != snapshot_bytes {
                 return Err(refusal(path, "input changed while discovering aliases"));
             }
@@ -187,7 +190,8 @@ fn coalesce_roots(
                 Ok(
                     kernal_api::platform::fs::path_metadata(&snapshot)?.modified()?
                         == kernal_api::platform::fs::path_metadata(shared)?.modified()?
-                        && std::fs::read(&snapshot)? == std::fs::read(shared)?,
+                        && kernal_api::platform::fs::read_file(&snapshot)?
+                            == kernal_api::platform::fs::read_file(shared)?,
                 )
             };
             if !verify().map_err(|error| refusal(Path::new(&original), error))? {

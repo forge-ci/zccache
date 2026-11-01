@@ -551,7 +551,10 @@ mod tests {
         kernal_api::platform::fs::set_file_mtime(&input, original_mtime).unwrap();
 
         let after = input_stamp(&input).unwrap();
-        assert_eq!(std::fs::read(&input).unwrap(), b"AAAA");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&input).unwrap(),
+            b"AAAA"
+        );
         assert_eq!(after.modified, before.modified);
         assert_eq!(after.file_id, before.file_id);
         if before.change_marker.is_some() && after.change_marker.is_some() {

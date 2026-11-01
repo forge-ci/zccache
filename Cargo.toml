@@ -90,8 +90,10 @@ sevenz-rust = { package = "sevenz-rust2", version = "0.22.2" }
 #
 # Exact pin: kernal-api is below 1.0, so every consumer pins the same published
 # release (kernal-api COMPATIBILITY.md). 0.1.26 adds automatic APE loading
-# for compiler spawns; no local path or patch override remains.
-kernal-api = { version = "=0.1.35", default-features = false }
+# for compiler spawns; no local path or patch override remains. 0.1.36 adds the
+# read-side accessors (read_file / read_to_string / symlink_metadata / copy /
+# set_permissions / read_dir_paths) that retire the std::fs read burn.
+kernal-api = { version = "=0.1.36", default-features = false }
 zccache = { path = "crates/zccache" }
 zccache-artifact = { path = "crates/zccache-artifact" }
 zccache-audit = { path = "crates/zccache-audit" }

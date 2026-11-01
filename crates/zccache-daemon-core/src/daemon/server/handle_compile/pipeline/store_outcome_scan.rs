@@ -102,7 +102,7 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
             match crate::depgraph::depfile::parse_depfile_path(path, &source_path, &cwd_path) {
                 Ok(result) => {
                     if want_capture {
-                        if let Ok(bytes) = std::fs::read(path) {
+                        if let Ok(bytes) = kernal_api::platform::fs::read_file(path) {
                             user_depfile_capture = Some((path.clone(), bytes));
                         }
                     }

@@ -7,7 +7,6 @@
 crates/zccache-artifact/src/kv/mod.rs
 crates/zccache-artifact/src/layout.rs
 crates/zccache-artifact/src/rust_plan/local.rs
-crates/zccache-artifact/src/rust_plan/manifest.rs
 crates/zccache-artifact/src/snapshot.rs
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-artifact/src/store.rs
@@ -29,13 +28,7 @@ crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/handle_clear.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile_multi_preflight.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay_aliases.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome_scan.rs
-crates/zccache-daemon-core/src/daemon/server/handle_exec.rs
-crates/zccache-daemon-core/src/daemon/server/handle_link.rs
 crates/zccache-daemon-core/src/daemon/server/out_dir.rs
 crates/zccache-daemon-core/src/daemon/server/persist/artifact_io.rs
 crates/zccache-daemon-core/src/daemon/server/persist/directory_bundle.rs

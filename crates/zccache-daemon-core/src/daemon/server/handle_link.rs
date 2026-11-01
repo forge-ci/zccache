@@ -856,7 +856,7 @@ pub(super) async fn handle_link_ephemeral(
         let reads: std::io::Result<Vec<(ArtifactOutput, u32)>> = read_targets
             .iter()
             .map(|(name, path, expected_hash)| {
-                let data = std::fs::read(path)?;
+                let data = kernal_api::platform::fs::read_file(path)?;
                 if let Some(expected_hash) = expected_hash {
                     if crate::hash::hash_bytes(&data) != *expected_hash {
                         return Err(std::io::Error::other(format!(

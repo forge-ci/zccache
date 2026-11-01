@@ -84,14 +84,14 @@ pub(super) fn read_bundle_manifest(
     let manifest_path = bundle_dir.join(BUNDLE_MANIFEST_NAME);
     if manifest_path.exists() {
         let proto = rust_plan_proto::RustArtifactBundleManifest::decode(
-            std::fs::read(manifest_path)?.as_slice(),
+            kernal_api::platform::fs::read_file(manifest_path)?.as_slice(),
         )?;
         return manifest_from_proto(proto);
     }
 
     let legacy_manifest_path = bundle_dir.join(LEGACY_BUNDLE_MANIFEST_NAME);
     let manifest: RustArtifactBundleManifest =
-        serde_json::from_slice(&std::fs::read(legacy_manifest_path)?)?;
+        serde_json::from_slice(&kernal_api::platform::fs::read_file(legacy_manifest_path)?)?;
     Ok(manifest)
 }
 
