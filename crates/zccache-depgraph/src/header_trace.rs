@@ -181,7 +181,7 @@ pub fn parse_header_trace(stderr: &[u8], source: &Path, cwd: &Path) -> (ScanResu
 #[must_use]
 pub fn parse_dependency_graph_file(path: &Path, source: &Path, cwd: &Path) -> ScanResult {
     let mut parser = HeaderTraceParser::new(source, cwd);
-    let graph = match std::fs::read(path) {
+    let graph = match kernal_api::platform::fs::read_file(path) {
         Ok(graph) => graph,
         Err(_) => {
             parser.incomplete = true;

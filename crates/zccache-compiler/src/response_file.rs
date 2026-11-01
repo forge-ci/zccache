@@ -205,7 +205,7 @@ fn expand_recursive(
 /// The daemon's cached response-file expander uses this too, so response-file
 /// decoding stays identical for request-key construction and direct expansion.
 pub fn read_response_file_text(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
+    let bytes = kernal_api::platform::fs::read_file(path)?;
     if let Some(payload) = bytes.strip_prefix(&[0xff, 0xfe]) {
         return decode_utf16(payload, u16::from_le_bytes);
     }

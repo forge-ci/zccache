@@ -125,7 +125,7 @@ pub fn read_pending<T: serde::de::DeserializeOwned>(cache_path: &Path) -> Result
 pub fn detect_pending_type(cache_path: &Path) -> Option<&'static str> {
     file_lock::with_shared_lock(cache_path, || {
         let pending = pending_path(cache_path);
-        let content = match std::fs::read_to_string(&pending) {
+        let content = match kernal_api::platform::fs::read_to_string(&pending) {
             Ok(c) => c,
             Err(_) => return Ok(None),
         };
@@ -191,7 +191,7 @@ pub fn remove_cache(cache_path: &Path) {
 // ── Inner implementations (no locking) ───────────────────────────
 
 fn read_json_inner<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    let content = match std::fs::read_to_string(path) {
+    let content = match kernal_api::platform::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -587,7 +587,7 @@ mod tests {
         let path = dir.path().join("compact.json");
         let data = HashCacheData::new("abc".to_string(), "success", 5);
         write_atomic(&path, &data).unwrap();
-        let content = std::fs::read_to_string(&path).unwrap();
+        let content = kernal_api::platform::fs::read_to_string(&path).unwrap();
         assert!(
             !content.contains('\n'),
             "expected compact JSON, got newlines: {content}"
