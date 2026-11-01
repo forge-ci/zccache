@@ -1,6 +1,9 @@
+import pathlib
 import unittest
 
-from ci.ci_summary import blocking_jobs
+import yaml
+
+from ci.ci_summary import EXEMPT_PREFIXES, blocking_jobs
 
 
 def job(name, conclusion):
@@ -25,6 +28,23 @@ class BlockingJobsTest(unittest.TestCase):
             job("MSRV (1.95.0)", None),
         ]
         self.assertEqual(blocking_jobs(jobs), [])
+
+
+class SummaryNeedsEveryJobTest(unittest.TestCase):
+    """The gate must wait for every non-maintenance job, or it can pass early."""
+
+    def test_needs_lists_every_gated_job(self):
+        wf = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+        jobs = yaml.safe_load(wf.read_text())["jobs"]
+        gated = {
+            key
+            for key, job in jobs.items()
+            if key != "ci-summary" and not job["name"].startswith(EXEMPT_PREFIXES)
+        }
+        summary = jobs["ci-summary"]
+        self.assertEqual(set(summary["needs"]), gated)
+        self.assertEqual(summary["name"], "CI summary")
+        self.assertEqual(summary["if"], "${{ always() }}")
 
 
 if __name__ == "__main__":
