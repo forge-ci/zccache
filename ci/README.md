@@ -32,6 +32,7 @@ The benchmark tests keep human-readable Markdown in `benchmark.log` and also emi
 
 - **Canonical workflow** - `.github/workflows/auto-release.yml` is the only supported release entrypoint
 - **Workflow helper** - `ci/release_workflow.py` provides preflight checks, wheel assembly, and crates publish helpers for the release workflow only
+- **Windows signing** - `ci/sign_windows_release.py` Authenticode-signs the staged Windows PE files through Azure Artifact Signing (pinned jsign, OIDC `azure/login`) before the release archive is packaged, fails on any unsigned PE, and (`check-installed`) requires `Get-AuthenticodeSignature` `Valid` in the native Windows wheel tests
 - **Fast fail** - preflight checks PyPI and crates.io before any build fan-out and skips registry jobs that are already complete
 - **Trigger** - push a tag matching the workspace version (`1.3.6` or `v1.3.6`)
 - **Manual recovery** - `Run workflow` can leave `tag` empty; the workflow derives the current workspace version from the selected branch. Existing GitHub Releases are updated. A first same-version push stays quiet when that version is already released, while an unreleased version warns that it published nothing. Any rerun skips before bump/tag/release checks and cannot resume a prior release: use `workflow_dispatch` with the existing `tag` and `dry-run` inputs to resume PyPI/crates.io from the GitHub Release checkpoint.
