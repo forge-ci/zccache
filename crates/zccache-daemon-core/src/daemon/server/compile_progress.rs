@@ -136,8 +136,11 @@ pub(in crate::daemon) async fn acquire_compile_gate(
     let mut queue_guard = gauge.enqueue();
     let (permit, available_before) = if let Some(semaphore) = semaphore {
         let available_before = semaphore.available_permits();
-        let permit = semaphore.acquire().await;
-        (Some(permit), Some(available_before))
+        let permit = semaphore
+            .acquire_within(std::time::Duration::from_secs(60))
+            .await
+            .ok();
+        (permit, Some(available_before))
     } else {
         (None, None)
     };

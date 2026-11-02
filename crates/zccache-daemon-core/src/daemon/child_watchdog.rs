@@ -581,7 +581,9 @@ pub(crate) async fn deliver_fault_note(
         // Streaming path: the buffered `err` is discarded downstream, so the
         // note has to travel as a chunk or it never reaches the caller.
         Some(sender) => {
-            let _ = sender.send(RawOutputChunk::Stderr(note)).await;
+            let _ = sender
+                .send_within(RawOutputChunk::Stderr(note), Duration::from_secs(5))
+                .await;
         }
         None => err.extend_from_slice(&note),
     }

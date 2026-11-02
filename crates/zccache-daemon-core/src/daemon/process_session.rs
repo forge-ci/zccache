@@ -482,20 +482,21 @@ pub(super) async fn forward_compiler_session_event(
                 }
             };
             match sender {
-                Some(sender) => {
-                    match kernal_api::async_engine::timeout(send_timeout, sender.send(output)).await
-                    {
-                        Ok(Ok(())) => CompilerSessionEvent::Progress,
-                        Ok(Err(_)) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                Some(sender) => match sender.send_within(output, send_timeout).await {
+                    Ok(()) => CompilerSessionEvent::Progress,
+                    Err(kernal_api::async_engine::SendTimeoutError::Closed(_)) => {
+                        CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
                             io::ErrorKind::BrokenPipe,
                             "compiler output consumer disconnected",
-                        )),
-                        Err(_) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                        ))
+                    }
+                    Err(kernal_api::async_engine::SendTimeoutError::TimedOut(_)) => {
+                        CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
                             io::ErrorKind::TimedOut,
                             "compiler output consumer exceeded the send budget",
-                        )),
+                        ))
                     }
-                }
+                },
                 None => CompilerSessionEvent::Progress,
             }
         }

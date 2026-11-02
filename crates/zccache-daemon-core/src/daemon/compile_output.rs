@@ -174,6 +174,9 @@ pub(crate) async fn consume(
         }
     }
 
+    // Bounded by the channel closing when the producer drops its sender; the
+    // consumer has no separate shutdown signal to observe.
+    #[allow(deprecated)]
     while let Some(chunk) = receiver.recv().await {
         match chunk {
             RawOutputChunk::Stdout(bytes) => {
@@ -250,12 +253,15 @@ pub(crate) async fn consume(
 }
 
 async fn send(sender: &Sender<OutputChunk>, chunk: OutputChunk) -> io::Result<()> {
-    sender.send(chunk).await.map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "embedded compile output receiver disconnected",
-        )
-    })
+    sender
+        .send_within(chunk, std::time::Duration::from_secs(5))
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "embedded compile output receiver disconnected",
+            )
+        })
 }
 
 /// Retains a live-emitted head and a ring-buffered tail so truncation keeps

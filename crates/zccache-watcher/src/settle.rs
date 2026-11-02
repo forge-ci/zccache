@@ -78,16 +78,20 @@ impl SettleBuffer {
         let mut pending: HashMap<NormalizedPath, ChangeKind> = HashMap::new();
 
         loop {
-            // Wait for the first event (or channel close).
-            let event = match rx.recv().await {
-                Some(e) => e,
-                None => {
+            // Wait for the first event (or channel close), bounded so a wedged
+            // watcher cannot park this task forever (#433). The idle wait has
+            // no deadline of its own, so a long budget keeps the loop quiescent
+            // while still observing shutdown between events.
+            let event = match rx.recv_within(Duration::from_secs(30)).await {
+                Ok(e) => e,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // Channel closed — flush any remaining events.
                     if !pending.is_empty() {
                         let _ = tx.send(Self::drain(&mut pending));
                     }
                     return;
                 }
+                Err(mpsc::RecvTimeoutError::TimedOut) => continue,
             };
 
             // Handle overflow immediately — don't wait for settle.
@@ -119,23 +123,23 @@ impl SettleBuffer {
                     }
                     break;
                 }
-                match kernal_api::async_engine::timeout(wait, rx.recv()).await {
-                    Ok(Some(WatchEvent::Overflow | WatchEvent::Error(_))) => {
+                match rx.recv_within(wait).await {
+                    Ok(WatchEvent::Overflow | WatchEvent::Error(_)) => {
                         pending.clear();
                         let _ = tx.send(SettledEvent::Overflow);
                         break;
                     }
-                    Ok(Some(event)) => {
+                    Ok(event) => {
                         Self::apply_event(&mut pending, event);
                     }
-                    Ok(None) => {
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
                         // Channel closed — flush remaining.
                         if !pending.is_empty() {
                             let _ = tx.send(Self::drain(&mut pending));
                         }
                         return;
                     }
-                    Err(_timeout) => {
+                    Err(mpsc::RecvTimeoutError::TimedOut) => {
                         // Settle window elapsed — emit batch.
                         if !pending.is_empty() {
                             let _ = tx.send(Self::drain(&mut pending));

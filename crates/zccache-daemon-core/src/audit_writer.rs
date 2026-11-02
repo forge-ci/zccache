@@ -182,6 +182,9 @@ impl AuditSink {
         let degraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let writer_task = async move {
+            // Bounded by the channel closing when the sink drops its sender;
+            // the writer task has no separate shutdown signal to observe.
+            #[allow(deprecated)]
             while let Some(cmd) = receiver.recv().await {
                 match cmd {
                     Command::Event(event) => {
@@ -296,7 +299,7 @@ impl AuditSink {
     pub async fn flush(&self) -> Result<(), AuditSinkError> {
         let (tx, rx) = async_engine::oneshot_channel();
         self.sender
-            .send(Command::Flush(tx))
+            .send_within(Command::Flush(tx), std::time::Duration::from_secs(5))
             .await
             .map_err(|_| AuditSinkError::Closed)?;
         let _ = rx.await;
@@ -310,7 +313,11 @@ impl AuditSink {
         // If the writer is already closed, the send will fail — that's
         // also acceptable because the contract guarantees only that
         // pending events are drained on a best-effort basis.
-        match self.sender.send(Command::Shutdown(tx)).await {
+        match self
+            .sender
+            .send_within(Command::Shutdown(tx), std::time::Duration::from_secs(5))
+            .await
+        {
             Ok(()) => {
                 let _ = rx.await;
             }
