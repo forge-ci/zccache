@@ -184,3 +184,39 @@ def test_started_at_without_an_acquired_runner_is_still_queued() -> None:
     assert observation.state is observe_runner_queue.QueueState.QUEUED
     assert observation.queue_age == timedelta(minutes=30)
     assert observe_runner_queue.queue_violations([observation], timedelta(minutes=15)) == [observation]
+
+
+# Decision-function fixtures for the wrapper-e2e false-cancel (run 41507829143).
+_MAX = timedelta(minutes=15)
+V = observe_runner_queue.Verdict
+
+
+def _decide(job: dict[str, object] | None, *, deadline_expired: bool, missing_visible: bool = False) -> observe_runner_queue.Verdict:
+    jobs = [job] if job is not None else []
+    observations = observe_runner_queue.observe_once(RUN, jobs, ["matrix (macos-15)"], now=NOW, configured_runner="macos-15")
+    return observe_runner_queue.decide(observations, _MAX, missing_visible=missing_visible, deadline_expired=deadline_expired)[0]
+
+
+def test_never_acquired_is_named_starvation() -> None:
+    assert _decide(_job(), deadline_expired=False) is V.STARVED
+
+
+def test_acquired_and_passed_exits_clean_even_at_deadline() -> None:
+    job = _job(status="completed", conclusion="success", started_at="2026-08-28T05:31:00Z", completed_at="2026-08-28T05:50:00Z")
+    assert _decide(job, deadline_expired=True) is V.PASS
+
+
+def test_acquired_and_failed_is_not_the_observers_failure() -> None:
+    job = _job(status="completed", conclusion="failure", started_at="2026-08-28T05:31:00Z", completed_at="2026-08-28T05:50:00Z")
+    assert _decide(job, deadline_expired=True) is V.PASS
+
+
+def test_still_queued_at_deadline_is_a_named_failure() -> None:
+    recent = _job(created_at="2026-08-28T05:55:00Z")
+    assert _decide(recent, deadline_expired=False) is V.WAIT
+    assert _decide(recent, deadline_expired=True) is V.DEADLINE_QUEUED
+
+
+def test_gated_behind_upstream_at_deadline_is_a_named_failure() -> None:
+    assert _decide(None, deadline_expired=False) is V.WAIT
+    assert _decide(None, deadline_expired=True) is V.DEADLINE_UPSTREAM

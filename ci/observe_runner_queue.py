@@ -186,6 +186,44 @@ def queue_violations(observations: Sequence[QueueObservation], maximum: timedelt
     ]
 
 
+class Verdict(Enum):
+    """Observer outcome; every terminal verdict except PASS is a named failure."""
+
+    WAIT = "wait"
+    PASS = "pass"
+    STARVED = "starved"
+    DEADLINE_QUEUED = "deadline-expired-while-queued"
+    DEADLINE_UPSTREAM = "deadline-expired-behind-upstream"
+
+
+def decide(
+    observations: Sequence[QueueObservation],
+    maximum: timedelta,
+    *,
+    missing_visible: bool,
+    deadline_expired: bool,
+) -> tuple[Verdict, list[QueueObservation]]:
+    """Pure decision over one poll.
+
+    A job that acquired a runner (started or completed, pass or fail) is never
+    the observer's failure: the watched job reports its own conclusion.  The
+    observer must exit on its own before the job ``timeout-minutes`` so that
+    running out of patience is a named failure, never a ``cancelled`` run that
+    is indistinguishable from a supersede (wrapper-e2e run 41507829143).
+    """
+    if all(observation.state in {QueueState.STARTED, QueueState.COMPLETED} for observation in observations):
+        return Verdict.PASS, []
+    violations = queue_violations(observations, maximum, missing_visible=missing_visible)
+    if violations:
+        return Verdict.STARVED, violations
+    if not deadline_expired:
+        return Verdict.WAIT, []
+    pending = [observation for observation in observations if observation.state in {QueueState.QUEUED, QueueState.MISSING}]
+    if any(observation.state is QueueState.QUEUED for observation in pending):
+        return Verdict.DEADLINE_QUEUED, pending
+    return Verdict.DEADLINE_UPSTREAM, pending
+
+
 def render_summary(observations: Sequence[QueueObservation], *, repository: str | None = None, run_id: int | None = None) -> str:
     """Render a compact diagnostic suitable for both logs and step summaries."""
     lines = ["### Hosted runner queue observer", "", "| job | runner | state | queued age | labels |", "| --- | --- | --- | --- | --- |"]
@@ -222,6 +260,9 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--max-queue-seconds", type=_positive_seconds, default=900)
     parser.add_argument("--identity-visibility-grace-seconds", type=_positive_seconds, default=120)
     parser.add_argument("--poll-seconds", type=_positive_seconds, default=30)
+    # Must stay below the observer job's timeout-minutes (60) so expiry is a
+    # named failure instead of a runner-cancelled job.
+    parser.add_argument("--deadline-seconds", type=_positive_seconds, default=3300)
     return parser.parse_args()
 
 
@@ -230,6 +271,7 @@ def main() -> int:
     api = GitHubApi(args.token)
     maximum = timedelta(seconds=args.max_queue_seconds)
     visibility_deadline = time.monotonic() + args.identity_visibility_grace_seconds
+    deadline = time.monotonic() + args.deadline_seconds
     while True:
         try:
             run, jobs = fetch_workflow_state(api, args.repository, args.run_id)
@@ -244,15 +286,14 @@ def main() -> int:
         print(summary)
         _append_summary(summary)
         missing_visible = time.monotonic() >= visibility_deadline and not upstream_pending(jobs, args.jobs, self_runner=os.environ.get("RUNNER_NAME"))
-        violations = queue_violations(observations, maximum, missing_visible=missing_visible)
-        if violations:
-            print(
-                "Hosted runner queue bound exceeded for: " + ", ".join(observation.job_name for observation in violations),
-                file=sys.stderr,
-            )
-            return 1
-        if all(observation.state in {QueueState.STARTED, QueueState.COMPLETED} for observation in observations):
+        verdict, offenders = decide(observations, maximum, missing_visible=missing_visible, deadline_expired=time.monotonic() >= deadline)
+        if verdict is Verdict.PASS:
             return 0
+        if verdict is not Verdict.WAIT:
+            diagnostic = f"Hosted runner queue observer FAILED [{verdict.value}]: " + ", ".join(f"{o.job_name} ({o.state.value})" for o in offenders)
+            print(diagnostic, file=sys.stderr)
+            _append_summary(f"\n**{diagnostic}**\n")
+            return 1
         time.sleep(args.poll_seconds)
 
 
