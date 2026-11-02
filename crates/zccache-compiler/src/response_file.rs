@@ -15,6 +15,7 @@ pub use family::{
     expand_response_files_in_for, expands_nested_response_files, parse_response_file_content_for,
 };
 mod format;
+mod temporary;
 #[cfg(test)]
 use format::gnu as format_rsp_content;
 use format::gnu_if_safe as format_rsp_content_if_safe;
@@ -297,9 +298,6 @@ pub fn write_response_file_if_needed(
         return Ok(None);
     }
 
-    let id = RSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let rsp_path =
-        NormalizedPath::new(tmp_dir.join(format!("zccache_{}_{}.rsp", std::process::id(), id)));
     let content = match family_hint {
         crate::CompilerFamily::Rustc => format_rsp_content_rustc(args),
         crate::CompilerFamily::Msvc => format_rsp_content_msvc_if_safe(args),
@@ -309,9 +307,7 @@ pub fn write_response_file_if_needed(
     let Some(content) = content else {
         return Ok(None);
     };
-    std::fs::write(&rsp_path, content)?;
-
-    Ok(Some(TempResponseFile { path: rsp_path }))
+    temporary::write_temp_response_file(&content, tmp_dir).map(Some)
 }
 
 /// RAII guard for a temporary response file. Deletes the file on drop.

@@ -8,6 +8,7 @@ would silently corrupt arguments for one of them.
 
 ## Layout
 
+- `temporary.rs` — shared temporary-file creation and ownership.
 - `family.rs` — reading: which grammar each compiler family splits an `@file`
   with. rustc takes one argument per line, verbatim, and does not expand
   nested `@file`s (cargo's argfiles depend on this); every other family uses
