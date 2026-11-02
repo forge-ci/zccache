@@ -390,6 +390,19 @@ impl FingerprintManager {
             return;
         }
 
+        // Only a path under a watch root can change a watch, so no other path is
+        // opened. The watcher also reports build outputs next to tracked sources.
+        // Hashing maps a large file, and the daemon dies with SIGBUS when another
+        // process truncates it during the hash, as `ranlib` does to an archive.
+        let roots: Vec<NormalizedPath> = self
+            .watches
+            .iter()
+            .map(|entry| entry.value().root.clone())
+            .collect();
+        if roots.is_empty() {
+            return;
+        }
+
         // Pre-compute canonical path + stat + content hash for each changed path
         // ONCE, before touching the watch map. The previous implementation did this
         // canonicalize()/hash_file() I/O *inside* `watches.iter_mut()`, holding a
@@ -401,8 +414,9 @@ impl FingerprintManager {
         // hashes each changed file exactly once instead of once per watch.
         let changed_meta: Vec<ChangedMeta> = changed
             .iter()
-            .map(|path| {
-                let canon_path = canon(path);
+            .map(|path| canon(path))
+            .filter(|canon_path| roots.iter().any(|root| canon_path.starts_with(root)))
+            .map(|canon_path| {
                 // The stat observation must be built here, outside the watch-map
                 // lock, so the loop below stays pure in-memory map work (#724).
                 let observed = verify::observe(&canon_path).unwrap_or_default();
