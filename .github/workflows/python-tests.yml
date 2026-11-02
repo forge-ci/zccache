@@ -106,6 +106,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
+      # Run 41507829214 hit soldr's 5 GiB build-volume block; free unused SDKs first.
+      - name: Reclaim hosted runner disk
+        run: python3 ci/reclaim_runner_disk.py
 
       # The PyO3 modules use abi3-py310, and 3.13 is the canonical workflow
       # interpreter. setup-python also supplies the interpreter PYO3 probes.
