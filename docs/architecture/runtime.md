@@ -84,7 +84,10 @@ position. Shutdown rejects new publication before and after acquiring a permit.
 `blocking_sync::{Mutex, RwLock}` supplies synchronous locks with mandatory
 acquisition budgets. Poisoning remains visible to existing callers. The timed
 reader/writer adapter preserves writer preference: polling `try_write` alone
-would allow an arriving stream of readers to starve a writer. Default budgets
+would allow an arriving stream of readers to starve a writer. A contended
+waiter parks on a per-lock release condvar and wakes on hand-off; it never
+sleeps on a backoff timer. A 50 us -> 5 ms sleep backoff once tripled warm
+multi-file C++ hit latency through the process-wide materialize lock. Default budgets
 are 15 seconds for state and 30 minutes for queued operations. Recoverable state
 and gate APIs return `LockTimeout`; essential acquisition expiry logs the caller
 and aborts the service so its supervisor can restart it. This is a deliberate
