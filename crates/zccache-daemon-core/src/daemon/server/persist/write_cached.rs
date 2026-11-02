@@ -446,7 +446,7 @@ fn detach_with_floored_mtime(
 }
 
 fn remove_materialized_output(path: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(path) {
+    match kernal_api::platform::fs::symlink_metadata(path) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),

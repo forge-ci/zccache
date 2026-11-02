@@ -21,7 +21,7 @@ impl DigestSidecarGuard {
                 ".cowhash-{}",
                 kernal_api::hash::blake3_bytes(name.as_bytes()).to_hex()
             ));
-        let previous = match std::fs::read(&path) {
+        let previous = match kernal_api::platform::fs::read_file(&path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
@@ -188,7 +188,7 @@ pub(in crate::daemon::server) fn persist_artifact_paths_with_stats(
     if pack_mode_enabled() {
         let bytes: Vec<Arc<Vec<u8>>> = sources
             .iter()
-            .map(|p| std::fs::read(p.as_path()).map(Arc::new))
+            .map(|p| kernal_api::platform::fs::read_file(p.as_path()).map(Arc::new))
             .collect::<std::io::Result<_>>()?;
         let pack = build_pack(&bytes);
         persist_artifact_output(&pack_path_for(artifact_dir, key_hex), &pack)?;
