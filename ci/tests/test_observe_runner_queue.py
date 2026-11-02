@@ -166,3 +166,21 @@ def test_missing_job_is_a_violation_once_only_the_observer_remains() -> None:
         {"name": "Cache pre-prune barrier / Wait", "runner_name": "GitHub Actions 3", "completed_at": "2026-09-29T04:41:00Z"},
     ]
     assert not observe_runner_queue.upstream_pending(jobs, ["macos / Test"], self_runner="GitHub Actions 7")
+
+
+def test_started_at_without_an_acquired_runner_is_still_queued() -> None:
+    # forge-ci/zccache run 41494338424: GitHub stamped `macos / Test` with
+    # started_at == created_at while no hosted runner had acquired it
+    # (runner_name ""), so the observer exited 0 and the job was later
+    # cancelled with "not acquired by Runner of type hosted".
+    observation = observe_runner_queue.observe_once(
+        RUN,
+        [_job(status="queued", started_at="2026-08-28T05:30:00Z", runner_name="")],
+        ["matrix (macos-15)"],
+        now=NOW,
+        configured_runner="macos-15",
+    )[0]
+
+    assert observation.state is observe_runner_queue.QueueState.QUEUED
+    assert observation.queue_age == timedelta(minutes=30)
+    assert observe_runner_queue.queue_violations([observation], timedelta(minutes=15)) == [observation]

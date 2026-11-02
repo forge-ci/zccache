@@ -143,6 +143,11 @@ def observe_once(
         runner_labels = tuple(label for label in labels if isinstance(label, str)) if isinstance(labels, list) else ()
         status = str(job.get("status", "unknown"))
         conclusion = job.get("conclusion") if isinstance(job.get("conclusion"), str) else None
+        # GitHub can stamp started_at on a job no hosted runner has acquired
+        # (runner_name "", status "queued"); that is still queue time.
+        unacquired = "runner_name" in job and not job.get("runner_name")
+        if completed_at is None and started_at is not None and unacquired and status != "in_progress":
+            started_at = None
         if completed_at is not None:
             state = QueueState.COMPLETED
             queue_end = _parse_timestamp(started_at, f"job {name!r}.started_at") if started_at is not None else now
