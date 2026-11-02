@@ -96,10 +96,20 @@ impl<T: Default> Default for RwLock<T> {
     }
 }
 
+/// Yields before a contended waiter starts sleeping.
+pub(crate) const CONTENDED_YIELDS: u32 = 64;
+/// Upper bound on one contended-wait sleep; keeps release-to-acquire latency small.
+pub(crate) const CONTENDED_SLEEP_CAP: Duration = Duration::from_micros(200);
+
 #[track_caller]
 fn acquire_for<G>(bound: Duration, mut attempt: impl FnMut() -> TryLockResult<G>) -> LockResult<G> {
     let started = Instant::now();
-    let mut backoff = Duration::from_micros(50);
+    // Critical sections are short (holder watchdog), so a contended waiter
+    // yields first and only then sleeps, with a small cap: a 5 ms sleep cap
+    // stalled every contended warm hit long after the holder released (#1972
+    // regressed `cpp-response-file` Multi-file RSP, Warm from ~18 ms to ~30 ms).
+    let mut backoff = Duration::from_micros(10);
+    let mut yields = 0u32;
     loop {
         match attempt() {
             Ok(guard) => return Ok(guard),
@@ -112,8 +122,13 @@ fn acquire_for<G>(bound: Duration, mut attempt: impl FnMut() -> TryLockResult<G>
                 super::sync::LockTimeout(bound),
             );
         }
+        if yields < CONTENDED_YIELDS {
+            yields += 1;
+            std::thread::yield_now();
+            continue;
+        }
         std::thread::sleep(backoff.min(bound.saturating_sub(started.elapsed())));
-        backoff = (backoff * 2).min(Duration::from_millis(5));
+        backoff = (backoff * 2).min(CONTENDED_SLEEP_CAP);
     }
 }
 
@@ -324,5 +339,43 @@ mod tests {
             writer.join().unwrap();
         });
         assert_eq!(*lock.read_for(Duration::from_secs(1)).unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod handoff_latency_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Perf guard for the #1972 regression: a contended waiter must observe a
+    /// release promptly instead of sleeping through a multi-ms backoff step.
+    #[test]
+    fn contended_mutex_handoff_is_sub_millisecond() {
+        const ROUNDS: usize = 20;
+        let mut worst = Duration::ZERO;
+        for _ in 0..ROUNDS {
+            let mutex = Arc::new(Mutex::new(None::<Instant>));
+            let guard = mutex.lock_for(Duration::from_secs(5)).unwrap();
+            let waiter = {
+                let mutex = Arc::clone(&mutex);
+                std::thread::spawn(move || {
+                    let released = mutex.lock_for(Duration::from_secs(5)).unwrap();
+                    released.expect("holder stamps release").elapsed()
+                })
+            };
+            // Hold long enough for the waiter to reach its backoff sleeps.
+            std::thread::sleep(Duration::from_millis(8));
+            let mut guard = guard;
+            *guard = Some(Instant::now());
+            drop(guard);
+            worst = worst.max(waiter.join().unwrap());
+        }
+        // Old 5 ms sleep cap put the median handoff at multiple ms.
+        assert!(
+            worst < Duration::from_millis(2),
+            "contended handoff took {} ns (cap {} ns)",
+            worst.as_nanos(),
+            CONTENDED_SLEEP_CAP.as_nanos()
+        );
     }
 }
