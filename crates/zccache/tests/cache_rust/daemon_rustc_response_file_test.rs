@@ -197,3 +197,53 @@ async fn test_rustc_cargo_argfile_compiles_and_caches() {
     })
     .await;
 }
+
+/// The Rust compiler treats an `@` line inside an argfile literally.
+/// Passing expanded argv back to the compiler must not allow that line
+/// to inject flags through a second expansion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // integration-level: starts a real daemon and compiler
+async fn test_rustc_argfile_does_not_expand_nested_at_during_execution() {
+    let Some(compiler_path) = zccache::test_support::find_rustc() else {
+        eprintln!("skipping test: compiler not found");
+        return;
+    };
+    zccache::test_support::test_timeout(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("lib.rs");
+        let output = tmp.path().join("literal.rlib");
+        let nested = tmp.path().join("nested.rsp");
+        let outer = tmp.path().join("outer.rsp");
+        std::fs::write(&source, "pub fn value() -> u8 { 42 }\n").unwrap();
+        std::fs::write(&nested, "--cfg\ninjected\n").unwrap();
+        std::fs::write(
+            &outer,
+            format!(
+                "--crate-name\nliteral\n--crate-type=rlib\n{}\n-o\n{}\n@{}\n",
+                source.display(),
+                output.display(),
+                nested.display()
+            ),
+        )
+        .unwrap();
+        let (endpoint, server_handle, shutdown) = start_daemon().await;
+        let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
+        let session_id = start_session(&mut client).await;
+        let args = vec![format!("@{}", outer.display())];
+        let (exit_code, cached, stderr) = compile(
+            &mut client,
+            &session_id,
+            &compiler_path.to_string_lossy(),
+            &args,
+            tmp.path(),
+        )
+        .await;
+        shutdown.notify_one();
+        server_handle.await.unwrap();
+        assert_ne!(exit_code, 0, "nested @ argument was expanded: {stderr}");
+        assert!(!cached, "invalid arguments must not produce a cache hit");
+        assert!(!output.exists(), "invalid arguments produced an artifact");
+        assert!(stderr.contains("multiple input filenames"), "{stderr}");
+    })
+    .await;
+}
