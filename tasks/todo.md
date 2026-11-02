@@ -1,3 +1,12 @@
+# PR #2019 — rustc response files
+
+- [x] Preserve the fully pushed release branch and update local main.
+- [x] Review compiler-family parsing, cached expansion and regression coverage.
+- [x] Merge current main into the contributor branch locally without conflicts.
+- [ ] Run the isolated local gate and the real rustc argfile regression.
+- [ ] Push the validated update to #2019, observe checks and merge through the queue.
+- [ ] Return the checkout to clean, current main after merge.
+
 # #1116 container summary handoff
 
 - [x] Reproduce the real Linux campaign failure: root-owned 0644 summary,
