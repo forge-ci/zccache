@@ -746,10 +746,9 @@ impl StagedCompilePlan {
             .iter()
             .map(|output| output.staged.clone())
             .collect();
-        Ok(std::fs::read_dir(&self.root)?
-            .map(|entry| entry.map(|entry| entry.path().into()))
-            .collect::<io::Result<Vec<_>>>()?
+        Ok(kernal_api::platform::fs::read_dir_paths(&self.root)?
             .into_iter()
+            .map(Into::into)
             .filter(|path| !declared.contains(path))
             .collect())
     }

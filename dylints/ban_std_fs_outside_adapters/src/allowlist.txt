@@ -26,7 +26,6 @@ crates/zccache-daemon-core/src/daemon/server/cached_artifact.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
-crates/zccache-daemon-core/src/daemon/server/handle_clear.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/out_dir.rs
 crates/zccache-daemon-core/src/daemon/server/persist/artifact_io.rs
@@ -35,7 +34,6 @@ crates/zccache-daemon-core/src/daemon/server/persist/hardlink.rs
 crates/zccache-daemon-core/src/daemon/server/persist/link_registry.rs
 crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_paths.rs
-crates/zccache-daemon-core/src/daemon/server/persist/staged_plan.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/materialize.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
