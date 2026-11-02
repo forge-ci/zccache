@@ -861,6 +861,21 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
     } = match exec_result {
         CompileExecResult::Ok(outcome) => outcome,
         CompileExecResult::Error(resp) => return resp,
+        CompileExecResult::Uncached => {
+            drop(_pch_overlay);
+            return run_compiler_direct(
+                state,
+                &compiler,
+                args,
+                cwd,
+                &state.sessions,
+                &sid,
+                &client_env,
+                &stdin,
+                state.depfile_tmpdir.as_path(),
+            )
+            .await;
+        }
     };
     let (artifact_stdout, artifact_stderr, response_stdout, response_stderr) =
         if let Some(plan) = staged_plan.as_ref() {

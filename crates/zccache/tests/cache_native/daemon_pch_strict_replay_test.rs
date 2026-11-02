@@ -919,3 +919,7 @@ async fn private_pch_view_preserves_header_identity_across_aliases() {
     assert!(!dependencies.contains("input-0"), "{dependencies}");
     daemon.stop().await;
 }
+
+#[cfg(unix)]
+#[path = "daemon_pch_internal_scan_test.rs"]
+mod internal_scan;

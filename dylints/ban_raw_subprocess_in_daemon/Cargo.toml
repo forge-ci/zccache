@@ -13,10 +13,10 @@ crate-type = ["cdylib"]
 [dependencies]
 # Match the dylint_linting pin used by the sibling dylints — same toolchain
 # (rust-toolchain.toml here), same upstream commit.
-dylint_linting = "=6.0.3"
+dylint_linting = "=6.2.0"
 
 [dev-dependencies]
-dylint_testing = "=6.0.3"
+dylint_testing = "=6.2.0"
 serde_json = "1"
 tokio = { version = "1", features = ["process"] }
 kernal-api = { version = "=0.1.33", default-features = false }

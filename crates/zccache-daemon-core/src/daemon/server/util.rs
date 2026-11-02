@@ -204,6 +204,37 @@ pub(super) fn context_artifact_is_fresh(
     client_env: Option<&[(String, String)]>,
     expected_artifact: &str,
 ) -> bool {
+    context_artifact_is_fresh_with(
+        state,
+        context_key,
+        source_path,
+        since,
+        client_env,
+        expected_artifact,
+        None,
+    )
+}
+
+/// Stat-validated input hashes shared by the units of one multi-file request.
+///
+/// #1987 made every fast hit stat-verify each recorded input (source plus
+/// every resolved header). The units of one `-c a.cpp b.cpp ...` request
+/// share nearly all of their headers, so without sharing, a 50-unit request
+/// over ~110 headers re-stats and re-normalizes the same paths ~5,500 times.
+/// Units of one request are checked concurrently in arbitrary order, so one
+/// verdict per path for the whole request is the same contract.
+pub(super) type InputHashMemo = dashmap::DashMap<NormalizedPath, Option<ContentHash>>;
+
+/// [`context_artifact_is_fresh`], consulting and filling `memo` when given.
+pub(super) fn context_artifact_is_fresh_with(
+    state: &SharedState,
+    context_key: &ContextKey,
+    source_path: &Path,
+    since: Clock,
+    client_env: Option<&[(String, String)]>,
+    expected_artifact: &str,
+    memo: Option<&InputHashMemo>,
+) -> bool {
     if !context_files_fresh(state, context_key, source_path, since) {
         return false;
     }
@@ -215,10 +246,19 @@ pub(super) fn context_artifact_is_fresh(
             context_key,
             expected_artifact,
             |path| {
-                state
+                let path: NormalizedPath = path.into();
+                if let Some(known) = memo.and_then(|memo| memo.get(&path).map(|entry| *entry)) {
+                    return known;
+                }
+                // No memo shard guard is held across the stat.
+                let hash = state
                     .cache_system
                     .metadata()
-                    .get_cached_hash_if_stat_valid(&path.into())
+                    .get_cached_hash_if_stat_valid(&path);
+                if let Some(memo) = memo {
+                    memo.insert(path, hash);
+                }
+                hash
             },
             |name| {
                 rustc_env_dep_lookup_value(

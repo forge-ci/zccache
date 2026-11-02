@@ -171,12 +171,12 @@ pub(super) async fn run_compiler_direct_with_family(
         }
     };
 
-    let mut builder = kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd);
-    if let Some(ref rsp) = _rsp_guard {
-        builder = builder.arg(rsp.at_arg());
-    } else {
-        builder = builder.args(args);
-    }
+    let builder = super::compiler_spawn::user_compile_spawn(
+        compiler.as_path(),
+        cwd,
+        args,
+        _rsp_guard.as_ref(),
+    );
     let builder = apply_client_env_builder(
         builder,
         client_env,
@@ -217,7 +217,7 @@ pub(super) async fn run_compiler_direct_with_family(
         );
     }
     if let Some(view) = &_pch_overlay {
-        if let Err(refusal) = super::handle_compile::pch_overlay_aliases::extend_overlay_aliases(
+        if let Err(error) = super::handle_compile::pch_overlay_aliases::extend_overlay_aliases(
             view.path(),
             compiler,
             args,
@@ -228,9 +228,9 @@ pub(super) async fn run_compiler_direct_with_family(
         )
         .await
         {
-            return Response::Error {
-                message: format!("PCH alias validation failed: {refusal}"),
-            };
+            // #2027: fail open. The view without alias entries is still the
+            // drifted-input repair; this compile is uncached either way.
+            super::compiler_spawn::log_internal_scan_failure("PCH include alias scan", &error);
         }
     }
     let (result, streamed_output) = if let Some(context) = crate::daemon::compile_output::current()

@@ -30,6 +30,10 @@ pub(super) fn with_link_warning(result: Response, warning: Option<String>) -> Re
 /// command line exceeds the OS limit. Production callers pass the daemon's
 /// `state.depfile_tmpdir` (under the cache root) so the contents are
 /// covered by the wrapper's Defender exclusion - see issue #275.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: linkers and archivers are not compilers; their argv passes through unchanged"
+)]
 pub(super) async fn run_tool_passthrough(
     tool: &Path,
     args: &[String],
@@ -88,6 +92,10 @@ pub(super) async fn run_tool_passthrough(
 /// Run a parsed pure archiver through the canonical finite process owner.
 /// Archive, compiler and generic tool sessions share progress monitoring,
 /// concurrent pipe drains and native child containment.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: archivers are not compilers; their argv passes through unchanged"
+)]
 pub(super) async fn run_archive_tool_passthrough(
     tool: &Path,
     args: &[String],
@@ -126,6 +134,10 @@ pub(super) async fn run_archive_tool_passthrough(
 }
 
 /// Run an optional post-link deploy command on successful link output.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: a user deploy hook is not a compiler"
+)]
 pub(super) async fn run_post_link_deploy_hook(
     cmd_str: &str,
     output_path: &Path,
