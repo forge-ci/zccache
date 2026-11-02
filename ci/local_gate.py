@@ -78,6 +78,8 @@ class Check:
     bosn_job: str = ""
     selected_job: str | None = None
     required_steps: tuple[str, ...] = ()
+    # The event the replayed workflow must have run under (`--trigger`).
+    bosn_event: str = "pull_request"
 
 
 def checks() -> list[Check]:
@@ -248,8 +250,11 @@ def checks() -> list[Check]:
                 ".",
                 "--workflow",
                 ".github/workflows/integration.yml",
+                # #2039 removed `pull_request` from integration.yml, so a `pr`
+                # replay skips every job and act exits 1. `push` is the event
+                # the workflow still runs on; off `main` it writes no cache.
                 "--trigger",
-                "pr",
+                "push",
                 "--wait",
                 "--json",
             ),
@@ -258,6 +263,7 @@ def checks() -> list[Check]:
             min_version=(0, 1, 12),
             bosn_workflow=".github/workflows/integration.yml",
             bosn_job="integration",
+            bosn_event="push",
             required_steps=(
                 "Build integration test binaries",
                 "Install PCH regression toolchain",
@@ -477,6 +483,7 @@ def bosn_proof_error(
     expected_job: str,
     selected_job: str | None,
     required_steps: tuple[str, ...] = (),
+    expected_event: str = "pull_request",
 ) -> str | None:
     """Fail closed on wrong source, unknown evidence or unexecuted checks."""
     if not required_steps:
@@ -494,7 +501,7 @@ def bosn_proof_error(
         return "Bosn executed another commit"
     if not _run_finished(proof):
         return "Bosn run did not finish successfully"
-    if proof.engine != "act" or proof.event != "pull_request":
+    if proof.engine != "act" or proof.event != expected_event:
         return "Bosn used another engine or event"
     if proof.workflow != workflow or proof.selected_job != selected_job:
         return "Bosn executed another workflow selection"
@@ -541,6 +548,7 @@ def _run(check: Check) -> Result:
             expected_job=check.bosn_job,
             selected_job=check.selected_job,
             required_steps=check.required_steps,
+            expected_event=check.bosn_event,
         )
     return Result(
         check,
