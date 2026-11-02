@@ -4,14 +4,10 @@
 #
 # These are the pre-existing call sites. Burn them down: move the file onto the
 # kernal-api fs capability and delete its line.
-crates/zccache-artifact/src/kv/mod.rs
 crates/zccache-artifact/src/layout.rs
-crates/zccache-artifact/src/rust_plan/local.rs
 crates/zccache-artifact/src/snapshot.rs
 crates/zccache-artifact/src/staged_lock.rs
-crates/zccache-artifact/src/store.rs
 crates/zccache-compile-trace/src/lib.rs
-crates/zccache-core/src/config/cleanup.rs
 crates/zccache-core/src/config/materialization_mode.rs
 crates/zccache-core/src/config/resolve.rs
 crates/zccache-core/src/config/retired_store.rs
@@ -24,8 +20,8 @@ crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/log_io.rs
 crates/zccache-daemon-core/src/daemon/server/cached_artifact.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
-crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
+crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/out_dir.rs
 crates/zccache-daemon-core/src/daemon/server/persist/directory_bundle.rs
@@ -33,10 +29,10 @@ crates/zccache-daemon-core/src/daemon/server/persist/hardlink.rs
 crates/zccache-daemon-core/src/daemon/server/persist/link_registry.rs
 crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_paths.rs
+crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/materialize.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
-crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
 crates/zccache-daemon-core/src/daemon/server/run.rs
 crates/zccache-daemon-core/src/daemon/server/staging_root.rs
 crates/zccache-daemon-core/src/daemon/side_effect.rs

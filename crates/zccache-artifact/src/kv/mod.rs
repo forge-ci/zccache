@@ -380,7 +380,7 @@ fn is_transient_share_error(error: &std::io::Error) -> bool {
 fn read_declared_len(path: &Path) -> std::io::Result<Option<u64>> {
     use std::io::Read;
 
-    let mut file = match std::fs::File::open(path) {
+    let mut file = match kernal_api::platform::fs::open_read_regular_file(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
@@ -459,7 +459,7 @@ impl KvStore {
     pub fn get(&self, namespace: &str, key: &Key) -> KvResult<Option<Vec<u8>>> {
         check_namespace(namespace)?;
         let path = self.value_path(namespace, key);
-        let raw = match std::fs::read(&path) {
+        let raw = match kernal_api::platform::fs::read_file(&path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(KvError::Io(e)),
@@ -596,23 +596,23 @@ impl KvStore {
     pub fn list_namespace(&self, namespace: &str) -> KvResult<Vec<(Key, u64)>> {
         check_namespace(namespace)?;
         let dir = self.namespace_dir(namespace);
-        let entries = match std::fs::read_dir(dir.as_path()) {
+        let entries = match kernal_api::platform::fs::read_dir_paths(dir.as_path()) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(KvError::Io(e)),
         };
         let mut out: Vec<(Key, u64)> = Vec::new();
         for entry in entries {
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
+            let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             let Some(hex) = name.strip_suffix(".bin") else {
                 continue;
             };
             let Ok(key) = Key::from_hex(hex) else {
                 continue;
             };
-            if let Some(len) = read_declared_len(&entry.path())? {
+            if let Some(len) = read_declared_len(&entry)? {
                 out.push((key, len));
             }
         }
@@ -648,19 +648,22 @@ impl KvStore {
 
     /// Namespace directory names under `kv/`, sorted lexically.
     fn namespaces(&self) -> KvResult<Vec<String>> {
-        let entries = match std::fs::read_dir(self.kv_root().as_path()) {
+        let entries = match kernal_api::platform::fs::read_dir_paths(self.kv_root().as_path()) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(KvError::Io(e)),
         };
         let mut out: Vec<String> = Vec::new();
         for entry in entries {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+            if !kernal_api::platform::fs::symlink_metadata(&entry)?
+                .file_type()
+                .is_dir()
+            {
                 continue;
             }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
+            let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             if is_valid_namespace(name) {
                 out.push(name.to_string());
             }

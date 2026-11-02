@@ -312,7 +312,7 @@ impl ArtifactStore {
     /// as "empty" — same shape as the inline path in [`Self::open`].
     pub fn load_from_disk(&self) -> std::io::Result<()> {
         let path = self.path.as_path();
-        match std::fs::read(path) {
+        match kernal_api::platform::fs::read_file(path) {
             Ok(bytes) => match decode_index_rows(&bytes) {
                 Ok(rows) => {
                     let count = rows.len();
@@ -576,13 +576,13 @@ impl ArtifactStore {
 fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     {
-        let mut f = std::fs::File::create(tmp)?;
+        let mut f = kernal_api::platform::fs::create_file(tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }
     kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
+        if let Ok(dir) = kernal_api::platform::fs::open_read_regular_file(parent) {
             let _ = dir.sync_all();
         }
     }
@@ -846,7 +846,7 @@ mod tests {
             .path()
             .join("logs")
             .join(zccache_core::lifecycle::live_log_filename());
-        let body = std::fs::read_to_string(&log_path)
+        let body = kernal_api::platform::fs::read_to_string(&log_path)
             .expect("the event must land in <cache_root>/logs/<live log>");
         let corrupt = body
             .lines()

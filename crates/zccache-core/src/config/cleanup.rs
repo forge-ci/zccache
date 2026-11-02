@@ -63,14 +63,13 @@ pub(super) fn sweep_depfile_dirs<F>(base: &Path, is_alive: F, max_age: Duration)
 where
     F: Fn(u32) -> bool,
 {
-    let entries = match std::fs::read_dir(base) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(base) {
         Ok(entries) => entries,
         Err(_) => return 0,
     };
 
     let mut cleaned = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if !path.is_dir() {
             continue;
         }
@@ -155,15 +154,14 @@ fn cleanup_legacy_temp_depfile_dirs<F>(temp_root: &Path, is_alive: F) -> usize
 where
     F: Fn(u32) -> bool,
 {
-    let entries = match std::fs::read_dir(temp_root) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(temp_root) {
         Ok(entries) => entries,
         Err(_) => return 0,
     };
 
     let mut cleaned = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let file_name = entry.file_name();
+    for path in entries {
+        let file_name = path.file_name().unwrap_or_default();
         let name = match file_name.to_str() {
             Some(name) if name.starts_with("zccache-depfiles-") => name,
             _ => continue,
@@ -204,7 +202,7 @@ fn legacy_temp_depfile_pid(name: &str) -> Option<u32> {
 }
 
 fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
+    kernal_api::platform::fs::symlink_metadata(path)
         .map(|meta| meta.file_type().is_dir())
         .unwrap_or(false)
 }

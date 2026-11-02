@@ -6,11 +6,15 @@ name = "ban_std_fs_outside_adapters"
 # change to src/allowlist.txt: setup-soldr's dylint cache key hashes the
 # manifest but not the allowlist, so a content-only edit would otherwise
 # re-use the cached compiled plugin and the OLD allowlist would stay in effect.
+# 2026-11-02: 0.1.6 shrinks allowlist 49 -> 45 (read + read_dir burn onto the
+# 0.1.37 facade: read_file / read_to_string / read_dir_paths / create_file /
+# open_read_regular_file / symlink_metadata / set_permissions in kv, store,
+# rust_plan/local and config/cleanup).
 # 2026-11-01: 0.1.3 shrinks allowlist 56 -> 53 (the last three files whose only
 # `std::fs` call was `read`/`read_to_string`, now on the 0.1.36 read side).
 # 2026-11-01: 0.1.2 shrinks allowlist 63 -> 56 (read-side burn onto
 # kernal-api 0.1.36: read_file / read_to_string / symlink_metadata).
-version = "0.1.5"
+version = "0.1.6"
 description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
 edition = "2021"
 publish = false

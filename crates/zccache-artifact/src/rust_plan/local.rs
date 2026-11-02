@@ -644,7 +644,7 @@ fn snapshot_to_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
     copy_bundle_file(src, dst, bundle_mode()?)?;
     let mut permissions = kernal_api::platform::fs::path_metadata(dst)?.permissions();
     permissions.set_readonly(true);
-    std::fs::set_permissions(dst, permissions)
+    kernal_api::platform::fs::set_permissions(dst, permissions)
 }
 
 fn restore_bundle_file(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -664,7 +664,7 @@ fn make_bundle_file_writable(path: &Path) -> std::io::Result<()> {
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
                 && (kernal_api::platform::host::target_is_windows()
-                    || std::fs::symlink_metadata(path)
+                    || kernal_api::platform::fs::symlink_metadata(path)
                         .map(|metadata| metadata.file_type().is_symlink())
                         .unwrap_or(false)) =>
         {
@@ -685,10 +685,11 @@ fn remove_bundle_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn clear_readonly(path: &Path) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let child = entry.path();
-        if entry.file_type()?.is_dir() {
+    for child in kernal_api::platform::fs::read_dir_paths(path)? {
+        if kernal_api::platform::fs::symlink_metadata(&child)?
+            .file_type()
+            .is_dir()
+        {
             clear_readonly(&child)?;
         } else {
             let _ = make_bundle_file_writable(&child);
