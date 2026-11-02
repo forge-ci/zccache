@@ -34,9 +34,16 @@ zccache is a local-first compiler cache (23 crates) for C/C++/Rust/Emscripten, i
 - **Always use `uv` for Python.** Bare `python`/`pip` are blocked by hook. Use `uv run ...` or `uv pip ...`.
 - MSRV: 1.95.0 | Edition: 2021 | Toolchain: 1.95.0 (clippy + rustfmt)
 - CI: Linux, macOS, Windows. All warnings denied (`RUSTFLAGS="-D warnings"`)
-- **Workflows get Rust from `zackees/setup-soldr`, never `dtolnay/rust-toolchain`.** soldr materializes the `rust-toolchain.toml` pin; dtolnay ignores it. Reuse the pinned setup-soldr SHA from current `main`, and never copy a setup-soldr block from a stale branch. Every setup-soldr call site sets `solo-toolchain-cache: false` (#1677 retired that archive), `cook-delta: false`, and global `save-cache: auto` with the main-push pre-prune permission in `save-cache-remote`, or explicit global `save-cache: "false"`. The published action owns local automatic saves; do not add ACT-only input overrides. Explicit global false stays read-only on every runner. A new cache family needs a budget before it lands (the repo already runs near the 10 GB quota, #1758). When the job tests something that owns `RUSTC_WRAPPER` (e.g. `test-action.yml`), also turn off `build-cache`, `target-cache` and `cargo-registry-cache`, set `prebuild-deps: none`, and reset the `ZCCACHE_CACHE_DIR`/`ZCCACHE_COMPILE_PRIORITY` values it exports. **After any workflow or action edit, run `uv run --no-project --with pyyaml python ci/check_cache_footprint.py`**; the `workflow_guard.py` PostToolUse hook also runs it on workflow edits (#1760). Existing dtolnay uses in `bench-action.yml`, `bench-fingerprint.yml` and `release-auto.yml` are migration debt, not precedent.
+- **Workflows get Rust from `zackees/setup-soldr`, never `dtolnay/rust-toolchain`.** soldr materializes the `rust-toolchain.toml` pin; dtolnay ignores it. Reuse the pinned setup-soldr SHA from current `main`, and never copy a setup-soldr block from a stale branch. Every setup-soldr call site sets `solo-toolchain-cache: false` (#1677 retired that archive), `cook-delta: false`, and global `save-cache: auto` with the main-push pre-prune permission in `save-cache-remote`, or explicit global `save-cache: "false"`. The published action owns local automatic saves; do not add ACT-only input overrides. Explicit global false stays read-only on every runner. A new cache family needs a budget before it lands (the repo already runs near the 10 GB quota, #1758). When the job tests something that owns `RUSTC_WRAPPER` (e.g. `test-action.yml`), also turn off `build-cache`, `target-cache` and `cargo-registry-cache`, set `prebuild-deps: none`, and reset the `ZCCACHE_CACHE_DIR`/`ZCCACHE_COMPILE_PRIORITY` values it exports. **After any workflow or action edit, run `uv run --no-project --with pyyaml python ci/check_cache_footprint.py`**; the `workflow_guard.py` PostToolUse hook also runs it on workflow edits (#1760). Existing dtolnay uses in `bench-action.yml`, `bench-fingerprint.yml` and `auto-release.yml` are migration debt, not precedent.
 - **Put every new pull-request test in `.github/workflows/ci.yml`**, either as a CI job or in a reusable workflow called by CI. Do not create a new PR-triggered GitHub Actions workflow/category for a test. Preserve docs-only checks when changing CI path filters; existing standalone PR workflows are being consolidated in #1639.
 - Every directory with files must have a README.md (enforced by hook)
+
+## Blocking and waiting policy
+
+- Blocking synchronization and wait APIs require an explicit `Duration`; do not expose an optional timeout or an unbounded overload. Use `zccache_core::wait` and `blocking_sync`.
+- Async shared data belongs in `zccache_core::sync::State` synchronous callbacks. Data guards must never cross an await; blocking operations belong on the blocking lane.
+- Short state/native critical sections have an independent holder watchdog. Use data-free operation permits for complete I/O operations; see [runtime.md](docs/architecture/runtime.md#bounded-synchronization-and-async-state) for acquisition, hold and copy budgets.
+- A timeout argument bounds acquisition, not arbitrary callback execution or a kernel filesystem syscall. Service lifecycle listeners and cancellation-driven loops need an explicit owner and shutdown path; they are not proof that every async wait is bounded.
 
 ## Commands
 
@@ -117,7 +124,7 @@ uv run python ci/build_dist.py --skip-build
 
 ### Publishing
 
-- **Automation**: `.github/workflows/release-auto.yml` is the only supported release entrypoint. It validates release metadata, fails fast when the current version is already fully published on PyPI/crates.io, builds wheel/release artifacts, publishes PyPI wheels, publishes Rust crates, and creates the GitHub release.
+- **Automation**: `.github/workflows/auto-release.yml` is the only supported release entrypoint. It validates release metadata, fails fast when the current version is already fully published on PyPI/crates.io, builds wheel/release artifacts, publishes PyPI wheels, publishes Rust crates, and creates the GitHub release.
 - **Helper module**: `ci/release_workflow.py` contains workflow-only Python helpers for preflight checks, wheel assembly, and crates.io publish order. It does not dispatch other GitHub workflows.
 - **Three trigger paths**, all converge on the same publish pipeline:
   1. **Auto on push-to-main** (the everyday path): the `detect-bump` job reads `[workspace.package].version` from `Cargo.toml`, compares it to the prior commit's version, and proceeds iff the version was bumped. Merge a `chore(release): bump … -> X.Y.Z` PR and the release ships on its own.
@@ -128,7 +135,7 @@ uv run python ci/build_dist.py --skip-build
   - **`dry-run` defaults to `true`.** A dispatch that accepts the defaults builds, packages, and wheel-tests every target and publishes nothing — including the GitHub Release, whose publish step is itself `if: inputs['dry-run'] != true`. That is the rehearsal: use it to prove a fix before shipping. **Set `dry-run: false` to actually publish.**
   - **Re-dispatch resumes; it does not republish.** `preflight` reads PyPI and crates.io and exports `pypi_complete` / `crates_complete`; `publish-pypi` and `publish-crates` skip whatever is already live, and `publish-crates` also accepts an already-complete PyPI in place of a fresh `publish-pypi`. `detect-bump` short-circuits to `should_release=true` on `workflow_dispatch`, so a manual run proceeds even when the GitHub Release/tag already exists. A partially published version therefore recovers by dispatching again — it lands on the missing registry only.
   - **The one irreversible boundary** is inside the publish phase, which is sequential (GitHub Release → PyPI → crates.io). "Nothing publishes on failure" is exact for any failure *before* that phase. If `publish-pypi` succeeds and `publish-crates` then fails, the PyPI version is live and cannot be reused — recovery resumes at crates.io rather than bumping. Treat a green `dry-run` as the checkpoint before crossing this line.
-- **PyPI setup**: Prefer Trusted Publishing. Configure PyPI to trust repo `zackees/zccache`, workflow `.github/workflows/release-auto.yml`, environment `pypi`.
+- **PyPI setup**: Prefer Trusted Publishing. Configure PyPI to trust repo `zackees/zccache`, workflow `.github/workflows/auto-release.yml`, environment `pypi`.
 - **crates.io setup**: Add GitHub Actions secret `CARGO_REGISTRY_TOKEN` from https://crates.io/me.
 - **Marketplace**: GitHub Marketplace publishing is not API-automated. After the workflow creates the GitHub release, open that release in GitHub, select `Publish this action to the GitHub Marketplace`, choose categories, and publish.
 
@@ -173,3 +180,15 @@ Hooks are in `ci/hooks/` (Python) and `crates/zccache-ci` (Rust):
 - No laziness. Root causes only. Senior developer standards.
 - Speed above all. Ship fast, capture failures in unit tests, fix as they arise.
 - Plan non-trivial work in `tasks/todo.md`. Capture lessons in `tasks/lessons.md`.
+
+## Design principles (fleet directives, zackees/ci.yml#163)
+
+Agent and review guidance from zackees/ci.yml `docs/policy-rust.md` ("Design principles, narrowed"). Not enforced by ci-lint; no rule ID.
+
+1. **Search before you add.** Before adding a resolver, detector, predicate, guard or path helper, `rg` for an existing one. Reuse it, or say in the PR why it does not fit.
+2. **Conflicting implementations get a research issue, not an inline winner.** If the same concept is implemented more than once with observably different behaviour and fixing it needs a design decision, file `research: N conflicting implementations of X -- which is canonical?` listing every copy (`file:line`) and what the difference does to real input; cross-reference it and carry on with your task. Copies that behave identically are a refactor, not an issue.
+3. **Keep behaviour changes and refactors apart.** Separate commits, preferably separate PRs, never one mixed diff.
+4. **Refactor first only when you would grow a giant function.** If a fix would add more than 50 lines to a function already over 200 lines, extract first in a separate behaviour-preserving change with characterization tests written first (RED -> GREEN). Otherwise fix it where it belongs; no unrequested restructures.
+5. **Function and file size follow the complexity ratchet (`RUST-018`).** New functions stay under clippy's `too_many_lines` (100) and `cognitive_complexity` (25). A function carrying an `#[expect]` must not grow; delete the `expect` once it is back under. Never split a file with `include!` fragments to dodge a length ceiling. Before splitting a hot file, check `git branch -a --contains` for in-flight branches -- a split is a rename and conflicts destructively.
+6. **Fail fast, and delete before you abstract.** Reject invalid input at the boundary with a typed error; never fall back silently to a degraded path. Prefer deleting code to adding a layer. No new trait until there are two real implementations (a test double does not count).
+7. **Existing boundaries beat generic DRY.** Platform modules, Dylint-enforced layering, crate boundaries and documented deliberate copies win over removing duplication. Do not copy code across a crate boundary to get around it -- say the boundary hurts. An undocumented copy is a finding under 2; a documented one is not.

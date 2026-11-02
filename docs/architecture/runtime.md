@@ -49,14 +49,132 @@ For the on-disk record shape and the closed `miss_reason` enum, see
 
 ### Lock Ordering
 
-There is no nested locking. The design avoids situations where one lock is held while acquiring another:
+Data access and operation admission have separate synchronization boundaries:
 - DashMap lookups are point operations. The shard lock is released before any I/O.
 - The index writer's `flush()` does not hold DashMap shard locks across disk I/O.
 - The watcher thread never acquires DashMap locks directly; it sends events through a channel.
 
-This eliminates deadlock by design.
+Data guards must leave scope before asynchronous work. Publication, maintenance,
+and compile-admission permits can intentionally span awaits; their acquisition
+order still requires review.
 
 ---
+
+## Bounded synchronization and async state
+
+`zccache_core::sync::State<T>` owns mutable data shared by async tasks. Its
+`with_for(Duration, callback)` and `try_with_for(Duration, callback)` methods
+invoke a synchronous callback after bounded acquisition. The callback cannot
+await, return a borrowed guard, or return a future borrowing the state. Runtime
+doctor warnings, watcher registration, include caches, task slots, and download
+status use this boundary. Blocking loaders use `with_blocking_for`.
+
+`sync::Gate` serializes complete operations; its opaque permit retains the
+`Arc<Gate>` identity so weak per-key pools cannot replace a gate in use.
+A separate data-free gate coalesces initial staged-store lease acquisition
+without holding the weak-slot state mutex over filesystem waits.
+
+`sync::Barrier` supplies shared and exclusive publication/admission permits.
+These types contain no caller data.
+Their acquisition APIs require a `Duration`. Single-flight compiler/include
+probes, linker output exclusion, and disk maintenance use gates. Publication and
+resource admission use barriers. Cancellation of an acquisition drops its queue
+position. Shutdown rejects new publication before and after acquiring a permit.
+
+`blocking_sync::{Mutex, RwLock}` supplies synchronous locks with mandatory
+acquisition budgets. Poisoning remains visible to existing callers. The timed
+reader/writer adapter preserves writer preference: polling `try_write` alone
+would allow an arriving stream of readers to starve a writer. Default budgets
+are 15 seconds for state and 30 minutes for queued operations. Recoverable state
+and gate APIs return `LockTimeout`; essential acquisition expiry logs the caller
+and aborts the service so its supervisor can restart it. This is a deliberate
+failure mode, replacing a silent, unbounded stall.
+
+The private `sync_watchdog` owner registers waiters and short critical-section
+holders with RAII tickets. `State` callbacks and native guards have a 15-second
+hold budget, independent of their acquisition argument. A dedicated OS thread
+checks every 100 milliseconds, so a blocked async executor cannot suppress the
+check. An overdue holder queues every registered holder/waiter site, owner
+identity, thread and nanosecond timing, then aborts after allowing at most 250 ms
+for diagnostic delivery. Overdue waiters are reported once without aborting:
+a queue behind legitimate work is not a broken holder.
+Acquisition expiry retains its existing recoverable or essential failure
+contract. Essential expiry also dumps the registry. Direct stderr writes bypass
+libtest print capture. A separate process-lifetime writer and a one-entry queue
+keep blocked stderr or logging locks off the monitor/termination path. Reports
+are best effort when that bounded sink is unavailable; termination still runs.
+No tracing callback runs before abort. Formatting runs outside the registry lock.
+Cancellation, normal guard release, recovered poison and panic unwinding remove
+their tickets. Failure to start the watchdog aborts rather than silently disabling it.
+
+Spawn admission uses the same native owner: shared holds cover spawn only and
+have the 15-second limit; exclusive materialization includes copying and
+publication and gets 120 seconds. Both admission entrypoints use the operation
+acquisition budget so legitimate copies and queues can outlive 15 seconds.
+Native owners can select explicit justified
+hold budgets at construction; changing an acquisition budget never changes a
+hold budget. `Gate`/`Barrier` operation permits have no protected data and are
+excluded from the short-holder watchdog. In particular, depgraph disk persistence
+uses a gate with the operation acquisition budget rather than a short unit mutex.
+Operation liveness and cancellation remain responsibilities of their owners.
+
+`zccache_core::wait` owns bounded channel sends/receives, thread joins, child waits,
+captured probes, file locks, and synchronous runtime bridges. Budgets are required
+arguments. Child/probe containment and captured-output readers stay with
+kernal-api. File-lock contention during eviction defers maintenance after two
+seconds; Clear and ordinary store-lock operations have a 30-second budget.
+
+`dylints/ban_unbounded_sync` registers two deny lints:
+
+- `ban_unbounded_sync` resolves APIs by DefId, rejecting raw std, Tokio,
+  kernal-api, and parking_lot lock access, raw blocking waits, and direct
+  blocking-lock acquisition in async bodies outside the adapter owners.
+- `ban_guard_across_await` inspects compiler coroutine witnesses for data guards,
+  including aliases, function-returned guards, and guards in generic containers.
+  It covers DashMap guards, native watchdog guard wrappers, and mutex/reader-writer guards. Lexical scopes
+  release guards before suspension; explicit `drop` alone can leave storage in
+  the coroutine witness and is therefore insufficient for this rule.
+
+Only core's synchronization/wait adapters and its private watchdog bookkeeping
+may use raw primitives. Test harnesses
+are exempt; each production crate is also linted without the test harness.
+Existing Dylint wiring runs the library on Linux, Windows and macOS selections.
+The facade compile-fail doctests and the lint's UI fixtures prove rejected shapes.
+Run the runtime regressions with `bosn run --task bounded-sync-test`.
+Watchdog regressions use `bosn run --task lock-watchdog-test` and
+`bosn run --task spawn-watchdog-test`; the latter exercises the actual
+120-second materialization hold limit in an isolated child process.
+
+These boundaries prevent data guards from spanning awaits and require budgets
+for the covered lock/wait APIs. The holder watchdog terminates the process on
+observed overruns; it does not cancel arbitrary callbacks in place, guarantee a
+hard real-time deadline, interrupt an uninterruptible kernel syscall, or establish
+a global order between operation permits.
+
+### Soldr fixes audited (2026-09-01 through 2026-10-21)
+
+| PR | Status | Relevance here |
+|---|---|---|
+| [#3836](https://github.com/zackees/soldr/pull/3836) | Merged October 16 | Compiler `-vV` held spawn admission while waiting, creating a writer-preference cycle. Both probe paths here had the bug. |
+| [#3842](https://github.com/zackees/soldr/pull/3842) | Superseded by #3845 | Bounded lock facade, raw-lock Dylint and hold watchdog proposal. |
+| [#3843](https://github.com/zackees/soldr/pull/3843) | Superseded by #3845 | Vendored zccache audit, including maintenance holding publication exclusion while waiting on a foreign file lock. |
+| [#3844](https://github.com/zackees/soldr/pull/3844) | Superseded by #3845 | Mandatory timeout APIs for blocking waits and raw-wait enforcement. |
+| [#3845](https://github.com/zackees/soldr/pull/3845) | Merged October 17 | Combined the three prevention proposals and vendored fixes. The guard-free state API here additionally prevents data guards escaping to async callers. |
+| [#3849](https://github.com/zackees/soldr/pull/3849) | Merged October 17 | Updated vendored zccache to 1.15.5 while retaining bounded-wait fixes; routed its new PCH mutex through the guarded primitive. |
+| [#3825](https://github.com/zackees/soldr/pull/3825) | Merged October 16 | Related depgraph reentry deadlock; resolved OUT_DIR identity before acquiring the depgraph guard. That OUT_DIR work is already on this branch's base. |
+| [#3602](https://github.com/zackees/soldr/pull/3602) | Merged October 7 | Related executor starvation: moved blocking cook database work off Tokio workers and derived reply budgets from database busy timeouts. |
+| [#3199](https://github.com/zackees/soldr/pull/3199) | Merged September 13 | Related pipe deadlocks: drain output before waiting; new probes here retain kernal-api's bounded capture owner. |
+
+The existing inherited-writer publication check is the prerequisite from
+[soldr #3368](https://github.com/zackees/soldr/pull/3368): wait at publication
+for foreign fork-to-exec descriptor inheritance, rather than retain a spawn
+guard through the child's lifetime.
+
+The probe's shared spawn guard is private to `spawn_exclusion`; production
+callers receive only an opaque `SpawnAdmission` hook, acquired on the actor
+thread around native spawn. They cannot obtain the guard to retain around a
+child wait. Sync and async regression tests wait for child readiness, then prove
+an exclusive materializer can acquire while the probe is still running.
 
 ## Fingerprint watch-map lock discipline
 
@@ -101,38 +219,53 @@ This is the async-bridge design tracked under meta #889. Its pieces:
 
 ### 1. The one spawn API
 
-`daemon::process::tokio_command_output_with_priority_stdin` (and its
-`_priority` / `_timeout` wrappers) is the single entry point async daemon code
-uses to run a child process — compile (`compile_exec`), link (`handle_link`),
-multi-compile (`handle_compile_multi`), generic exec (`handle_exec`), and the
-system-include probe. It always spawns with piped stdio + `kill_on_drop(true)`.
-Daemon-process death is covered separately on every supported host: Linux uses
-`PR_SET_PDEATHSIG`, macOS uses running-process's transactional kqueue
-supervisor, and Windows retains zccache's process-wide **job object**
-(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`). Thus the compiler child is reaped both
-when a request future is cancelled and when the daemon process itself dies.
+`daemon::process::async_builder_output_with_priority_stdin` and its capture,
+streaming and probe wrappers require a concrete `ProcessLiveness` policy.
+Compiler, linker, archive, deploy-hook, passthrough and generic exec requests all
+use the same `process_session.rs` owner. It applies spawn admission, priority,
+piped stdio, native containment and `kill_on_drop` to kernal-api sessions.
+Daemon death is covered by Linux parent-death signaling, the macOS transactional
+supervisor and the Windows kill-on-close job object.
 
-### 2. Child-wait watchdog (`daemon::child_watchdog`)
+### 2. Finite process liveness (#1963)
 
-The naive `Child::wait_with_output()` can hang forever. `wait_with_output_watchdog`
-replaces it with a concurrent-drain loop guarding two independent wedge modes —
-**progress-based, never a wall-clock cap on the compile itself** (a large link
-legitimately runs for minutes):
+The shared owner drains both output streams concurrently and observes output,
+identity-bound session CPU and live-tree CPU-tick progress. CPU/output advances refresh the stall
+clock; a quiet child with no CPU progress expires. Configured defaults are:
 
-| Mode | Wedge | Signal | Action |
-|---|---|---|---|
-| **A** (#962) | Child exited, but an orphaned grandchild still holds the stdout/stderr pipe → EOF never arrives | pipe not EOF `POST_EXIT_DRAIN` after exit | abandon drain, return captured output + real status |
-| **B** (#891) | Child never exits and makes no progress | no output **and** no CPU for `STALL_WINDOW` | kill the child, return |
+| Budget | Default | Behavior |
+|---|---|---|
+| Stall | 300 s | Terminate a live child with no CPU/output progress |
+| Total | 6 h | Bound spawn, admission, execution and drain even with ongoing progress |
+| Post-exit drain | 2 s | Abandon descendant-held pipes after direct-child exit |
+| Cleanup | 5 s | Bound kill/reap confirmation after failure or expiry |
+| Streaming send | Stall budget | Fail if a live output consumer stops receiving |
 
-Mode B samples per-process CPU (`GetProcessTimes` on Windows, `/proc/<pid>/stat`
-on Linux, `proc_pid_rusage` on macOS) every `STALL_TICK`; a child that is silent
-but CPU-bound (rustc mid-codegen) or chatty but slow is never touched.
+The six-hour total is a finite backstop for progressing or CPU-unobservable
+children. Callers may construct another finite policy explicitly. Stall, total
+and cleanup must be positive and representable; a zero explicit drain budget
+means immediate bounded abandonment. Legacy zero environment settings select
+finite defaults rather than disabling process liveness.
+
+Read failures and stalled/disconnected consumers return I/O errors through the
+same cleanup owner. A timeout reports whether termination was confirmed or
+cleanup remained unconfirmed. Spawn timeout requests cancellation; it does not
+claim reaping confirmation before a session exists. Cancellation drops the owned
+session and requests native tree cleanup; isolated regressions verify child
+disappearance and operation-permit release.
+
+`ban_raw_subprocess_in_daemon` resolves native and kernal-api process symbols,
+including aliases, UFCS and stored function items. Semantic session operations
+belong in the canonical owner, whose helper signatures require a direct policy
+or Duration. Raw std/Tokio creation is forbidden throughout daemon production
+code. The lint establishes placement and budget signatures; runtime tests prove
+progress and cleanup behavior.
 
 ### 3. Request cancellation (#967)
 
 The IPC dispatch loop races each compile/link/exec handler against **client
 disconnect** (`IpcConnection::wait_for_disconnect`). If the client vanishes, the
-handler future is dropped at its `wait_with_output().await` point; `kill_on_drop`
+handler future is dropped while awaiting the process facade; `kill_on_drop`
 reaps the child and the compile-concurrency permit is released. The embedded
 service does the same via `ZccacheConfig::cancellation` (#923).
 
@@ -140,8 +273,8 @@ service does the same via `ZccacheConfig::cancellation` (#923).
 
 | Path | Bound | Env knob | Issue |
 |---|---|---|---|
-| Post-exit pipe drain (Mode A) | 2 s after exit | `ZCCACHE_POST_EXIT_DRAIN_MS` (`0`=off) | #962 |
-| Alive-hung stall (Mode B) | 300 s no-progress | `ZCCACHE_STALL_WINDOW_MS` (`0`=off) | #891 |
+| Post-exit pipe drain (Mode A) | 2 s after exit | `ZCCACHE_POST_EXIT_DRAIN_MS` (`0`=finite default) | #962 |
+| Alive-hung stall (Mode B) | 300 s no-progress | `ZCCACHE_STALL_WINDOW_MS` (`0`=finite default) | #891 |
 | `<compiler> -vV` identity probe | 30 s | `ZCCACHE_RUSTC_PROBE_TIMEOUT_MS` | #972 |
 | Embedded flush disk-save steps | 30 s each | — | #973 |
 | `zccache exec` coalesce wait | 60 s, then run own copy | `ZCCACHE_EXEC_COALESCE_WAIT_MS` | #971 |
@@ -804,3 +937,19 @@ get its own row plus a one-line justification here. The dylint catches
 unrooted `$TMPDIR` writes at compile time, but it cannot catch writes that
 hardcode an absolute path outside the cache root — those have to be caught
 in review against this section.
+
+### Follow-up audit of soldr timeout rules
+
+Soldr's `soldr-platform/src/platform/wait.rs` requires a timeout for channel
+send/receive, join, child wait/output/status, file locks, rendezvous barriers,
+and runtime bridges. Its sync facade additionally watches critical-section
+hold times; zccache's callback boundary currently bounds acquisition only.
+Raw blocking waits are denied here, including the kernal-api command runner
+whose optional timeout otherwise bypasses our mandatory `Duration` facade.
+Use bounded command capture for status as well; raw child output collection
+and untimed rendezvous barriers have no supported product entry point.
+
+This audit also found existing optional receive budgets in IPC and optional
+`DownloadWait` budgets. These are separate protocol/lifecycle APIs and remain
+to be migrated; the current lint does not establish that **all** async waiting
+functions require timeout arguments. Do not describe this guarantee as complete.

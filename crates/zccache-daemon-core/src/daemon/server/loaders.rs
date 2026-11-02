@@ -62,7 +62,7 @@ impl DaemonServer {
     ///
     /// Designed to be called once, immediately after `write_lock_file`,
     /// inside a `tokio::task::spawn_blocking`. The loader uses
-    /// `blocking_lock()` on the tokio mutex so the brief merge fits
+    /// `with_blocking_for()` on the tokio mutex so the brief merge fits
     /// inside the blocking thread (same shape as
     /// `set_depgraph_load_warning`).
     pub fn system_includes_loader(&self) -> SystemIncludesLoader {
@@ -127,12 +127,9 @@ impl DepGraphSetter {
                 .store(true, Ordering::Release);
         }
         if let Some(warning) = warning {
-            let mut guard = self
-                .state
+            self.state
                 .depgraph_load_warning
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            *guard = Some(warning);
+                .with_blocking_for(STATE_TIMEOUT, |slot| *slot = Some(warning));
         }
         self.state
             .dep_graph_load_complete
@@ -159,7 +156,7 @@ pub struct CompilerHashCacheLoader {
 /// merges it into the running daemon's `Mutex<SystemIncludeCache>`.
 ///
 /// Issue #784 phase 2c. Same shape as [`CompilerHashCacheLoader`] but
-/// uses `blocking_lock()` to acquire the tokio mutex briefly during
+/// uses `with_blocking_for()` to acquire the tokio mutex briefly during
 /// the merge (the `SystemIncludeCache` itself uses `HashMap` with
 /// `&mut self` mutations, so the mutex stays on the live field).
 pub struct SystemIncludesLoader {
@@ -229,8 +226,11 @@ impl SystemIncludesLoader {
             Ok(loaded) => {
                 let loaded_len = loaded.len();
                 {
-                    let mut live = self.state.system_includes.blocking_lock();
-                    live.merge_from(loaded);
+                    self.state
+                        .system_includes
+                        .with_blocking_for(STATE_TIMEOUT, |live| {
+                            live.merge_from(loaded);
+                        })
                 }
                 if loaded_len > 0 {
                     tracing::info!(

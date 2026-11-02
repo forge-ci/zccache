@@ -552,26 +552,11 @@ fn contextualize_connect_error(endpoint: &str, error: std::io::Error) -> IpcErro
     ))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("cannot connect to daemon at {endpoint}: {source}")]
 struct EndpointConnectError {
     endpoint: String,
     source: std::io::Error,
-}
-
-impl std::fmt::Display for EndpointConnectError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "cannot connect to daemon at {}: {}",
-            self.endpoint, self.source
-        )
-    }
-}
-
-impl std::error::Error for EndpointConnectError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 /// Generate a unique test endpoint name.

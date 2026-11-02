@@ -10,6 +10,9 @@ name: Wrapper end-to-end
 # swallowed — is fixed.
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: "22 7 * * *"
   push:
     branches: [main]
     paths-ignore:
@@ -23,19 +26,8 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
 
 permissions:
   actions: read
@@ -56,6 +48,9 @@ jobs:
       contents: read
 
   wrapper-e2e:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: cache-pre-prune
     strategy:
       fail-fast: false
@@ -109,6 +104,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
           save-cache: auto

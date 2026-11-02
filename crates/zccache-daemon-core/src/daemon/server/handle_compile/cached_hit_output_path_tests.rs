@@ -89,6 +89,7 @@ fn materialize(
         rustc_metadata_compat_outputs: None,
         rustc_archive_hardlink_eligible,
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     })
     .expect("cache hit must materialize");
@@ -181,7 +182,7 @@ async fn perf_rustc_out_dir_hit_materializes_b_depinfo_without_a_paths() {
         current_depfile_dest: Some(depfile_dest.clone()),
         current_rustc_out_dir: Some(CertifiedOutDir {
             path: b_out.to_string_lossy().into_owned(),
-            generated_name: "bindgen.rs",
+            generated_name: Some("bindgen.rs"),
         }),
         depfile_key_root: None,
         compile_start: Instant::now(),
@@ -193,6 +194,7 @@ async fn perf_rustc_out_dir_hit_materializes_b_depinfo_without_a_paths() {
         rustc_metadata_compat_outputs: Some(vec![output_path.clone(), depfile_dest.clone()]),
         rustc_archive_hardlink_eligible: Some(true),
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     });
     assert!(matches!(

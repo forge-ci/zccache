@@ -244,3 +244,28 @@ def test_run_letsthe_proof_decide_the_lane_verdict(case: ReplayCase, monkeypatch
         ),
     )
     assert (local_gate._run(check).code == 0) == case.expect_pass
+
+
+def test_a_check_proves_only_the_event_it_declares():
+    push_receipt = RECEIPT.replace('"event":"pull_request"', '"event":"push"')
+    common = dict(
+        workspace=Path("/test/source"),
+        head_sha="a" * 40,
+        workflow=".github/workflows/integration.yml",
+        expected_job="integration",
+        selected_job=None,
+        required_steps=("Test (full workspace)",),
+    )
+    assert local_gate.bosn_proof_error(push_receipt, expected_event="push", **common) is None
+    assert local_gate.bosn_proof_error(RECEIPT, expected_event="push", **common) is not None
+
+
+def test_every_bosn_check_triggers_the_event_it_verifies():
+    """#2039: integration.yml has no pull_request; replay and proof must agree."""
+    trigger_for = {"pull_request": "pr", "push": "push"}
+    for check in local_gate.checks():
+        if not check.bosn_workflow:
+            continue
+        argv = list(check.argv)
+        trigger = argv[argv.index("--trigger") + 1]
+        assert trigger == trigger_for[check.bosn_event], check.name

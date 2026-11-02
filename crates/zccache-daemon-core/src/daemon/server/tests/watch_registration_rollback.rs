@@ -44,11 +44,17 @@ async fn a_failed_watch_registration_is_retried_on_the_next_call() {
     let canonical = canonical_of(&raw);
 
     // No watcher: every registration in the batch fails.
-    *state.watcher.lock().await = None;
+    state
+        .watcher
+        .with_for(STATE_TIMEOUT, |slot| *slot = None)
+        .await;
     watch_directories(&state, std::slice::from_ref(&raw)).await;
 
     assert!(
-        !state.watched_dirs.lock().await.contains(&canonical),
+        !state
+            .watched_dirs
+            .with_for(STATE_TIMEOUT, |dirs| dirs.contains(&canonical))
+            .await,
         "a failed watch registration must release its watched_dirs reservation"
     );
     assert!(
@@ -62,11 +68,17 @@ async fn a_failed_watch_registration_is_retried_on_the_next_call() {
     let ignore = crate::watcher::IgnoreFilter::default();
     let (watcher, _events) =
         NotifyWatcher::new(Arc::new(ignore)).expect("notify watcher must initialize");
-    *state.watcher.lock().await = Some(watcher);
+    state
+        .watcher
+        .with_for(STATE_TIMEOUT, |slot| *slot = Some(watcher))
+        .await;
     watch_directories(&state, std::slice::from_ref(&raw)).await;
 
     assert!(
-        state.watched_dirs.lock().await.contains(&canonical),
+        state
+            .watched_dirs
+            .with_for(STATE_TIMEOUT, |dirs| dirs.contains(&canonical))
+            .await,
         "the retry after a failed registration must actually watch the directory, \
          not short-circuit on the raw pre-filter entry"
     );
@@ -95,7 +107,10 @@ async fn a_canonicalize_failure_still_marks_the_raw_path() {
          re-runs a canonicalize that is guaranteed to fail"
     );
     assert!(
-        state.watched_dirs.lock().await.is_empty(),
+        state
+            .watched_dirs
+            .with_for(STATE_TIMEOUT, |dirs| dirs.is_empty())
+            .await,
         "a path that never canonicalized must never become watched"
     );
 

@@ -833,6 +833,39 @@ Checked flags include `-I`, `-isystem`, `-iquote`, `-idirafter`, `-include`,
 `-include-pch`, `-imacros`, `-F`, `-iframework`, `-imsvc`, and MSVC `/I`.
 Response-file arguments are checked after expansion by the daemon.
 
+### Precompiled headers under strict validation
+
+zccache checks the input paths, sizes, and content hashes recorded inside
+cached clang PCHs. Both producers and consumers run through zccache with
+strict PCH flags and timestamps enabled:
+
+```bash
+# producer
+zccache clang++ -x c++-header -c src/pch.h -o build/pch.h.pch \
+  -Werror=invalid-pch -verify-pch -fpch-validate-input-files-content
+# consumer
+zccache clang++ -c src/a.cpp -include-pch build/pch.h.pch \
+  -Werror=invalid-pch -fpch-validate-input-files-content
+```
+
+Missing or changed inputs rebuild the PCH. Identical headers with changed
+mtimes can reuse it: the consuming compiler gets a private VFS overlay with
+independent, content-verified snapshots carrying the recorded timestamps.
+Original headers and imported PCH files keep their timestamps. Rewinding a
+shared source file would hide edits from other Ninja build directories.
+
+Snapshots also cover chained PCHs and implicit `-include header.h` loading.
+Chained producers freeze their imported PCHs before execution and cache a
+content-bound `.zccache-imports.json` companion with the parent PCH.
+Private views require this provenance throughout the imported PCH chain;
+legacy chains without it must be rebuilt before timestamp repair is safe.
+Dependency files and `__FILE__` keep the original paths; private snapshots
+exist only until the compiler exits. Consumers must run through zccache to
+receive this view. clang >= 19 records verifiable xxh3 hashes; older clang
+rebuilds when timestamps differ. `ZCCACHE_PCH_MTIME_REPLAY=0` disables timestamp
+repair and makes a touched PCH producer rebuild instead. Details:
+[artifact-store.md](docs/architecture/artifact-store.md#strict-pch-serving-1952).
+
 ### Compiler child priority
 
 Compiler and linker subprocesses run with `ZCCACHE_COMPILE_PRIORITY=auto` by

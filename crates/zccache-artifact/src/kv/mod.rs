@@ -265,13 +265,18 @@ fn decode_and_verify(label: &str, raw: &[u8]) -> KvResult<Vec<u8>> {
 /// bounded retry below alone cannot converge. Cross-process same-key writers
 /// are still handled by that retry; they are far rarer than the in-process
 /// case and do not sustain the same rename rate.
-fn rename_shard(dest: &Path) -> &'static std::sync::Mutex<()> {
+fn rename_shard(dest: &Path) -> &'static zccache_core::blocking_sync::Mutex<()> {
     use std::hash::{Hash, Hasher};
 
     const SHARDS: usize = 64;
-    static LOCKS: std::sync::OnceLock<Vec<std::sync::Mutex<()>>> = std::sync::OnceLock::new();
+    static LOCKS: std::sync::OnceLock<Vec<zccache_core::blocking_sync::Mutex<()>>> =
+        std::sync::OnceLock::new();
 
-    let locks = LOCKS.get_or_init(|| (0..SHARDS).map(|_| std::sync::Mutex::new(())).collect());
+    let locks = LOCKS.get_or_init(|| {
+        (0..SHARDS)
+            .map(|_| zccache_core::blocking_sync::Mutex::new(()))
+            .collect()
+    });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     dest.hash(&mut hasher);
     &locks[(hasher.finish() as usize) % SHARDS]
@@ -285,13 +290,18 @@ fn rename_shard(dest: &Path) -> &'static std::sync::Mutex<()> {
 /// `NotFound` (#1648). Keyed by the namespace directory, so stores opened
 /// separately over one cache dir share a gate, and puts never exclude each
 /// other.
-fn namespace_gate(dir: &Path) -> &'static std::sync::RwLock<()> {
+fn namespace_gate(dir: &Path) -> &'static zccache_core::blocking_sync::RwLock<()> {
     use std::hash::{Hash, Hasher};
 
     const SHARDS: usize = 16;
-    static GATES: std::sync::OnceLock<Vec<std::sync::RwLock<()>>> = std::sync::OnceLock::new();
+    static GATES: std::sync::OnceLock<Vec<zccache_core::blocking_sync::RwLock<()>>> =
+        std::sync::OnceLock::new();
 
-    let gates = GATES.get_or_init(|| (0..SHARDS).map(|_| std::sync::RwLock::new(())).collect());
+    let gates = GATES.get_or_init(|| {
+        (0..SHARDS)
+            .map(|_| zccache_core::blocking_sync::RwLock::new(()))
+            .collect()
+    });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     dir.hash(&mut hasher);
     &gates[(hasher.finish() as usize) % SHARDS]
@@ -334,7 +344,7 @@ fn persist_atomically(mut tmp: tempfile::NamedTempFile, dest: &Path) -> KvResult
     // Held across the rename only. The payload write and fsync already
     // happened in the caller, outside this critical section.
     let _shard = rename_shard(dest)
-        .lock()
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let started = std::time::Instant::now();
@@ -486,7 +496,7 @@ impl KvStore {
         let path = self.value_path(namespace, key);
         let dir = self.namespace_dir(namespace);
         let _gate = namespace_gate(dir.as_path())
-            .read()
+            .read_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut attempt = 1;
@@ -549,7 +559,7 @@ impl KvStore {
         check_namespace(namespace)?;
         let dir = self.namespace_dir(namespace);
         let _gate = namespace_gate(dir.as_path())
-            .write()
+            .write_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut attempt = 1;

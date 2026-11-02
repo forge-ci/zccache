@@ -94,6 +94,8 @@ pub(super) struct UnitCacheCheck<'a> {
     pub(super) shared_base: Option<&'a CompileContext>,
     pub(super) shared_dep_flags: Option<&'a UserDepFlags>,
     pub(super) scan_cache: &'a crate::depgraph::scanner::RecursiveScanCache,
+    /// Input hashes verified so far by this request's units.
+    pub(super) input_hashes: &'a InputHashMemo,
     pub(super) cache_now: Instant,
     pub(super) dependency_mode: DependencyDiscoveryMode,
     /// This request's resolved `ZCCACHE_MODE` (#1683).

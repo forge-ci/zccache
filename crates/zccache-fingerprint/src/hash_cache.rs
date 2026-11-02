@@ -1,5 +1,6 @@
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::PoisonError;
+use zccache_core::blocking_sync::Mutex;
 
 use rayon::prelude::*;
 use zccache_core::NormalizedPath;
@@ -98,7 +99,10 @@ impl HashCache {
         let pending =
             HashCacheData::with_max_mtime(current_hash, "pending", file_count, max_source_mtime);
         persist::write_pending(&self.cache_file, &pending)?;
-        *self.staged.lock().unwrap_or_else(PoisonError::into_inner) = Some(pending);
+        *self
+            .staged
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
+            .unwrap_or_else(PoisonError::into_inner) = Some(pending);
 
         Ok(decision)
     }
@@ -126,7 +130,10 @@ impl HashCache {
 
     /// Delete cache and pending files.
     pub fn invalidate(&self) -> Result<()> {
-        *self.staged.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self
+            .staged
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
+            .unwrap_or_else(PoisonError::into_inner) = None;
         persist::remove_cache(&self.cache_file);
         Ok(())
     }
@@ -137,7 +144,7 @@ impl HashCache {
     fn promote_with_status(&self, status: &str) -> Result<()> {
         let staged = self
             .staged
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         let claimed = match staged {
@@ -184,7 +191,10 @@ impl HashCache {
                 // The verified cache entry is this cycle's snapshot, so a later
                 // `mark_*` commits it rather than failing with `NoPendingData`
                 // (#1648). In memory only: the fast path stays write-free.
-                *self.staged.lock().unwrap_or_else(PoisonError::into_inner) = Some(data);
+                *self
+                    .staged
+                    .lock_for(zccache_core::sync::STATE_TIMEOUT)
+                    .unwrap_or_else(PoisonError::into_inner) = Some(data);
                 Ok(Some(CacheDecision::Skip))
             }
             _ => Ok(None),

@@ -245,14 +245,13 @@ impl DaemonServer {
                     // Drop the watcher to stop the OS thread and close channels.
                     // The settle buffer and consumer tasks will exit when their
                     // input channels close.
-                    match kernal_api::async_engine::timeout(
-                        Duration::from_secs(5),
-                        self.state.watcher.lock(),
-                    )
-                    .await
+                    match self
+                        .state
+                        .watcher
+                        .try_with_for(Duration::from_secs(5), |watcher| *watcher = None)
+                        .await
                     {
-                        Ok(mut watcher) => {
-                            *watcher = None;
+                        Ok(()) => {
                             self.state.watcher_active.store(false, Ordering::Release);
                         }
                         Err(_) => {
@@ -459,8 +458,12 @@ impl DaemonServer {
                         );
                     } else {
                         let dirty_includes = {
-                            let mut includes = self.state.system_includes.lock().await;
-                            includes.take_dirty().then(|| includes.clone())
+                            self.state
+                                .system_includes
+                                .with_for(STATE_TIMEOUT, |includes| {
+                                    includes.take_dirty().then(|| includes.clone())
+                                })
+                                .await
                         };
                         if let Some(includes) = dirty_includes {
                             let system_includes_cache_path =
@@ -576,10 +579,12 @@ pub(super) async fn arm_watcher_pipeline(state: &Arc<SharedState>) -> bool {
         }
     };
 
-    match kernal_api::async_engine::timeout(WATCHER_LOCK_TIMEOUT, state.watcher.lock()).await {
-        Ok(mut watcher_guard) => {
-            *watcher_guard = Some(watcher);
-        }
+    match state
+        .watcher
+        .try_with_for(WATCHER_LOCK_TIMEOUT, |slot| *slot = Some(watcher))
+        .await
+    {
+        Ok(()) => {}
         Err(_) => {
             record_watcher_degradation(state, "timed out acquiring watcher lock");
             return false;
@@ -970,7 +975,9 @@ pub(super) async fn spawn_artifact_loader(
 ) -> kernal_api::async_engine::Task<()> {
     // Acquire before spawning so Clear cannot overtake the startup loader and
     // then have pre-Clear entries inserted afterward.
-    let publication_guard = Arc::clone(&state.artifact_publication).read_owned().await;
+    let publication_guard = Arc::clone(&state.artifact_publication)
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     kernal_api::async_engine::launch(async move {
         if let Some(gate) = start_gate {
             gate.notified().await;

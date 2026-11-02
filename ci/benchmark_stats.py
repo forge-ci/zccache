@@ -178,7 +178,7 @@ def benchmark_command_for_test(test_name: str) -> list[str]:
         *BENCHMARK_BASE_COMMAND,
         "--",
         test_name,
-        "--nocapture",
+        "--nocapture",  # ci-lint: allow RUST-017 one timed benchmark; output is the result
         "--ignored",
         "--test-threads=1",
     ]

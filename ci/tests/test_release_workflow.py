@@ -160,13 +160,13 @@ def test_command_check_registries_writes_registry_completion_outputs(
 
 
 def _release_workflow_job(job: str) -> str:
-    """Return the YAML text of one top-level job in `release-auto.yml`.
+    """Return the YAML text of one top-level job in `auto-release.yml`.
 
     Text slicing rather than PyYAML: the repo does not carry a YAML runtime
     dependency for CI tests, and the surrounding tests parse workflows the
     same way.
     """
-    path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release-auto.yml"
+    path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "auto-release.yml"
     text = path.read_text(encoding="utf-8")
     marker = f"\n  {job}:\n"
     start = text.index(marker) + 1
@@ -208,7 +208,7 @@ def test_wheel_smoke_matrix_covers_exactly_the_built_wheel_families() -> None:
     }
 
     assert smoke_tags == built_tags, (
-        "release-auto.yml test-wheels matrix drifted from "
+        "auto-release.yml test-wheels matrix drifted from "
         f"ci/release_workflow.py PLATFORMS: unbuilt legs {sorted(smoke_tags - built_tags)}, "
         f"untested wheels {sorted(built_tags - smoke_tags)}"
     )
@@ -220,7 +220,7 @@ def test_wheel_smoke_matrix_has_one_leg_per_wheel() -> None:
     smoke_tags = _smoke_legs()
 
     assert len(smoke_tags) == len(set(smoke_tags)), (
-        f"duplicate wheel_plat legs in release-auto.yml test-wheels: {sorted(smoke_tags)}"
+        f"duplicate wheel_plat legs in auto-release.yml test-wheels: {sorted(smoke_tags)}"
     )
 
 
@@ -238,7 +238,7 @@ def test_no_job_depends_on_the_ungated_wheel_smoke() -> None:
         Path(__file__).resolve().parents[2]
         / ".github"
         / "workflows"
-        / "release-auto.yml"
+        / "auto-release.yml"
     )
     text = path.read_text(encoding="utf-8")
 

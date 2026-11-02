@@ -1,0 +1,16 @@
+error: a protected-data guard survives await; extract owned data in sync::State::with_for before awaiting
+  --> $DIR/guard.rs:5:9
+   |
+LL |     let nested = Some(guard);
+   |         ^^^^^^
+   |
+   = note: `#[deny(ban_guard_across_await)]` on by default
+
+error: a protected-data guard survives await; extract owned data in sync::State::with_for before awaiting
+  --> $DIR/guard.rs:10:27
+   |
+LL | async fn concrete_wrapper(token: Token) {
+   |                           ^^^^^
+
+error: aborting due to 2 previous errors
+

@@ -1,7 +1,7 @@
 //! Disposable real-filesystem fixtures with loud skip accounting (#1039).
 
 use std::path::Path;
-use std::process::{Command, Output};
+use zccache_core::wait::{BoundedCommand, CommandSpec as Command, ProcessOutput as Output};
 use zccache_core::NormalizedPath;
 
 pub use zccache_audit::{CacheRootAuditGuard, RuleId};
@@ -205,9 +205,9 @@ impl FsFixture {
             let spec = format!("{}={}", share, temp.path().display());
             let output = Command::new("net")
                 .args(["share", &spec, "/GRANT:Everyone,FULL"])
-                .output()
+                .output_for(zccache_core::wait::PROBE)
                 .map_err(|error| skip("smb-loopback", format!("net share unavailable: {error}")))?;
-            if !output.status.success() {
+            if output.exit.raw_code() != 0 {
                 return Err(skip("smb-loopback", command_error("net share", &output)));
             }
             let root = NormalizedPath::from(format!(r"\\localhost\{share}"));
@@ -238,14 +238,14 @@ impl Drop for FsFixture {
                 let _ = std::fs::write(&script, body);
                 let _ = Command::new("diskpart")
                     .args(["/s", &script.to_string_lossy()])
-                    .output();
+                    .output_for(zccache_core::wait::PROBE);
             }
             #[cfg(windows)]
             Backing::WindowsSmb { temp, share } => {
                 let _ = temp.path();
                 let _ = Command::new("net")
                     .args(["share", share, "/delete", "/y"])
-                    .output();
+                    .output_for(zccache_core::wait::PROBE);
             }
             #[cfg(target_os = "linux")]
             Backing::LinuxLoop { temp, device } => {
@@ -271,7 +271,7 @@ fn skip(name: &'static str, reason: impl Into<String>) -> FixtureSkip {
 fn command_error(command: &str, output: &Output) -> String {
     format!(
         "{command} failed ({}): {}{}",
-        output.status,
+        output.exit.raw_code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
@@ -302,9 +302,9 @@ fn windows_vhd_sized(name: &'static str, filesystem: &str, maximum_mb: u32) -> F
     std::fs::write(&script, body).map_err(|error| skip(name, error.to_string()))?;
     let output = Command::new("diskpart")
         .args(["/s", &script.to_string_lossy()])
-        .output()
+        .output_for(zccache_core::wait::PROBE)
         .map_err(|error| skip(name, format!("diskpart unavailable: {error}")))?;
-    if !output.status.success() || std::fs::write(mount.join("probe"), b"probe").is_err() {
+    if output.exit.raw_code() != 0 || std::fs::write(mount.join("probe"), b"probe").is_err() {
         return Err(skip(name, command_error("diskpart", &output)));
     }
     Ok(FsFixture {
@@ -330,7 +330,11 @@ fn windows_vhd_sized(name: &'static str, _filesystem: &str, _maximum_mb: u32) ->
 #[cfg(target_os = "linux")]
 fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult {
     for tool in ["losetup", "mount", "umount", mkfs] {
-        if Command::new(tool).arg("--help").output().is_err() {
+        if Command::new(tool)
+            .arg("--help")
+            .output_for(zccache_core::wait::PROBE)
+            .is_err()
+        {
             return Err(skip(name, format!("required tool {tool} is unavailable")));
         }
     }
@@ -344,7 +348,7 @@ fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult
         .map_err(|error| skip(name, error.to_string()))?;
     let loop_output = run_privileged("losetup", &["--find", "--show", &image.to_string_lossy()])
         .map_err(|error| skip(name, error.to_string()))?;
-    if !loop_output.status.success() {
+    if loop_output.exit.raw_code() != 0 {
         return Err(skip(name, command_error("losetup", &loop_output)));
     }
     let device = String::from_utf8_lossy(&loop_output.stdout)
@@ -352,7 +356,7 @@ fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult
         .to_string();
     let format_output =
         run_privileged(mkfs, &[&device]).map_err(|error| skip(name, error.to_string()))?;
-    if !format_output.status.success() {
+    if format_output.exit.raw_code() != 0 {
         let _ = run_privileged("losetup", &["-d", &device]);
         return Err(skip(name, command_error(mkfs, &format_output)));
     }
@@ -372,14 +376,14 @@ fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult
     };
     let mount_output =
         run_privileged("mount", &mount_args).map_err(|error| skip(name, error.to_string()))?;
-    if !mount_output.status.success() {
+    if mount_output.exit.raw_code() != 0 {
         let _ = run_privileged("losetup", &["-d", &device]);
         return Err(skip(name, command_error("mount", &mount_output)));
     }
     if uid_gid_opt.is_none() {
         let chmod = run_privileged("chmod", &["0777", &mount_str])
             .map_err(|error| skip(name, error.to_string()))?;
-        if !chmod.status.success() {
+        if chmod.exit.raw_code() != 0 {
             return Err(skip(name, command_error("chmod", &chmod)));
         }
     }
@@ -411,9 +415,9 @@ fn mac_image(name: &'static str, filesystem: &str) -> FixtureResult {
             &mount.to_string_lossy(),
             &image.to_string_lossy(),
         ])
-        .output()
+        .output_for(zccache_core::wait::PROBE)
         .map_err(|error| skip(name, error.to_string()))?;
-    if !attach.status.success() {
+    if attach.exit.raw_code() != 0 {
         return Err(skip(name, command_error("hdiutil attach", &attach)));
     }
     Ok(FsFixture {
@@ -467,9 +471,9 @@ fn create_macos_image(
                 "zccache",
                 &image.to_string_lossy(),
             ])
-            .output()
+            .output_for(zccache_core::wait::PROBE)
             .map_err(|error| error.to_string())?;
-        if output.status.success() {
+        if output.exit.raw_code() == 0 {
             return Ok(image.into());
         }
         last_error = Some(command_error("hdiutil create", &output));
@@ -486,11 +490,11 @@ fn detach_macos_image(mount: &Path) {
     for attempt in 0..MAC_HDIUTIL_ATTEMPTS {
         let Ok(output) = Command::new("hdiutil")
             .args(["detach", &mount.to_string_lossy()])
-            .output()
+            .output_for(zccache_core::wait::PROBE)
         else {
             return;
         };
-        if output.status.success() || !hdiutil_resource_busy(&output) {
+        if output.exit.raw_code() == 0 || !hdiutil_resource_busy(&output) {
             return;
         }
         if attempt + 1 < MAC_HDIUTIL_ATTEMPTS {
@@ -499,7 +503,7 @@ fn detach_macos_image(mount: &Path) {
     }
     let _ = Command::new("hdiutil")
         .args(["detach", "-force", &mount.to_string_lossy()])
-        .output();
+        .output_for(zccache_core::wait::PROBE);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -509,14 +513,26 @@ fn mac_image(name: &'static str, _filesystem: &str) -> FixtureResult {
 
 #[cfg(target_os = "linux")]
 fn current_uid_gid() -> Option<String> {
-    let uid = String::from_utf8(Command::new("id").arg("-u").output().ok()?.stdout)
-        .ok()?
-        .trim()
-        .to_string();
-    let gid = String::from_utf8(Command::new("id").arg("-g").output().ok()?.stdout)
-        .ok()?
-        .trim()
-        .to_string();
+    let uid = String::from_utf8(
+        Command::new("id")
+            .arg("-u")
+            .output_for(zccache_core::wait::PROBE)
+            .ok()?
+            .stdout,
+    )
+    .ok()?
+    .trim()
+    .to_string();
+    let gid = String::from_utf8(
+        Command::new("id")
+            .arg("-g")
+            .output_for(zccache_core::wait::PROBE)
+            .ok()?
+            .stdout,
+    )
+    .ok()?
+    .trim()
+    .to_string();
     Some(format!("uid={uid},gid={gid},umask=000"))
 }
 
@@ -524,17 +540,19 @@ fn current_uid_gid() -> Option<String> {
 fn run_privileged(program: &str, args: &[&str]) -> std::io::Result<Output> {
     let is_root = Command::new("id")
         .arg("-u")
-        .output()
+        .output_for(zccache_core::wait::PROBE)
         .ok()
         .is_some_and(|output| output.stdout == b"0\n");
     if is_root {
-        Command::new(program).args(args).output()
+        Command::new(program)
+            .args(args)
+            .output_for(zccache_core::wait::PROBE)
     } else {
         Command::new("sudo")
             .arg("-n")
             .arg(program)
             .args(args)
-            .output()
+            .output_for(zccache_core::wait::PROBE)
     }
 }
 

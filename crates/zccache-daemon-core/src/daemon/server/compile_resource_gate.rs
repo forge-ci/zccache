@@ -14,7 +14,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use kernal_api::async_engine::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use crate::core::sync::{Barrier, ReadPermit, WritePermit};
 
 use crate::compiler::CompilerFamily;
 
@@ -62,7 +62,8 @@ impl<'a> HostCompilerRequest<'a> {
 }
 
 /// A host policy could not classify an otherwise valid compiler request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
 pub struct HostAdmissionError(String);
 
 impl HostAdmissionError {
@@ -71,14 +72,6 @@ impl HostAdmissionError {
         Self(message.into())
     }
 }
-
-impl std::fmt::Display for HostAdmissionError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for HostAdmissionError {}
 
 /// Optional embedded-host classification layered onto zccache's own policy.
 ///
@@ -126,12 +119,12 @@ impl HostAdmissionPermit {
 /// from starving an amalgamation after it reaches the queue.
 #[derive(Clone, Default)]
 pub(super) struct CompileResourceGate {
-    inner: Arc<RwLock<()>>,
+    inner: Arc<Barrier>,
 }
 
 pub(super) enum CompileResourcePermit {
-    Shared { _guard: OwnedRwLockReadGuard<()> },
-    Exclusive { _guard: OwnedRwLockWriteGuard<()> },
+    Shared { _guard: ReadPermit },
+    Exclusive { _guard: WritePermit },
 }
 
 /// Owns both layers of compiler admission in their canonical lock order.
@@ -165,11 +158,15 @@ impl CompileResourceGate {
     pub(super) async fn acquire(&self, exclusive: bool) -> CompileResourcePermit {
         if exclusive {
             CompileResourcePermit::Exclusive {
-                _guard: Arc::clone(&self.inner).write_owned().await,
+                _guard: Arc::clone(&self.inner)
+                    .write_for(crate::core::sync::OPERATION_TIMEOUT)
+                    .await,
             }
         } else {
             CompileResourcePermit::Shared {
-                _guard: Arc::clone(&self.inner).read_owned().await,
+                _guard: Arc::clone(&self.inner)
+                    .read_for(crate::core::sync::OPERATION_TIMEOUT)
+                    .await,
             }
         }
     }

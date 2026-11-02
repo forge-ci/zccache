@@ -20,8 +20,9 @@ use std::cell::Cell;
 use std::fs;
 use std::future::Future;
 use std::path::Path;
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::time::SystemTime;
+use zccache_core::blocking_sync::Mutex;
 
 use crate::core::NormalizedPath;
 use serde::{Deserialize, Serialize};
@@ -570,7 +571,7 @@ impl CompileJournal {
             // Serialize on the caller's thread (async task).
             match serde_json::to_string(entry) {
                 Ok(line) => {
-                    if let Ok(tx) = tx.lock() {
+                    if let Ok(tx) = tx.lock_for(zccache_core::sync::STATE_TIMEOUT) {
                         let _ = tx.send(JournalMessage::Entry {
                             line,
                             session_path: session_path.map(Into::into),
@@ -588,7 +589,7 @@ impl CompileJournal {
     /// so the background thread can release the file.
     pub fn close_session(&self, path: &Path) {
         if let Some(tx) = &self.sender {
-            if let Ok(tx) = tx.lock() {
+            if let Ok(tx) = tx.lock_for(zccache_core::sync::STATE_TIMEOUT) {
                 let _ = tx.send(JournalMessage::CloseSession { path: path.into() });
             }
         }

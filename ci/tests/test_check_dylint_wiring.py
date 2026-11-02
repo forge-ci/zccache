@@ -21,7 +21,7 @@ def _scaffold(root: Path, *, excluded: bool = True, source: str = "") -> None:
     _write(
         root,
         ".github/workflows/ci.yml",
-        "ci/check_dylint_wiring.py\ndylints/example/Cargo.toml",
+        "ci/check_dylint_wiring.py\nworking-directory: dylints/example\n",
     )
 
 

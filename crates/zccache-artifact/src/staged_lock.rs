@@ -121,9 +121,11 @@ impl StagedReadGuard {
     /// this variant will materialize an empty `.staged-v2` directory in a cache
     /// that has never staged anything.
     pub fn acquire(artifact_dir: &Path) -> io::Result<Self> {
-        let store_lock = open_store_lock(staged_root(artifact_dir).as_path())?;
         Ok(Self {
-            _store_lock: kernal_api::platform::fs::lock_shared_owned(store_lock)?,
+            _store_lock: zccache_core::wait::lock_shared_owned_for(
+                || open_store_lock(staged_root(artifact_dir).as_path()),
+                zccache_core::wait::PROBE,
+            )?,
         })
     }
 

@@ -8,7 +8,7 @@
 use dashmap::DashMap;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
+use zccache_core::blocking_sync::RwLock;
 use zccache_core::NormalizedPath;
 
 /// Monotonically increasing clock tick.
@@ -104,7 +104,10 @@ impl ChangeJournal {
             clippy::expect_used,
             reason = "RwLock only poisons if another thread panicked mid-write; the journal BTreeMap would be mid-mutation. Failing loudly lets the daemon supervisor restart from a clean state — silently returning empty change-sets would cause wrong cache hits."
         )]
-        let mut journal = self.journal.write().expect("journal lock poisoned");
+        let mut journal = self
+            .journal
+            .write_for(zccache_core::sync::STATE_TIMEOUT)
+            .expect("journal lock poisoned");
         journal.insert(clock, changed_paths);
 
         // Trim old entries if over capacity.
@@ -150,7 +153,10 @@ impl ChangeJournal {
             clippy::expect_used,
             reason = "RwLock only poisons if another thread panicked mid-write; returning empty Vec here would mean 'no changes' and cause wrong cache hits — fail loudly so the supervisor can restart"
         )]
-        let journal = self.journal.read().expect("journal lock poisoned");
+        let journal = self
+            .journal
+            .read_for(zccache_core::sync::STATE_TIMEOUT)
+            .expect("journal lock poisoned");
         let mut result = Vec::new();
         for (_clock, paths) in
             journal.range((std::ops::Bound::Excluded(since), std::ops::Bound::Unbounded))
@@ -181,7 +187,10 @@ impl ChangeJournal {
             clippy::expect_used,
             reason = "RwLock only poisons if another thread panicked mid-write; skipping the clear would leave stale entries the new overflow clock cannot compensate for"
         )]
-        let mut journal = self.journal.write().expect("journal lock poisoned");
+        let mut journal = self
+            .journal
+            .write_for(zccache_core::sync::STATE_TIMEOUT)
+            .expect("journal lock poisoned");
         journal.clear();
         drop(journal);
         self.mark_overflow()
@@ -368,7 +377,10 @@ mod tests {
             journal.advance(vec![NormalizedPath::from(format!("file_{i}.c"))]);
         }
 
-        let journal_entries = journal.journal.read().unwrap();
+        let journal_entries = journal
+            .journal
+            .read_for(zccache_core::sync::STATE_TIMEOUT)
+            .unwrap();
         assert!(journal_entries.len() <= 5);
         // Oldest entries should be gone.
         assert!(!journal_entries.contains_key(&Clock(1)));

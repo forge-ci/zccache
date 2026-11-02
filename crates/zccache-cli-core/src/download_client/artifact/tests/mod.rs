@@ -509,6 +509,44 @@ fn zip_extraction_rejects_path_traversal() {
 }
 
 #[test]
+fn zip_extraction_rejects_symlink_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("link.zip");
+    {
+        let file = File::create(&archive).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.add_symlink(
+            "link",
+            "/etc/passwd",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+    let out = dir.path().join("extract");
+    let err = extract_zip(&archive, &out).unwrap_err();
+    assert!(err.contains("symlink"), "unexpected error: {err}");
+    assert!(!out.join("link").exists());
+}
+
+#[test]
+fn zip_extraction_rejects_absolute_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("abs.zip");
+    {
+        let file = File::create(&archive).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("/abs-evil.txt", options).unwrap();
+        zip.write_all(b"bad").unwrap();
+        zip.finish().unwrap();
+    }
+    let out = dir.path().join("extract");
+    let err = extract_zip(&archive, &out).unwrap_err();
+    assert!(err.contains("unsafe zip entry"), "unexpected error: {err}");
+}
+
+#[test]
 fn tar_gz_extracts_regular_files() {
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("ok.tar.gz");

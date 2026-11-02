@@ -39,7 +39,10 @@ pub(super) async fn handle_exec_probe(
     input_extra: &Arc<Vec<u8>>,
 ) -> Response {
     let _active_request = state.begin_cache_request();
-    let _publication_guard = state.artifact_publication.read().await;
+    let _publication_guard = state
+        .artifact_publication
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     let cache_key_hex =
         match compose_exec_probe_key(state, name, input_files, input_env, input_extra) {
             Ok(hex) => hex,
@@ -90,7 +93,10 @@ pub(super) async fn handle_exec_store(
             };
         }
     };
-    let _publication_guard = state.artifact_publication.read().await;
+    let _publication_guard = state
+        .artifact_publication
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     match state
         .exec_store
         .put_async(EXEC_PROBE_NAMESPACE, &key, result_bytes.as_slice())

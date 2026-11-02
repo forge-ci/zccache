@@ -293,7 +293,7 @@ pub(crate) fn scope_blocking_request_profile<T>(
 }
 
 fn saturating_atomic_add(value: &AtomicU64, amount: u64) {
-    let _ = value.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = value.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(amount))
     });
 }

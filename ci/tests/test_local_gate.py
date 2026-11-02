@@ -107,6 +107,8 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
         "Prove custom-lint selection for every OS",
     )
     assert "Test (full workspace)" in by_lane["tests"].required_steps
+    assert "Install PCH regression toolchain" in by_lane["tests"].required_steps
+    assert "Strict PCH regressions (Clang 21)" in by_lane["tests"].required_steps
     for check in isolated:
         workflow = check.bosn_workflow.rsplit("/", 1)[-1]
         block = _job_block(workflow, check.bosn_job)

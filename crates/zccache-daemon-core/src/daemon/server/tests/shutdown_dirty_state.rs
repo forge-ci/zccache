@@ -162,11 +162,15 @@ async fn shutdown_persists_every_cache_when_dirty() {
 
     // Dirty the system-includes cache.
     {
-        let mut includes = state.system_includes.lock().await;
-        includes.insert(
-            crate::core::NormalizedPath::new(&compiler),
-            vec![crate::core::NormalizedPath::new(cache_root.path())],
-        );
+        state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |includes| {
+                includes.insert(
+                    crate::core::NormalizedPath::new(&compiler),
+                    vec![crate::core::NormalizedPath::new(cache_root.path())],
+                );
+            })
+            .await
     }
 
     let handle = tokio::spawn(async move {

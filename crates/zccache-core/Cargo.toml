@@ -11,6 +11,7 @@ description = "Core shared types and utilities for zccache"
 publish = false
 
 [dependencies]
+tokio = { workspace = true }
 kernal-api = { workspace = true, features = ["crash", "fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

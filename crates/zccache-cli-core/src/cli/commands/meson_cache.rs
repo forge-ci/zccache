@@ -300,10 +300,9 @@ fn absolutise(p: &Path) -> PathBuf {
 }
 
 fn capture_meson_version(meson_bin: &Path) -> std::io::Result<String> {
-    let out = kernal_api::run_bounded_command(
+    let out = crate::core::wait::output_for(
         kernal_api::SpawnSpec::new(meson_bin).arg("--version"),
         std::time::Duration::from_secs(30),
-        1024 * 1024,
     )
     .map_err(|error| match error {
         kernal_api::BoundedProcessError::Spawn(error)

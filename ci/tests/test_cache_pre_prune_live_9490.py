@@ -106,12 +106,18 @@ def test_live_9490_inventory_cannot_also_bootstrap_integration() -> None:
     caches = _caches()
     plan = _plan(caches)
     # The historical inventory fitted before Integration existed. Its new
-    # 1.2 GB producer reservation must now refuse writes, not raise the target.
+    # 1.2 GB producer reservation does not fit beside it, so the plan is not
+    # ok as-is; #1996 (CACHE-026) retires old-lock build/cook caches first
+    # instead of freezing writes, and the re-forecast fits.
     assert plan["ok"] is False
     assert plan["projectedPeakBytes"] > TARGET
     assert plan["deleteIds"] == []
     keys = {c["id"]: c["key"] for c in caches}
-    retired = sorted(keys[i] for i in plan["retireFirstIds"])
+    over = plan["overTargetRetireIds"]
+    assert over and plan["projectedPeakAfterRetireBytes"] <= TARGET
+    assert all(NEW_LOCK not in keys[i] for i in over)
+    assert all(keys[i].startswith(("cook-base-", "setup-soldr-buildcache-")) for i in over)
+    retired = sorted(keys[i] for i in plan["retireFirstIds"] if i not in set(over))
     # Older soldr-mini versions, older prepare-v3 signatures, and (#1875)
     # registries saved before the 0.9.26 generation whose family already holds
     # a 0.9.26-generation registry.

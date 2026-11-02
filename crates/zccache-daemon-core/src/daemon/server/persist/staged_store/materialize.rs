@@ -117,22 +117,11 @@ impl StagedMaterializationStats {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
 struct StagedMaterializationError {
     source: io::Error,
     progress: StagedMaterializationStats,
-}
-
-impl std::fmt::Display for StagedMaterializationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.source.fmt(formatter)
-    }
-}
-
-impl std::error::Error for StagedMaterializationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 pub(in crate::daemon::server) fn materialization_error(

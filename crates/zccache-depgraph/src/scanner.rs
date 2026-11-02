@@ -308,7 +308,7 @@ fn scan_recursive_impl(
     use dashmap::DashSet;
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use zccache_core::blocking_sync::Mutex;
 
     let visited: DashSet<NormalizedPath> = DashSet::new();
     let resolved: Mutex<Vec<NormalizedPath>> = Mutex::new(Vec::new());
@@ -363,8 +363,8 @@ fn scan_one_level(
     file: &Path,
     search: &IncludeSearchPaths,
     visited: &dashmap::DashSet<NormalizedPath>,
-    resolved: &std::sync::Mutex<Vec<NormalizedPath>>,
-    unresolved: &std::sync::Mutex<Vec<String>>,
+    resolved: &zccache_core::blocking_sync::Mutex<Vec<NormalizedPath>>,
+    unresolved: &zccache_core::blocking_sync::Mutex<Vec<String>>,
     has_computed: &std::sync::atomic::AtomicBool,
     cache: Option<&RecursiveScanCache>,
     retain: &(dyn Fn(&Path, &IncludeDirective, &NormalizedPath) -> bool + Sync),
@@ -408,13 +408,13 @@ fn scan_one_level(
 
     if !local_resolved.is_empty() {
         resolved
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(|e| e.into_inner())
             .extend(local_resolved);
     }
     if !local_unresolved.is_empty() {
         unresolved
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(|e| e.into_inner())
             .extend(local_unresolved);
     }

@@ -35,12 +35,16 @@ async fn bind_does_not_load_system_includes_from_disk() {
     let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
     let state = server.test_state();
     {
-        let live = state.system_includes.lock().await;
-        assert_eq!(
-            live.len(),
-            0,
-            "bind must start with an empty system-includes cache",
-        );
+        state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |live| {
+                assert_eq!(
+                    live.len(),
+                    0,
+                    "bind must start with an empty system-includes cache",
+                );
+            })
+            .await
     }
     assert!(
         !state.system_includes_loaded.load(Ordering::Acquire),
@@ -82,16 +86,20 @@ async fn system_includes_loader_merges_snapshot_into_live_cache() {
 
     let state = server.test_state();
     {
-        let live = state.system_includes.lock().await;
-        assert_eq!(
-            live.len(),
-            1,
-            "loader must merge the persisted entry into the live cache",
-        );
-        assert!(
-            live.get(&fake_compiler).is_some(),
-            "the merged entry must be observable via the live cache API",
-        );
+        state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |live| {
+                assert_eq!(
+                    live.len(),
+                    1,
+                    "loader must merge the persisted entry into the live cache",
+                );
+                assert!(
+                    live.get(&fake_compiler).is_some(),
+                    "the merged entry must be observable via the live cache API",
+                );
+            })
+            .await
     }
     assert!(
         state.system_includes_loaded.load(Ordering::Acquire),
@@ -117,8 +125,12 @@ async fn system_includes_loader_tolerates_missing_snapshot() {
 
     let state = server.test_state();
     {
-        let live = state.system_includes.lock().await;
-        assert_eq!(live.len(), 0);
+        state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |live| {
+                assert_eq!(live.len(), 0);
+            })
+            .await
     }
     assert!(
         state.system_includes_loaded.load(Ordering::Acquire),

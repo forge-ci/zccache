@@ -159,22 +159,21 @@ async fn await_pending_capped(
     timeout: Duration,
     maximum: Duration,
 ) -> bool {
-    let Some(entry) = pending.get(key) else {
-        return false;
-    };
-    // Cap the caller's requested timeout at the pending-entry blast radius so
-    // a mis-specified caller can't extend the registry's scope indefinitely.
     let capped = timeout.min(maximum);
-    if capped.is_zero() {
-        return true;
-    }
-    // Register the waiter while the map guard prevents `complete` from
-    // removing/notifying this entry. Otherwise a completion between cloning
-    // the Notify and first polling the future could be lost until timeout.
-    let notified = Arc::clone(&entry.notify).owned_notified();
-    let mut notified = std::pin::pin!(notified);
-    let notified_before_unlock = notified.as_mut().enable();
-    drop(entry);
+    let (notified, notified_before_unlock) = {
+        let Some(entry) = pending.get(key) else {
+            return false;
+        };
+        if capped.is_zero() {
+            return true;
+        }
+        // Pin on the heap so registration remains stable when the waiter
+        // leaves this scope. Complete cannot notify until the shard guard
+        // is dropped, so this preserves the lost-wakeup protection.
+        let mut notified = Box::pin(Arc::clone(&entry.notify).owned_notified());
+        let already_notified = notified.as_mut().enable();
+        (notified, already_notified)
+    };
     if !notified_before_unlock {
         let _ = kernal_api::async_engine::timeout(capped, notified).await;
     }

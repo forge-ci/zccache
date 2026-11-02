@@ -1,0 +1,28 @@
+error: `kernal_api::SpawnSpec::spawn_session` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/semantic_process.rs:4:13
+   |
+LL |     let _ = tool.spawn_session(options).await;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_raw_subprocess_in_daemon)]` on by default
+
+error: `kernal_api::ProcessSession::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/semantic_process.rs:5:13
+   |
+LL |     let _ = Session::wait(session).await;
+   |             ^^^^^^^^^^^^^
+
+error: `kernal_api::ProcessSession::next_output` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/semantic_process.rs:6:16
+   |
+LL |     let wait = Session::next_output;
+   |                ^^^^^^^^^^^^^^^^^^^^
+
+error: `kernal_api::SpawnSpec::spawn` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/semantic_process.rs:8:17
+   |
+LL |     let spawn = Tool::spawn;
+   |                 ^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

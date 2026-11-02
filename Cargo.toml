@@ -34,12 +34,14 @@ exclude = [
     "dylints/ban_normalized_path_deref_containment",
     "dylints/ban_dashmap_guard_across_blocking",
     "dylints/ban_discarded_write_result",
+    "dylints/ban_client_refusal_in_scan",
     "dylints/enforce_platform_boundary",
     "dylints/ban_registered_env_read",
+    "dylints/ban_unbounded_sync",
 ]
 
 [workspace.package]
-version = "1.15.1"
+version = "1.15.12"
 edition = "2021"
 rust-version = "1.95.0"
 license = "AGPL-3.0-only"
@@ -52,7 +54,9 @@ console-subscriber = "0.5"
 serde = { version = "1", features = ["derive", "rc"] }
 bincode = "1"
 thiserror = "2"
+strum = { version = "0.27.2", features = ["derive"] }
 tracing = "0.1"
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 dashmap = "6"
@@ -70,7 +74,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 regex = "1"
 serde_json = "1"
 sha2 = "0.10"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
 ruzstd = "0.7"
@@ -86,7 +90,7 @@ sevenz-rust = { package = "sevenz-rust2", version = "0.22.2" }
 # Exact pin: kernal-api is below 1.0, so every consumer pins the same published
 # release (kernal-api COMPATIBILITY.md). 0.1.26 adds automatic APE loading
 # for compiler spawns; no local path or patch override remains.
-kernal-api = { version = "=0.1.26", default-features = false }
+kernal-api = { version = "=0.1.33", default-features = false }
 zccache = { path = "crates/zccache" }
 zccache-artifact = { path = "crates/zccache-artifact" }
 zccache-audit = { path = "crates/zccache-audit" }

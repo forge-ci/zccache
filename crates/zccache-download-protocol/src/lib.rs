@@ -133,6 +133,20 @@ fn ensure_message_size(size: usize) -> Result<(), ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn bincode_error_keeps_its_error_kind_as_source() {
+        let error = ProtocolError::Bincode(Box::new(bincode::ErrorKind::Custom("bad".into())));
+        assert!(error
+            .source()
+            .unwrap()
+            .downcast_ref::<bincode::ErrorKind>()
+            .is_some());
+        assert!(ProtocolError::MessageTooLarge { size: 2, max: 1 }
+            .source()
+            .is_none());
+    }
 
     #[test]
     fn exact_limit_payload_encodes_and_decodes() {

@@ -1,52 +1,28 @@
 # ban_raw_subprocess_in_daemon
 
-This lint forbids the daemon production code from spawning child processes
-via `std::process::Command::{spawn, output, status}` or
-`tokio::process::Command::{spawn, output, status}` directly. Every child
-process the daemon launches **must** go through the blessed helpers in
-`crates/zccache-daemon-core/src/daemon/process.rs`:
+Deny raw subprocess creation and session access in daemon production code.
+The matcher resolves DefIds, including aliases, UFCS, and stored function items.
 
-| Use case          | Helper                                |
-| ----------------- | ------------------------------------- |
-| Synchronous spawn | `command_output_with_priority(cmd, p)` |
-| Async spawn       | `tokio_command_output_with_priority(cmd, p).await` |
+- std/Tokio Command spawn, output, status and Child waits/termination are banned.
+- Native platform creation APIs and creation_flags are banned.
+- kernal-api SpawnSpec spawn/spawn_session, native foreground/sync spawn APIs,
+  ProcessSession/PlatformChild/SpawnedChild/DaemonChild waits,
+  pipe operations, sampling and termination, and bounded-command capture must
+  remain inside the canonical process_session.rs owner.
+- A function using those semantic capabilities inside the owner must require
+  ProcessLiveness or Duration directly. Optional budgets do not qualify.
+- Callers use the daemon process facade with mandatory ProcessLiveness. Short
+  synchronous probes may use zccache_core::wait::output_for with a Duration.
 
-## Why
+The production scope is crates/zccache-daemon-core/src/daemon/. Test builds and
+fixture files are exempt; production targets are linted separately. UI mode
+checks all fixture sources. There is no std/Tokio or platform-spawn allowlist.
+The exact canonical session owner is the sole semantic capability exception.
 
-The daemon is launched detached (no console attached). On Windows, a
-console-subsystem child spawned from a console-less parent without the
-`CREATE_NO_WINDOW` flag triggers the OS to allocate a fresh console
-window for the child — a visible flash per cache-miss compile in the
-`soldr → cargo → rustc → zccache-cli → daemon → rustc` call chain.
+The owner applies priority, admission, native containment, concurrent drains,
+progress monitoring, finite total/post-exit/cleanup deadlines and cancellation
+cleanup. The lint enforces capability placement and explicit budget signatures;
+runtime regression tests establish liveness behavior.
 
-The helpers in `process.rs` apply `CREATE_NO_WINDOW` (and consistent
-stdio piping, Job Object containment, child-priority adjustment). Bypassing
-them silently regresses one or more of those invariants. This lint catches
-the bypass at compile time.
-
-## Scope
-
-The lint fires only on source files under `crates/zccache-daemon-core/src/daemon/`.
-Other crates (cli, ci, fingerprint, …) are out of scope: the cli already
-has its own sanitized spawn (`spawn_daemon_windows::spawn_daemon_sanitized`)
-for the daemon-launching hop, and the other crates don't spawn compilers.
-
-## Allowlist
-
-`src/allowlist.txt` lists the daemon source files that are exempt:
-
-- `process.rs` — the blessed helpers themselves call `.spawn()` /
-  `.output()` internally; that's the entire point.
-- `server.rs`, `lineage.rs` — contain `#[cfg(test)]` modules with
-  `Command::new("chmod" / "echo").status()` / `.output()`. Test code
-  doesn't ship in the production binary so the console-flash bug
-  doesn't apply there. (A future improvement could detect `#[cfg(test)]`
-  scope programmatically and remove these entries.)
-
-## Adding a new spawn site
-
-If you genuinely need a new daemon-side spawn pattern that the existing
-helpers don't cover, **extend `process.rs`** with a new helper that
-applies the same defaults (`CREATE_NO_WINDOW`, piped stdio, Job Object
-attach, priority) and route the call site through it. Do not add the file
-to the allowlist.
+The examples fixtures link the actual kernal-api and bounded core dependency.
+Their artifact flags come from Cargo JSON, preserving the soldr compiler wrapper.

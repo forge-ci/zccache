@@ -1,0 +1,34 @@
+error: raw `std::sync::Mutex` constructed outside the bounded-wait boundary; use `zccache_core::sync::State` or `zccache_core::blocking_sync` (soldr#3836)
+  --> $DIR/raw.rs:4:16
+   |
+LL |     let lock = Renamed::new(1);
+   |                ^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_unbounded_sync)]` on by default
+
+error: raw `std::sync::Mutex::lock` can wait without a bound; use `zccache_core::sync` or `zccache_core::blocking_sync`, with a mandatory timeout (soldr#3836)
+  --> $DIR/raw.rs:5:18
+   |
+LL |     let _guard = lock.lock();
+   |                  ^^^^^^^^^^^
+
+error: raw `std::sync::Mutex::lock` can wait without a bound; use `zccache_core::sync` or `zccache_core::blocking_sync`, with a mandatory timeout (soldr#3836)
+  --> $DIR/raw.rs:6:26
+   |
+LL |     let _function_item = Renamed::<u8>::lock;
+   |                          ^^^^^^^^^^^^^^^^^^^
+
+error: raw `std::..::Receiver::recv` blocks without a bound; use `wait::recv_for`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/raw.rs:8:13
+   |
+LL |     let _ = rx.recv();
+   |             ^^^^^^^^^
+
+error: raw `std::..::Command::output` blocks without a bound; use `wait::output_for`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/raw.rs:9:13
+   |
+LL |     let _ = std::process::Command::new("probe").output();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 5 previous errors
+

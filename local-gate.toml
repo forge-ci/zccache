@@ -3,7 +3,7 @@
 #
 # Before every push, from a clean, committed tree:
 #
-#   uvx --from git+https://github.com/zackees/ci.yml@365508627edb8130e2c5615338b00bf02a069fa7 ci-lint local-gate run
+#   uvx --from git+https://github.com/zackees/ci.yml@41fcbca60a7901c8707411c4abf4d0b41dd71426 ci-lint local-gate run
 #
 # runs `run` below and, on success, stamps HEAD with a tree-bound
 # `Local-Gate:` trailer and one `Ci-Attestation:` trailer per gate of each
@@ -19,7 +19,9 @@ setup-steps = ["Wait for current-main cache pre-prune"]
 verify = "ci.yml:ci-mode"
 # The cache pre-prune barrier is main-push cache plumbing that every job
 # already waits on; it runs beside ci-mode rather than after it.
-verify-exempt = ["cache-pre-prune"]
+# cancel-superseded (GEN-022, ci.yml#409) runs only on merge_group and must
+# run first, with no `needs:`.
+verify-exempt = ["cache-pre-prune", "cancel-superseded"]
 # Shadow: an unattested PR head is reported by ci-mode, not failed, so a
 # contributor who has not adopted the gate still gets the full remote run.
 # Promote to "enforce" once `ci-lint local-gate first-pass` shows attested
@@ -55,6 +57,9 @@ tools = ["soldr", "uv"]
 [gate.lanes.py-tests]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "py-tests"]
 tools = ["uv"]
+# Current CI contract tests read workflows, crate sources/manifests and docs.
+# The October 21 audit found 438 excluded-but-read paths under the original
+# broad exclusions, so this lane keeps all inputs rather than reuse stale tests.
 
 # Replay MSRV (workspace check plus the nested Dylint test) through Bosn Actions.
 [gate.lanes.check]
@@ -65,6 +70,11 @@ tools = ["bosn"]
 [gate.lanes.docs]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "docs"]
 tools = ["soldr"]
+# `soldr cargo doc` reads crate sources, not CI plumbing or prose. Measured
+# with `ci-lint local-gate lanes --audit docs`: 854 tracked files opened, 0
+# excluded-but-read. Without these the lane re-runs on every CI edit, which is
+# what kept it at 0% reuse.
+exclude = ["docs/**", ".github/**"]
 
 # The Dylint job, replayed in bosn: the longest job on a PR and, until this
 # lane existed, unskippable even for a fully attested head.

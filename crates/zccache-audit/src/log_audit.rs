@@ -6,7 +6,6 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::fs;
 use std::path::Path;
 use zccache_core::path::NormalizedPath;
@@ -390,22 +389,13 @@ impl AuditReport {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AuditError {
+    #[error("{0}")]
     Io(std::io::Error),
+    #[error("unknown audit context {0:?}")]
     Context(String),
 }
-
-impl fmt::Display for AuditError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => error.fmt(formatter),
-            Self::Context(value) => write!(formatter, "unknown audit context {value:?}"),
-        }
-    }
-}
-
-impl std::error::Error for AuditError {}
 
 impl From<std::io::Error> for AuditError {
     fn from(value: std::io::Error) -> Self {

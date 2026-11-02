@@ -1,12 +1,12 @@
 //! Private daemon owner/ref-count state for soldr development isolation.
 
+use crate::core::sync::{State as AsyncState, STATE_TIMEOUT};
 use crate::protocol::{PrivateDaemonOwnerStatus, PrivateDaemonStatus};
-use kernal_api::async_engine::Mutex;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Default)]
 pub(super) struct PrivateDaemonLifecycle {
-    state: Mutex<PrivateDaemonState>,
+    state: AsyncState<PrivateDaemonState>,
 }
 
 #[derive(Default)]
@@ -31,79 +31,93 @@ impl PrivateDaemonLifecycle {
         owner_pids: &[u32],
         private_env: &[(String, String)],
     ) {
-        let mut state = self.state.lock().await;
-        state.enabled = true;
-        for pid in owner_pids {
-            *state.owner_refs.entry(*pid).or_insert(0) += 1;
-        }
-        for (key, _) in private_env {
-            state.private_env_keys.insert(key.clone());
-        }
+        self.state
+            .with_for(STATE_TIMEOUT, |state| {
+                state.enabled = true;
+                for pid in owner_pids {
+                    *state.owner_refs.entry(*pid).or_insert(0) += 1;
+                }
+                for (key, _) in private_env {
+                    state.private_env_keys.insert(key.clone());
+                }
+            })
+            .await
     }
 
     pub(super) async fn release_session(&self, owner_pids: &[u32]) {
-        let mut state = self.state.lock().await;
-        for pid in owner_pids {
-            let Some(count) = state.owner_refs.get_mut(pid) else {
-                continue;
-            };
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                state.owner_refs.remove(pid);
-            }
-        }
+        self.state
+            .with_for(STATE_TIMEOUT, |state| {
+                for pid in owner_pids {
+                    let Some(count) = state.owner_refs.get_mut(pid) else {
+                        continue;
+                    };
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        state.owner_refs.remove(pid);
+                    }
+                }
+            })
+            .await
     }
 
     pub(super) async fn prune_dead_owner_pids<F>(&self, is_alive: F) -> OwnerPruneResult
     where
         F: Fn(u32) -> bool,
     {
-        let mut state = self.state.lock().await;
-        if !state.enabled {
-            return OwnerPruneResult {
-                removed_pids: Vec::new(),
-                should_shutdown: false,
-            };
-        }
+        self.state
+            .with_for(STATE_TIMEOUT, |state| {
+                if !state.enabled {
+                    return OwnerPruneResult {
+                        removed_pids: Vec::new(),
+                        should_shutdown: false,
+                    };
+                }
 
-        let dead: Vec<u32> = state
-            .owner_refs
-            .keys()
-            .copied()
-            .filter(|pid| !is_alive(*pid))
-            .collect();
-        for pid in &dead {
-            state.owner_refs.remove(pid);
-        }
-        OwnerPruneResult {
-            removed_pids: dead,
-            should_shutdown: state.owner_refs.is_empty(),
-        }
+                let dead: Vec<u32> = state
+                    .owner_refs
+                    .keys()
+                    .copied()
+                    .filter(|pid| !is_alive(*pid))
+                    .collect();
+                for pid in &dead {
+                    state.owner_refs.remove(pid);
+                }
+                OwnerPruneResult {
+                    removed_pids: dead,
+                    should_shutdown: state.owner_refs.is_empty(),
+                }
+            })
+            .await
     }
 
     pub(super) async fn is_enabled(&self) -> bool {
-        self.state.lock().await.enabled
+        self.state
+            .with_for(STATE_TIMEOUT, |state| state.enabled)
+            .await
     }
 
     pub(super) async fn snapshot(&self) -> PrivateDaemonStatus {
-        let state = self.state.lock().await;
-        if !state.enabled {
-            return PrivateDaemonStatus::shared();
-        }
-        let mut owners: Vec<PrivateDaemonOwnerStatus> = state
-            .owner_refs
-            .iter()
-            .map(|(pid, ref_count)| PrivateDaemonOwnerStatus {
-                pid: *pid,
-                ref_count: *ref_count,
+        self.state
+            .with_for(STATE_TIMEOUT, |state| {
+                if !state.enabled {
+                    return PrivateDaemonStatus::shared();
+                }
+                let mut owners: Vec<PrivateDaemonOwnerStatus> = state
+                    .owner_refs
+                    .iter()
+                    .map(|(pid, ref_count)| PrivateDaemonOwnerStatus {
+                        pid: *pid,
+                        ref_count: *ref_count,
+                    })
+                    .collect();
+                owners.sort_by_key(|owner| owner.pid);
+                PrivateDaemonStatus {
+                    enabled: true,
+                    owners,
+                    private_env_keys: state.private_env_keys.iter().cloned().collect(),
+                }
             })
-            .collect();
-        owners.sort_by_key(|owner| owner.pid);
-        PrivateDaemonStatus {
-            enabled: true,
-            owners,
-            private_env_keys: state.private_env_keys.iter().cloned().collect(),
-        }
+            .await
     }
 }
 

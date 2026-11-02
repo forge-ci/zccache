@@ -66,7 +66,8 @@ pub(super) async fn prepare_request_arguments(
     )?;
     let dependency_mode = DependencyDiscoveryMode::from_client_env(client_env.as_deref())
         .map_err(|err| compile_failure_stderr(format!("zccache: {err}")))?;
-    let worktree_root = compile_worktree_root(state, &sid, cwd, client_env.as_deref());
+    let worktree_root = build_script_out_dir_root(compiler_path, cwd, client_env.as_deref())
+        .or_else(|| compile_worktree_root(state, &sid, cwd, client_env.as_deref()));
     let effective_args = effective_compile_args(
         expanded_args,
         compiler_path,

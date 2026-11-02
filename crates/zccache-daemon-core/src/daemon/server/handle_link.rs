@@ -240,7 +240,7 @@ pub(super) async fn handle_link_ephemeral(
         Some(
             state
                 .link_output_lock(NormalizedPath::from(output_dir))
-                .lock_owned()
+                .acquire_for(OPERATION_TIMEOUT)
                 .await,
         )
     };

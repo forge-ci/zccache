@@ -1352,3 +1352,216 @@ Issue: https://github.com/zackees/zccache/issues/1578
 - [x] Add a manual option to the existing benchmark workflow for all three unchanged five-sample Docker campaigns and retained evidence.
 - [ ] Validate workflow/cache guards and complete committed-tree gate before push.
 - [ ] Merge the focused PR, run on the final source ref, download raw evidence, and inspect all correctness and performance results.
+# Shared CI compiler-store snapshots (ci.yml#362)
+
+- [x] Observe an isolated RED test retaining multi-output metadata and verdicts.
+- [x] Export staged-v2, pack and flat payloads using the existing layout resolver.
+- [x] Reject corrupt payloads and preserve prior committed snapshots (isolated test).
+- [x] Verify compatibility on import before any destination publication (isolated test).
+- [x] Import leaves its immutable source unchanged and rejects undecodable indexes.
+- [x] Two concurrent publishers install one complete, importable snapshot.
+- [x] Offline export excludes active writers using the daemon's canonical root lease.
+- [x] Qualify the thin `zccache cache export/import` CLI and its schema-1 output.
+- [ ] Run focused isolated tests, broader gates, and local review before pushing.
+- [ ] Integrate the backend API with cache transport; prove fresh-engine reuse.
+
+Current validation: intentional RED controls for unimplemented export, mixed
+legacy stores, immutable import, strict index decode and active-writer exclusion.
+The corrected writer-exclusion run passed all 127 artifact tests (one ignored),
+six canonical writer-lease tests, and warnings-denied artifact Clippy inside
+the existing Bosn gate stack. Timestamp/read-only retention is covered.
+The corrected CLI run passed export/import in one process, wrong-context refusal,
+and warnings-denied Clippy for artifact, core and CLI crates. The focused run
+took 23.42 seconds inside the existing isolated stack; this is diagnostic, not
+a controlled performance comparison. Full repository qualification and review
+remain pending; this unpublished draft is not fresh-engine cache-hit proof.
+
+The sole primary review found that a missing staged pointer on import reached
+legacy resolution and could write a source lifecycle event. The isolated RED
+reproduced that mutation with legacy validation enabled (127 passed, one failed,
+one ignored). Import now requires staged generations through the shared copier;
+export alone normalizes legacy layouts. The added regression also refuses a
+healthy legacy fallback, preserving the schema-1 transport boundary. Full gate
+attempt on 78fd40e8 passed lint and Python lanes; its MSRV replay was deliberately
+cancelled for this source correction and no complete gate pass is claimed.
+
+The review correction passed 128 artifact tests (one ignored), six writer
+lease tests, one CLI test and focused warnings-denied Clippy in isolation.
+The same primary reviewer confirmed the fix and returned clean. Full repository
+qualification remains required before publication.
+
+# PCH private input views and FastLED integration
+
+- [x] Reproduce shared timestamp replay hiding an edit from an independent Ninja build.
+- [x] Replace shared timestamp writes with verified private snapshots and preserve include aliases.
+- [x] Freeze chained producer imports and bind cached companion provenance to the exact bytes.
+- [x] Validate FastLED through an editable install: 320 native unit targets, 96 examples, focused PCH checks, lint, and a real WASM build.
+- [x] Make real modern-Clang regressions mandatory in the existing isolated integration workflow.
+- [x] Reproduce the remaining legacy chain defect: a same-stat base replacement plus header repair compiles inconsistent values.
+- [x] Refuse private views and producer freezing without recursive bound provenance; retain unchanged legacy consumers. The actual overlay-boundary wrong-code test failed before the fix and all 11 provenance tests pass afterward; primary review is clean.
+- [x] Fix the generic-exec lookup/acquire race exposed by full integration: after a peer publishes and drops its slot, a late new owner rechecks the cache. The deterministic regression failed before the fix; five coalescing unit tests and 27 generic-exec integration tests pass afterward. The one-spawn assertion remains unchanged.
+- [ ] Review the correction, rerun focused regressions and the full clean-tree local gate.
+- [ ] Merge and publish zccache 1.15.6 through the existing release workflow.
+- [ ] Replace FastLED's editable override with the published package, verify, and merge removal of local timestamp workarounds.
+
+# Bounded synchronization and async state (soldr#3836 / #3845)
+
+- [x] Inventory recent soldr PRs and compare the vendored fixes with this workspace.
+- [x] Fix compiler identity probes holding spawn admission while waiting.
+- [x] Introduce bounded synchronization/wait facades; keep data guards out of async code.
+- [x] Enforce the boundaries with resolved-symbol Dylint and compile-fail fixtures.
+- [x] Migrate affected callers and validate concurrency regressions and lint wiring.
+- [x] Document guarantees, exceptions and the upstream PR inventory.
+
+Validation: 1,287 isolated Rust tests and two compile-fail doctests passed across
+`bounded-sync-test` and `bounded-sync-contention-test`; all three new Dylint UI
+fixtures passed. Workspace Clippy passed with warnings denied. Full Dylint
+passed Linux, Windows MSVC and macOS source selections; wiring, cache-footprint,
+and kernal-api inventory checks passed. Host compiler checks used
+`SOLDR_RUSTC_WRAPPER=none` to diagnose/bypass the installed soldr 0.9.35 stall;
+isolated runtime tests used the normal soldr wrapper.
+
+## Soldr mandatory-timeout audit
+
+- [x] Compare soldr's complete raw-wait denylist and timeout-only wait facade.
+- [x] Add the missing bounded channel send, preserving unsent values.
+- [x] Remove nonexistent replacement suggestions from lint diagnostics.
+- [x] Reject kernal-api's optional-timeout command-runner bypass; move both product callers behind the required-Duration facade.
+- [x] Document optional IPC/download budgets and missing hold watchdog as remaining gaps, rather than claiming all async waits are bounded.
+- [x] Verify audit changes: workspace/all-target compilation; all 11 Dylints across Linux, Windows and macOS source selections; 3 lint UI fixtures; isolated bounded-send regression; architecture and lint wiring checks.
+
+# Sequential implementation of meta issue #1960
+
+Use this checkout only. Complete and merge each child PR before starting the
+next child, then sync/rebase against origin/main and leave a clean tree.
+
+- [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
+- [x] #1962 holder watchdog and diagnostics: merged PR #1973 after all six gate lanes passed (1,394s); rebased clean main to origin/main 0fb36402.
+- [ ] #1963 bounded generic process liveness.
+- [ ] #1964 detach staged deletion from publication exclusion.
+- [ ] #1965 durable-entry payload demotion.
+- [ ] #1966 default eligible native/link/exec staging.
+- [ ] #1967 complete timeout/feature enforcement.
+- [ ] #1968 HTTP budget owner and Dylint.
+- [ ] #1969 canonical owned environment flags.
+- [ ] #1970 retained helper diagnostics and Dylint.
+- [ ] #1971 terminating test budgets and owned test children.
+
+#1961 review found and corrected blocking Barrier writer starvation, a staged
+weak-slot mutex held over a longer file-lock wait, and download feature guard
+lifetimes. The probe regressions were replayed against the actual HEAD probe
+functions (only spawn_shared visibility adapted to compile the old path) and
+both failed with the expected held-admission assertion. Restored current code
+before GREEN validation. The Barrier and weak-slot regressions likewise failed
+before their repairs. Full clean-tree qualification and publication remain open.
+
+Final primary review is clean. Probe tests (2), queued blocking Barrier writer
+(1), and staged weak-slot scope (1) all have focused RED -> GREEN evidence.
+Explicit download-daemon Dylint initially rejected attachment guards and now
+passes with owned job snapshots; membership/client-count ordering is preserved.
+The daemon-only Clippy selection exposed an existing unused client-connect
+warning, so final Clippy validation selects the combined product feature set.
+
+The first full clean-tree gate passed lint, Python, MSRV, docs and cross-OS
+Dylint lanes, but integration exposed two regressions: weak gate ownership
+allowed overlapping link operations, and concurrent staged initialization took
+duplicate OS leases. Opaque permits now retain the outer gate owner; a separate
+data-free initialization gate coalesces staged leases outside the state mutex.
+The weak-owner test failed before the repair; core synchronization tests and
+both unchanged integration assertions pass afterward. The subsequent six-lane gate passed in 1,420s; PR #1972 merged and closed #1961.
+
+The correction gate passed all five non-integration lanes. Integration setup
+repeatedly failed before tests on GitHub anonymous latest-release rate limits.
+Pin setup-uv in the existing CI/integration workflows to verified uv 0.12.13
+(the host version), removing the latest-release lookup without skipping tests.
+All six lanes subsequently passed on that tree before PR #1972 was published and merged.
+
+## #1962 implementation plan
+
+- [x] Capture subprocess RED for wedged State callbacks and native holders, retaining libtest capture and bounded process/output ownership. All three timed out against the previous owners.
+- [x] Add independent RAII waiter/holder registry and watchdog with caller/thread diagnostics; report long waits, terminate overdue short holds. Three real-child regressions now terminate with visible diagnostics.
+- [x] Integrate State and native guard owners, preserving poison and cancellation; separately budget spawn/materialization holds and exclude long data-free operations.
+- [x] Verify spawn/materialization subprocess failures, cancelled/dropped registration cleanup, recoverable acquisition, legitimate long operations and writer fairness.
+- [x] Extend deny-level Dylint/UI enforcement for the private watchdog owner and wrapper guards; update architecture guarantees and limitations.
+- [ ] Run focused RED -> GREEN, review, full clean-tree gate, merge separate PR, then rebase main to origin/main.
+
+#1962 first implementation evidence: eight isolated watchdog tests pass,
+including real blocked async/sync callbacks, a native holder, cancelled waiters,
+poison/drop cleanup, report-only overdue queues and a real operation permit
+held beyond the short-state budget. Core/daemon all-target Clippy with
+`test-support` passes with warnings denied. Depgraph persistence uses a data-free
+operation gate because its scope includes disk I/O. Spawn/materialization
+subprocess coverage, lint fixtures, docs, review and full gate remain pending.
+
+#1962 complete focused evidence: 217 isolated core tests and 16 maintenance
+schedule tests pass. Actual spawn/materialization subprocesses terminate at the
+production 15s/120s limits with holder/waiter sites visible despite capture.
+A real-core Dylint example compiled forbidden wrapper guards before the resolved
+wrapper-type classification; it now rejects aliases, concrete wrapper fields,
+unit native guards, UFCS and function-item acquisition bypasses. All three
+existing UI fixtures and both dependency-bearing examples pass. Review,
+workspace Clippy and full clean-tree qualification are next.
+
+#1962 primary review found two HIGH issues; both have new focused RED -> GREEN
+regressions: unread/full stderr blocked termination, and real spawn/copy admission
+aborted after 15s during a legitimate 120s-budget copy. Diagnostic delivery now
+uses one bounded writer and at most 250ms before termination; real admission
+uses the operation queue budget, with unchanged 15s/120s hold limits. Twelve
+final watchdog tests, legitimate-copy regression, all five UI fixtures and
+workspace/all-target Clippy with cli+download-daemon features pass. Correction
+review is clean (one primary reviewer). Full clean-tree gate remains pending.
+
+#1962 first clean-tree gate passed lint, Python, MSRV and docs, then exposed
+Dylint6.0.3's example-runner dependency discovery requiring a bare rustc argv.
+Normal soldr compiler wrapping prevents that parser from identifying the
+compiler invocation. The harness now gets real-core link inputs from Cargo JSON
+artifacts and runs both examples through the UI source runner, preserving the
+managed nightly toolchain and wrapper. Five local UI fixtures pass; correction
+review is clean. Full isolated normal-wrapper gate rerun remains pending.
+
+## #1963 implementation plan
+
+- [x] Capture RED: the live silent generic tool bypassed monitoring and exceeded15s; the shared loop now expires, reaps and releases its output gate.
+- [x] Unify generic linker/exec/hook/passthrough sessions with the compiler progress/CPU owner; require a concrete non-optional liveness policy at process facade entrypoints.
+- [x] Preserve progressing child behavior, concurrent output drains, finite descendant-pipe grace, typed I/O failures, cancellation and bounded kill/reap ownership.
+- [ ] Extend deny-level resolved-symbol process-owner enforcement and positive/negative fixtures for semantic kernal-api APIs and aliased/UFCS/function-item bypasses.
+- [ ] Update authoritative docs; focused RED -> GREEN, review and full clean-tree gate; merge separate PR then rebase main to origin/main.
+
+#1963 first runtime implementation: all 31 call sites now supply a required
+ProcessLiveness value; stall/runtime/cleanup are finite positive budgets,
+post-exit drain is a Duration (zero explicitly abandons, never selects EOF).
+Configured policy preserves 300s stall/2s drain with a finite 6h total cap for
+progressing/CPU-unobservable children and 5s cleanup. The canonical owner applies
+the total across spawn and run, and confirms kill/reap on runtime expiry.
+Generic and compiler children share CPU/output monitoring and concurrent drains;
+read errors return through bounded cleanup. Initial CPU-progress testing exposed
+an unchanged-output timestamp causing false termination after a short quiet CPU
+sample; CPU advances now refresh the shared progress clock (focused RED -> GREEN).
+Seven isolated focused tests pass, including progress, hard deadline and
+cancellation. All-target daemon compilation and focused Clippy passed before the
+last timestamp correction. Existing process/coalescing regression checks are
+running. Process-owner Dylint, remaining fault/backpressure coverage, authoritative
+docs, review and full gate remain pending. Exec coalescing helpers were split
+without behavior changes so the modified handler stays below 1,000 lines.
+
+#1963 backpressure RED -> GREEN: a live receiver with a full output channel
+previously suspended the process monitor beyond a two-second outer test budget.
+Forwarding now requires an explicit send Duration (the session stall budget),
+returns TimedOut on backpressure, and routes that failure through owned cleanup.
+All 62 isolated process tests and five exec-coalescing tests pass. Semantic
+process-owner Dylint compiles; real-dependency UI validation is in progress.
+
+The broader CPU-progress regression exposed running-process 4.10.16's Linux
+CPU Duration conversion dropping fractional CPU seconds (also present on upstream
+main). Keep native identity-bound session sampling/termination and supplement
+progress with the existing kernal-api raw CPU ticks for the live owned tree.
+This preserves observable subsecond CPU activity without a dependency patch or
+PID-based termination. Captured failures remain in the local regression logs.
+
+#1963 validation: 65 isolated process tests and five coalescing tests pass,
+including live-consumer backpressure, pending-admission timeout cancellation,
+and injected kernel stdout-fault cleanup with a real child and gate. The
+public fault value is injected after child readiness, not claimed as an OS
+pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
+Dylint passed all supported OS selections; final matcher additions covering
+native kernal foreground/sync APIs are included in UI and the full gate.

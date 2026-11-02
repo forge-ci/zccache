@@ -9,7 +9,8 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use zccache_core::blocking_sync::Mutex;
 
 use clang::{Clang, Entity, EntityKind, Index};
 use thiserror::Error;
@@ -97,7 +98,7 @@ pub fn generate_ino_cpp(
     static LIBCLANG_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = LIBCLANG_GUARD
         .get_or_init(|| Mutex::new(()))
-        .lock()
+        .lock_for(zccache_core::sync::OPERATION_TIMEOUT)
         .unwrap_or_else(|p| p.into_inner());
 
     ensure_libclang_env()?;

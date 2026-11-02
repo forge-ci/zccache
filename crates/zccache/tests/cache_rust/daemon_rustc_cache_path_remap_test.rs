@@ -367,3 +367,134 @@ async fn test_rustc_path_remap_conservative_cross_root_misses() {
     })
     .await;
 }
+
+/// Write `src/lib.rs` plus build-script-style output under `target/out`, and
+/// return that `OUT_DIR`. `embed` makes the crate embed its OUT_DIR as a value.
+fn write_out_dir_lib(root: &std::path::Path, embed: bool) -> std::path::PathBuf {
+    let out_dir = root.join("target/out");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::write(
+        out_dir.join("generated.rs"),
+        "pub const GENERATED: u32 = 7;\n",
+    )
+    .unwrap();
+    let body = if embed {
+        "pub const OUT: &str = env!(\"OUT_DIR\");\n"
+    } else {
+        "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\n"
+    };
+    std::fs::write(root.join("src/lib.rs"), body).unwrap();
+    out_dir
+}
+
+async fn compile_out_dir_lib(
+    client: &mut ClientConn,
+    session_id: &str,
+    compiler: &str,
+    root: &std::path::Path,
+    crate_name: &str,
+    out_dir: &std::path::Path,
+) -> (i32, bool) {
+    let src = root.join("src/lib.rs").to_string_lossy().into_owned();
+    let target = root.join("target").to_string_lossy().into_owned();
+    let args = [
+        "--edition",
+        "2021",
+        "--crate-type",
+        "lib",
+        "--crate-name",
+        crate_name,
+        "--emit=dep-info,metadata",
+        "--out-dir",
+        &target,
+        &src,
+    ];
+    let mut env = path_remap_auto_env();
+    env.push((
+        "OUT_DIR".to_string(),
+        out_dir.to_string_lossy().into_owned(),
+    ));
+    compile_with_env(client, session_id, compiler, &args, root, Some(env)).await
+}
+
+/// zccache#1955: a crate that `include!`s build-script output from OUT_DIR
+/// must hit in a sibling root. rustc records `OUT_DIR=<abs>` as an env-dep;
+/// keyed verbatim it named each root's own `target/` and every fresh worktree
+/// recompiled serde, thiserror and friends. A crate embedding the path as a
+/// value must still miss, and a hit must hand back dep-info for B's OUT_DIR.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // integration-level: starts real daemon with IPC + rustc
+async fn test_rustc_include_only_out_dir_hits_across_sibling_git_roots() {
+    let rustc = match zccache::test_support::find_rustc() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping test: rustc not found");
+            return;
+        }
+    };
+
+    zccache::test_support::test_timeout(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let rustc_str = rustc.to_string_lossy().to_string();
+        let (endpoint, server_handle, shutdown) = start_daemon().await;
+
+        for (embed, crate_name, expect_hit) in [(false, "gendep", true), (true, "embeddep", false)]
+        {
+            let root_a = tmp.path().join(format!("{crate_name}-a"));
+            let root_b = tmp.path().join(format!("{crate_name}-b"));
+            if !init_git_root(&root_a) || !init_git_root(&root_b) {
+                return;
+            }
+            let out_a = write_out_dir_lib(&root_a, embed);
+            let out_b = write_out_dir_lib(&root_b, embed);
+            let mut client_a = zccache::ipc::connect(&endpoint).await.unwrap();
+            let mut client_b = zccache::ipc::connect(&endpoint).await.unwrap();
+            let session_a = start_session_in(&mut client_a, &root_a).await;
+            let session_b = start_session_in(&mut client_b, &root_b).await;
+
+            let (exit_code, cached) = compile_out_dir_lib(
+                &mut client_a,
+                &session_a,
+                &rustc_str,
+                &root_a,
+                crate_name,
+                &out_a,
+            )
+            .await;
+            assert_eq!(exit_code, 0, "{crate_name}: A compile should succeed");
+            assert!(!cached, "{crate_name}: A compile should be a cold miss");
+
+            let (exit_code, cached) = compile_out_dir_lib(
+                &mut client_b,
+                &session_b,
+                &rustc_str,
+                &root_b,
+                crate_name,
+                &out_b,
+            )
+            .await;
+            assert_eq!(exit_code, 0, "{crate_name}: B compile should succeed");
+            assert_eq!(
+                cached, expect_hit,
+                "{crate_name}: include-only OUT_DIR must hit across roots; an \
+                 embedded OUT_DIR must miss"
+            );
+
+            let depinfo =
+                std::fs::read_to_string(root_b.join(format!("target/{crate_name}.d"))).unwrap();
+            assert!(
+                depinfo.contains(&format!("# env-dep:OUT_DIR={}", out_b.display())),
+                "{crate_name}: B's dep-info must name B's OUT_DIR:\n{depinfo}"
+            );
+            assert!(
+                !depinfo.contains(&out_a.to_string_lossy().into_owned()),
+                "{crate_name}: B's dep-info must not leak A's OUT_DIR:\n{depinfo}"
+            );
+        }
+
+        shutdown.notify_one();
+        server_handle.await.unwrap();
+    })
+    .await;
+}

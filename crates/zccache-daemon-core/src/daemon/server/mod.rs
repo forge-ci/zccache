@@ -15,6 +15,7 @@ use super::process::CompilePriority;
 use super::stats::{HitPhases, MissPhases, PhaseProfiler, StatsCollector};
 use crate::artifact::{ArtifactIndex, ArtifactStore, ArtifactVerdict, KvError, KvStore};
 use crate::core::config::MaterializationMode;
+use crate::core::sync::{Gate, State as AsyncState, OPERATION_TIMEOUT, STATE_TIMEOUT};
 use crate::core::NormalizedPath;
 use crate::depgraph::{
     CompileContext, ContextKey, DepGraph, DepfileStrategy, SessionId, SessionManager,
@@ -26,12 +27,13 @@ use crate::ipc::{IpcConnection, IpcListener};
 use crate::protocol::{ArtifactData, ArtifactOutput, ArtifactPayload, Request, Response};
 use crate::watcher::{NotifyWatcher, SettleBuffer, SettledEvent};
 use dashmap::DashMap;
-use kernal_api::async_engine::{Mutex, Notify};
+use kernal_api::async_engine::Notify;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use zccache_core::blocking_sync::Mutex as StdMutex;
 
 /// Cached result of a verified cache hit, enabling zero-hash fast path.
 ///
@@ -89,11 +91,11 @@ pub(crate) struct EmbeddedDaemon {
     /// blocking persistence operation uses this when one was supplied.
     runtime_handle: Option<kernal_api::async_engine::RuntimeHandle>,
     index_writer_rx: Option<kernal_api::async_engine::UnboundedReceiver<IndexWriterCommand>>,
-    index_writer_handle: Mutex<Option<kernal_api::async_engine::Task<()>>>,
-    maintenance_handle: Mutex<Option<kernal_api::async_engine::Task<()>>>,
-    depgraph_maintenance_handle: Mutex<Option<kernal_api::async_engine::Task<()>>>,
+    index_writer_handle: AsyncState<Option<kernal_api::async_engine::Task<()>>>,
+    maintenance_handle: AsyncState<Option<kernal_api::async_engine::Task<()>>>,
+    depgraph_maintenance_handle: AsyncState<Option<kernal_api::async_engine::Task<()>>>,
     /// The post-readiness startup depgraph load (#1652), joined by shutdown.
-    depgraph_load_handle: Mutex<Option<kernal_api::async_engine::Task<()>>>,
+    depgraph_load_handle: AsyncState<Option<kernal_api::async_engine::Task<()>>>,
     /// Periodic tasks this service started, as reported by
     /// [`maintenance_schedule::MaintenanceSchedule::start`] (#1160). Retained
     /// so the parity guard can assert against a real embedded service rather
@@ -186,6 +188,7 @@ mod compile_concurrency;
 mod compile_progress;
 pub(crate) mod compile_resource_gate;
 mod compiler_hash;
+mod compiler_spawn;
 mod connection;
 mod dependency_policy;
 mod depfile_root;

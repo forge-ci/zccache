@@ -23,5 +23,5 @@ an error.
 
 ```bash
 uv run python -m ci.lint --dylint-only
-soldr rustup run nightly-2026-05-26 cargo test --manifest-path dylints/enforce_platform_boundary/Cargo.toml
+soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/enforce_platform_boundary/Cargo.toml
 ```

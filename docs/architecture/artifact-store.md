@@ -4,6 +4,50 @@ The artifact store persists compiled output files on disk, keyed by content-addr
 
 For how cache keys are computed see [overview.md](overview.md) (section 2.8). For crash recovery see [runtime.md](runtime.md).
 
+## Compiler-store transport snapshots (ci.yml#362)
+
+The `zccache_artifact::snapshot` API owns compiler-store export and import.
+Embedded callers quiesce writers and supply the authoritative `ArtifactStore`, its artifact directory, an
+opaque 64-character lowercase-hex compatibility identity, and a new destination.
+The backend retains the full index: output names, sizes, modes, compiler streams,
+and Rust verdicts. Disk export takes the same exclusive cache-root writer lease
+as a daemon, so it refuses an active writer until shutdown/flush completes.
+The existing lease lives in `zccache-core` and both callers share it.
+This snapshot is cache data; it does not attest that tests ran.
+
+Export holds the staged eviction read guard, resolves a captured generation
+through the existing layout validator, and copies independent payloads and its
+manifest. It does not re-read a mutable current pointer after capture. Copied
+payloads are checked again before publication. Pack and flat entries use the
+existing resolver and are normalized to the same staged format in the private
+snapshot; transport never parses their legacy layouts. The snapshot manifest binds the
+schema, caller-provided compatibility identity, and index digest. Import checks
+that identity and digest and strictly decodes the index without the normal
+daemon's corrupt-index recovery. It uses the shared publication path to validate
+and install a fresh private store before daemon startup. Schema-1 import requires
+staged generations and refuses a missing pointer before legacy resolution, so
+even corrupt input never creates a lock or lifecycle event in its source.
+
+Publication uses a temporary sibling directory, synced files/directories, and
+the canonical native generation rename. A completed prior snapshot is never
+replaced. Paths and their parent must be caller-controlled; this is not a secure
+filesystem transaction against an attacker mutating the source or parent.
+Two concurrent publishers have a regression proving only one complete snapshot
+is installed and remains importable. They cannot overwrite that completed destination;
+portable exclusive reservation of an empty destination is not provided.
+
+The API supports staged-v2, pack, flat and empty stores. Missing or corrupt
+payloads return errors, never silently incomplete snapshots. Its CLI adapter is
+`zccache cache export|import --root <store> --snapshot <snapshot> --compatibility <hash>`:
+`root` is the source on export and a new destination on import; `snapshot` is
+the new destination on export and immutable source on import. Successful output
+is schema-1 JSON with `entries` and `outputs`; errors return nonzero.
+The isolated CLI round-trip and wrong-context refusal tests pass. Full
+repository qualification, managed-daemon shutdown coordination, and
+local/hosted cache transport integration remain pending.
+Local and hosted runners will publish their own snapshots independently. This
+API alone does not prove fresh-engine cache durability or reduced compiler misses.
+
 ---
 
 ## Immutable staged-output rollout
@@ -546,10 +590,77 @@ or allowlisted in the guard:
 | rust-plan restore (`rust_plan/local.rs`) | routed: `recorded_mtime_or_now` + `stamp_mtime` | the manifest's recorded object mtime, `now()` when the manifest has `0` |
 | directory-bundle restore | routed: `stamp_recorded_mtime` | the recorded entry timestamp |
 | `mtime_replay` (#1595) | allowlisted | restores workspace *source* files, not outputs |
+| `pch_inputs` | allowlisted | stamps independent compiler-private snapshots; original input timestamps never change |
 | `snapshot_fp` | allowlisted | bumps existing cargo fingerprint stamp files in place |
 | `retired_store` | allowlisted | `.last-active` liveness marker |
 
 Benches, tests and `zccache-test-support` are not production writers and are not
-scanned. `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
+scanned.
+
+### Strict PCH serving (#1952)
+
+A clang PCH records each input's spelling, size, whole-second Unix mtime,
+and content hash (`INPUT_FILE` / `INPUT_FILE_HASH`). LLVM's PCH validity
+check can accept an identical header with a changed mtime under
+`-fpch-validate-input-files-content`. Its independent `#pragma once` lookup
+still keys on size and mtime, so a consumer can then parse the header twice.
+
+zccache reads those records before serving a cached PCH. The worktree-salted
+key includes exact argv spelling and cwd. Missing files, changed sizes or
+content, and a mismatched top-level input turn the hit into a rebuild. The
+PCH's `METADATA` record identifies the hash format: clang >= 19 records xxh3;
+older versions cannot verify timestamp drift and refuse it. A mismatch never
+becomes a match merely because all input hashes changed.
+
+For content-identical timestamp drift, cached PCH bytes remain reusable.
+When zccache runs a consumer, `handle_compile/pch_overlay.rs` recursively
+collects input records from its explicit or implicit PCH and imported base
+PCHs. Conflicting records for one original path are refused. The fingerprint
+module rechecks each drifted input, writes an independent copy into a private
+directory under the daemon's temporary root, and sets only that copy's mtime
+to the recorded seconds. Imported PCH copies retain their bytes. Ordinary Clang PCH imports can have
+zero signatures, so size and timestamp checks cannot prove that a base PCH
+still has its original content. A `.zccache-imports.json` companion binds the
+parent PCH's content hash to the imported PCH hashes observed by its producer.
+Every PCH loaded by a chained producer is frozen before compiler execution,
+even if its timestamp already matches. Provenance is captured only from that
+executed immutable view, closing same-size, same-second replacement races.
+It is stored and restored with the parent artifact. Any private view, including
+a producer's frozen imports, requires bound provenance recursively through the
+imported chain. Matching size and mtime cannot establish a missing baseline:
+repairing another header could make a previously rejected stale chain compile
+with inconsistent values. Legacy consumers needing no private view can still
+run unchanged; legacy chains must be rebuilt before repair. Changed imports
+and corrupt companions are refused.
+No original header or PCH is modified.
+
+The compiler gets `-ivfsoverlay` with `use-external-names: false`, so Clang sees
+the expected metadata while dependency files, nested relative includes and
+`__FILE__` retain original paths. A private preprocessor dependency scan
+preserves raw include spellings and maps symlinks, hardlinks, and symlinked
+include directories to the same snapshot identity. It strips user output
+and dependency destinations and runs under the compiler admission gate.
+The owning temporary-directory guard lives
+until the compiler exits. The injected argv is an execution detail, excluded
+from cache keys. Caller-provided VFS overlays are refused when composition
+would require a private timestamp view, rather than silently changing their
+meaning. Inputs outside the permitted checkout root remain ineligible.
+
+`[PCH_INPUT_VIEW_PENDING]` logs drift seen on a producer hit;
+`[PCH_INPUT_VIEW]` logs snapshots created for a consumer. Snapshot preparation
+failures and changed loaded inputs fail the compile with a rebuild diagnostic.
+Cache hits for consumer objects need no compiler view. Both cacheable and
+uncacheable compiler executions support the private view, and both PCH
+producers and consumers must pass through zccache.
+
+This leaves shared source timestamps intact, so ordinary objects in another
+build directory still observe a real edit or edit-and-revert. It preserves
+strict PCH validation and never patches PCH bytes or disables timestamps.
+`ZCCACHE_PCH_MTIME_REPLAY=0` disables timestamp repair for that request; a
+producer with timestamp drift rebuilds, while an already-stale loaded PCH is
+left for Clang's strict validation. Chained producers still freeze matching
+imported files so their provenance describes the bytes actually compiled.
+
+ `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.

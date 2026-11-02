@@ -44,12 +44,14 @@ fn project_root() -> NormalizedPath {
 }
 
 fn current_fingerprint(root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let output = zccache::core::wait::output_for(
+        kernal_api::SpawnSpec::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(root),
+        zccache::core::wait::PROBE,
+    )
+    .ok()?;
+    if output.exit.raw_code() != 0 {
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -130,16 +132,17 @@ fn activate_rustup_toolchain(root: &Path) {
 
 /// Check whether a rustup cross-compilation target is installed.
 fn is_target_installed(target: &str) -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .any(|line| line.trim() == target)
-        })
-        .unwrap_or(false)
+    zccache::core::wait::output_for(
+        kernal_api::SpawnSpec::new("rustup").args(["target", "list", "--installed"]),
+        zccache::core::wait::PROBE,
+    )
+    .map(|o| {
+        o.exit.raw_code() == 0
+            && String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|line| line.trim() == target)
+    })
+    .unwrap_or(false)
 }
 
 /// Build a `Command` configured to run `program args...` with `cwd = root`,

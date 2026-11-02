@@ -90,11 +90,10 @@ pub(super) async fn handle_session_start(
     // is visible to operators reading `last-session.log`. Issue #320.
     {
         let warning_opt = {
-            let guard = state
+            state
                 .depgraph_load_warning
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.clone()
+                .with_for(STATE_TIMEOUT, |slot| slot.clone())
+                .await
         };
         if let Some(warning) = warning_opt {
             write_session_log(&state.sessions, &session_id, &warning);

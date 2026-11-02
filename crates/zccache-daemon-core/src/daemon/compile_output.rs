@@ -340,6 +340,10 @@ fn capture_limit() -> usize {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 mod tests {
     use super::*;
     use crate::daemon::process::CompilePriority;
@@ -586,6 +590,7 @@ mod tests {
             None,
             Some(raw_sender),
             "streaming fixture".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         );
         let consume = super::consume(raw_receiver, context, OutputFilter::None);
         let operation = async {
@@ -633,6 +638,7 @@ mod tests {
                 None,
                 Some(raw_sender),
                 "stream cancellation fixture".to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             );
             let consume = super::consume(raw_receiver, context, OutputFilter::None);
             tokio::join!(process, consume)

@@ -65,6 +65,10 @@ pub(super) struct CachedHitMaterializeRequest<'a> {
     pub(super) rustc_archive_hardlink_eligible: Option<bool>,
     /// This request's resolved `ZCCACHE_MODE` (#1683).
     pub(super) materialization_mode: MaterializationMode,
+    /// Whether a cached PCH whose inputs differ from the record only by
+    /// mtime may be served after replaying the recorded mtimes (#1952,
+    /// `ZCCACHE_PCH_MTIME_REPLAY`).
+    pub(super) pch_mtime_replay: bool,
     pub(super) phases: CachedHitPhases,
 }
 
@@ -89,6 +93,10 @@ pub(super) struct OwnedCachedHitMaterializeRequest {
     pub(super) rustc_archive_hardlink_eligible: Option<bool>,
     /// This request's resolved `ZCCACHE_MODE` (#1683).
     pub(super) materialization_mode: MaterializationMode,
+    /// Whether a cached PCH whose inputs differ from the record only by
+    /// mtime may be served after replaying the recorded mtimes (#1952,
+    /// `ZCCACHE_PCH_MTIME_REPLAY`).
+    pub(super) pch_mtime_replay: bool,
     pub(super) phases: CachedHitPhases,
 }
 
@@ -122,6 +130,7 @@ pub(super) async fn materialize_cached_compile_hit_offloaded(
                 rustc_metadata_compat_outputs: request.rustc_metadata_compat_outputs,
                 rustc_archive_hardlink_eligible: request.rustc_archive_hardlink_eligible,
                 materialization_mode: request.materialization_mode,
+                pch_mtime_replay: request.pch_mtime_replay,
                 phases: request.phases,
             })
         })
@@ -150,6 +159,26 @@ pub(super) enum CachedHitFailure {
     CacheBlobMissing(CacheBlobMissing),
     CacheRead,
     DestinationWrite,
+    /// A cached PCH's recorded inputs do not match the workspace (#1952):
+    /// serving it would load a PCH clang treats as stale or that defeats
+    /// `#pragma once`. The PCH is rebuilt.
+    PchInputsStale,
+}
+
+impl CachedHitFailure {
+    /// The miss-reason bucket and the diagnostic name for this failure.
+    pub(super) fn miss_bucket(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::VerdictMissing => (miss_reason::NO_ARTIFACT_FOR_KEY, "verdict_not_found"),
+            Self::CacheBlobMissing(_) => (miss_reason::NO_ARTIFACT_FOR_KEY, "artifact_not_found"),
+            Self::CacheRead => (miss_reason::NO_ARTIFACT_FOR_KEY, "artifact_read_failed"),
+            Self::DestinationWrite => (
+                miss_reason::DESTINATION_WRITE_FAILED,
+                "destination_write_failed",
+            ),
+            Self::PchInputsStale => (miss_reason::INPUT_FINGERPRINT_MISMATCH, "pch_inputs_stale"),
+        }
+    }
 }
 
 impl From<MaterializationFailure> for CachedHitFailure {
@@ -185,6 +214,7 @@ pub(super) fn materialize_cached_compile_hit(
         rustc_metadata_compat_outputs,
         rustc_archive_hardlink_eligible,
         materialization_mode,
+        pch_mtime_replay,
         phases,
     } = request;
 
@@ -304,6 +334,32 @@ pub(super) fn materialize_cached_compile_hit(
     let artifact_bytes = cached.meta.total_size;
     drop(cached);
 
+    // #1952: a cached clang PCH is served only when its recorded inputs
+    // match the workspace; the guard is held until the PCH is written.
+    let _pch_guard = match payloads.first() {
+        Some(payload)
+            if rustc_archive_hardlink_eligible.is_none()
+                && super::pch_gate::is_pch_output(output_path) =>
+        {
+            Some(super::pch_gate::gate_cached_pch(
+                super::pch_gate::PchGateRequest {
+                    state,
+                    sid,
+                    payload,
+                    provenance: names
+                        .iter()
+                        .position(|name| name.ends_with(super::pch_provenance::SIDECAR_SUFFIX))
+                        .and_then(|index| payloads.get(index)),
+                    source_path,
+                    output_path,
+                    replay_root: depfile_key_root.as_ref(),
+                    replay_enabled: pch_mtime_replay,
+                },
+            )?)
+        }
+        _ => None,
+    };
+
     // Issue #643: when the miss path stashed the user's depfile bytes as a
     // second output and the current request supplies a `-MF` destination,
     // restore index 1 to *that* destination — not to the cached basename
@@ -368,7 +424,11 @@ pub(super) fn materialize_cached_compile_hit(
                         } else {
                             secondary_output_dir.join(&names[i])
                         }
-                    } else if i == 1 && payloads.len() == 2 {
+                    } else if super::pch_gate::is_pch_output(output_path)
+                        && names[i].ends_with(super::pch_provenance::SIDECAR_SUFFIX)
+                    {
+                        NormalizedPath::new(super::pch_provenance::sidecar_path(output_path))
+                    } else if i == 1 && current_depfile_dest.is_some() {
                         current_depfile_dest
                             .clone()
                             .unwrap_or_else(|| secondary_output_dir.join(&names[i]))

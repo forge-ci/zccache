@@ -145,11 +145,12 @@ def check(root: Path = ROOT) -> list[str]:
         errors.append("CI dylint job must run ci/check_dylint_wiring.py")
     # The CI dylint job wires each library via an explicit named step (rather
     # than a `dylints/*/Cargo.toml` glob loop) so failures point at the
-    # specific library. Every discovered manifest must still appear verbatim
-    # in the workflow so no library is silently dropped from formatting/test
-    # coverage.
+    # specific library. Each step runs from the library's own directory (so
+    # its .cargo/config.toml applies -- ci-lint RUST-016), and every
+    # discovered library must appear as a working-directory so none is
+    # silently dropped from formatting/test coverage.
     for manifest in sorted(expected):
-        if manifest not in workflow:
+        if f"working-directory: {Path(manifest).parent.as_posix()}\n" not in workflow:
             errors.append(f"CI dylint job must format and test {manifest}")
     workspace_file = root / ("Cargo" + ".toml")
     workspace = tomllib.loads(workspace_file.read_text(encoding="utf-8"))

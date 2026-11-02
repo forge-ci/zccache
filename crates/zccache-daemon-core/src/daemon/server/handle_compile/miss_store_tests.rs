@@ -142,6 +142,7 @@ async fn perf_staged_rust_hit_uses_provisional_payload_before_durable_publicatio
             rustc_metadata_compat_outputs: Some(requested_outputs),
             rustc_archive_hardlink_eligible: Some(false),
             materialization_mode: MaterializationMode::Auto,
+            pch_mtime_replay: true,
             phases: super::super::cached_hit::CachedHitPhases::request_cache(0, 0),
         },
     )

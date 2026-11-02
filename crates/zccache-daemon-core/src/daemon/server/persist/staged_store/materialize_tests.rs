@@ -143,7 +143,7 @@ fn materialized_executable_runs_while_a_child_is_between_fork_and_exec() {
         // The facade offers no pre-exec seam to stretch that window, so the
         // same protocol is exercised here on a std spawn.
         let child = {
-            let _spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
+            let _spawn_guard = crate::daemon::spawn_exclusion::test_spawn_shared();
             cmd.spawn()
         };
         child.and_then(std::process::Child::wait_with_output)

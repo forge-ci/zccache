@@ -98,13 +98,18 @@ where
 }
 
 /// Priority policy for compiler/linker child processes owned by the daemon.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
 pub(crate) enum CompilePriority {
     #[default]
+    #[strum(serialize = "auto")]
     Auto,
+    #[strum(serialize = "normal")]
     Normal,
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "idle")]
     Idle,
+    #[strum(serialize = "high")]
     High,
 }
 
@@ -117,16 +122,10 @@ pub(crate) struct CompilePriorityDecision {
 
 impl CompilePriority {
     pub(crate) fn parse(value: &str) -> Result<Self, CompilePriorityParseError> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "auto" => Ok(Self::Auto),
-            "normal" => Ok(Self::Normal),
-            "low" => Ok(Self::Low),
-            "idle" => Ok(Self::Idle),
-            "high" => Ok(Self::High),
-            other => Err(CompilePriorityParseError {
-                value: other.to_string(),
-            }),
-        }
+        let value = value.trim().to_ascii_lowercase();
+        value
+            .parse()
+            .map_err(|_| CompilePriorityParseError { value })
     }
 
     pub(crate) fn from_client_env(env: Option<&[(String, String)]>) -> Self {
@@ -205,13 +204,7 @@ impl CompilePriority {
     }
 
     pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Normal => "normal",
-            Self::Low => "low",
-            Self::Idle => "idle",
-            Self::High => "high",
-        }
+        self.into()
     }
 
     /// Spawn-site resolution. Acquires an [`InFlightCompileTicket`] so the
@@ -518,6 +511,10 @@ pub(crate) struct CompilePriorityParseError {
 #[path = "process_session.rs"]
 mod session;
 
+#[path = "process_policy.rs"]
+mod policy;
+pub(crate) use policy::ProcessLiveness;
+
 pub(crate) use session::{
     async_builder_output_streaming_with_priority_decision, async_builder_output_with_priority,
     async_builder_output_with_priority_and_post_exit_grace,
@@ -532,4 +529,8 @@ mod tests;
 #[cfg(test)]
 #[path = "process_session_tests.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "process_liveness_tests.rs"]
+mod liveness_tests;
 // test inside `cargo test` because the test runner's own stdio

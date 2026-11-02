@@ -322,6 +322,11 @@ jobs:
               plan = planFor(before); // forecast the post-delete peak
             }
             if (!plan.ok) {
+              // CACHE-026: retiring every superseded entry still did not fit,
+              // so main-push cache writes stay disabled. Say so loudly.
+              const msg = `CACHE-026: main cache writes are DISABLED -- ${plan.reason}`;
+              core.error(msg);
+              await core.summary.addHeading("Cache writes disabled (CACHE-026)").addRaw(msg).write();
               throw new Error(`cache transition forecast failed closed: ${plan.reason}`);
             }
             const deleteIds = new Set(plan.deleteIds);

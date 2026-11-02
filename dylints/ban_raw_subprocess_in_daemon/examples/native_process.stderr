@@ -1,0 +1,28 @@
+error: `tokio::process::Command::spawn` bypasses kernal-api; execute the configured command through the daemon process helpers backed by `kernal_api::async_process`
+  --> $DIR/native_process.rs:5:17
+   |
+LL |     let spawn = AsyncCommand::spawn;
+   |                 ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_raw_subprocess_in_daemon)]` on by default
+
+error: `tokio::process::Child::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/native_process.rs:7:13
+   |
+LL |     let _ = AsyncChild::wait(child).await;
+   |             ^^^^^^^^^^^^^^^^
+
+error: `tokio::process::Command::output` bypasses kernal-api; execute the configured command through the daemon process helpers backed by `kernal_api::async_process`
+  --> $DIR/native_process.rs:8:13
+   |
+LL |     let _ = command.output().await;
+   |             ^^^^^^^^^^^^^^^^
+
+error: `std::process::Child::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/native_process.rs:11:16
+   |
+LL |     let wait = SyncChild::wait;
+   |                ^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

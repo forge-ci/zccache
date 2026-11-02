@@ -1,0 +1,359 @@
+[
+ {
+  "id": 8435552309,
+  "key": "setup-soldr-dylint-v2-linux-x64-x86_64-unknown-linux-gnu-d19499a6c7c22113-dylint",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 549202056,
+  "created_at": "2026-10-02T21:02:35.109978Z"
+ },
+ {
+  "id": 8299336573,
+  "key": "setup-uv-1-x86_64-unknown-linux-gnu-3.12.3-pruned-3957174d046b03e06634fa0d5c0599fcd1cff2b49c5d96723ad175c77cb76867",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 995477,
+  "created_at": "2026-09-30T06:37:14.526488Z"
+ },
+ {
+  "id": 8462773500,
+  "key": "setup-uv-1-x86_64-unknown-linux-gnu-3.12.3-pruned-7c33d4d2e883e8cc943fe3057fc35d4c878af1476c67494831303d069c886252",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 461605,
+  "created_at": "2026-10-03T19:18:59.539655Z"
+ },
+ {
+  "id": 8709851950,
+  "key": "setup-uv-1-x86_64-unknown-linux-gnu-3.13.16-pruned-7c33d4d2e883e8cc943fe3057fc35d4c878af1476c67494831303d069c886252",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 591914,
+  "created_at": "2026-10-09T02:22:51.036924Z"
+ },
+ {
+  "id": 9326570111,
+  "key": "cargo-registry-Linux-X64-test-x86_64-unknown-linux-gnu-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 51539907,
+  "created_at": "2026-10-22T07:58:38.643840Z"
+ },
+ {
+  "id": 9465206393,
+  "key": "soldr-verdict-manifest-v1-8b9b05c3e07c5b2c-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 405,
+  "created_at": "2026-10-25T02:59:11.238901Z"
+ },
+ {
+  "id": 9465174578,
+  "key": "soldr-verdict-manifest-v1-f0f3c44042dc77d3-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 405,
+  "created_at": "2026-10-25T02:57:22.518480Z"
+ },
+ {
+  "id": 9465173475,
+  "key": "soldr-verdict-manifest-v1-e9bc2c8f75b73a99-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 411,
+  "created_at": "2026-10-25T02:57:18.897895Z"
+ },
+ {
+  "id": 9465168553,
+  "key": "soldr-verdict-manifest-v1-85e05761aa60dc81-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 414,
+  "created_at": "2026-10-25T02:57:03.167154Z"
+ },
+ {
+  "id": 9465166869,
+  "key": "soldr-verdict-manifest-v1-ca1215685f4aa322-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 409,
+  "created_at": "2026-10-25T02:56:57.943490Z"
+ },
+ {
+  "id": 9465131004,
+  "key": "soldr-verdict-manifest-v1-969c5a5bbc7a5603-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 409,
+  "created_at": "2026-10-25T02:55:03.098647Z"
+ },
+ {
+  "id": 9465128533,
+  "key": "soldr-verdict-manifest-v1-fa0af5a921e03f75-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 373,
+  "created_at": "2026-10-25T02:54:55.023094Z"
+ },
+ {
+  "id": 9465121623,
+  "key": "soldr-verdict-manifest-v1-6e3e785441c63fa0-40155500190-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 372,
+  "created_at": "2026-10-25T02:54:30.899517Z"
+ },
+ {
+  "id": 9462821735,
+  "key": "soldr-verdict-manifest-v1-f0f3c44042dc77d3-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 409,
+  "created_at": "2026-10-25T00:54:04.605683Z"
+ },
+ {
+  "id": 9462913760,
+  "key": "soldr-verdict-manifest-v1-8b9b05c3e07c5b2c-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 406,
+  "created_at": "2026-10-25T00:58:56.025202Z"
+ },
+ {
+  "id": 9462999030,
+  "key": "soldr-verdict-manifest-v1-969c5a5bbc7a5603-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 412,
+  "created_at": "2026-10-25T01:03:26.757175Z"
+ },
+ {
+  "id": 9462985682,
+  "key": "soldr-verdict-manifest-v1-fa0af5a921e03f75-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 373,
+  "created_at": "2026-10-25T01:02:42.942285Z"
+ },
+ {
+  "id": 9463046063,
+  "key": "soldr-verdict-manifest-v1-ca1215685f4aa322-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 409,
+  "created_at": "2026-10-25T01:06:01.598142Z"
+ },
+ {
+  "id": 9463048752,
+  "key": "soldr-verdict-manifest-v1-85e05761aa60dc81-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 413,
+  "created_at": "2026-10-25T01:06:09.038444Z"
+ },
+ {
+  "id": 9462887742,
+  "key": "soldr-verdict-manifest-v1-6e3e785441c63fa0-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 373,
+  "created_at": "2026-10-25T00:57:30.267327Z"
+ },
+ {
+  "id": 9463027501,
+  "key": "soldr-verdict-manifest-v1-e9bc2c8f75b73a99-40145828988-1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 409,
+  "created_at": "2026-10-25T01:05:02.359529Z"
+ },
+ {
+  "id": 9326692355,
+  "key": "setup-soldr-cargoregistry-v1-linux-x64-f0b451a55dc2de6d-a853aa5c752d19df",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 112658697,
+  "created_at": "2026-10-22T08:01:17.266787Z"
+ },
+ {
+  "id": 9326568550,
+  "key": "zccache-Linux-X64-test-x86_64-unknown-linux-gnu-25d71f099766db52d2f55afc41b54c342c4feb7f",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 260306449,
+  "created_at": "2026-10-22T07:58:37.141318Z"
+ },
+ {
+  "id": 9326783709,
+  "key": "setup-soldr-cargoregistry-v1-windows-x64-2b403828b00c09ec-06f0ef039c4ec3d1",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 159862276,
+  "created_at": "2026-10-22T08:03:34.371557Z"
+ },
+ {
+  "id": 9327241483,
+  "key": "setup-soldr-cargoregistry-v1-macos-arm64-f0b451a55dc2de6d-bb4db7720ab9c7b0",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 115101943,
+  "created_at": "2026-10-22T08:13:20.446573Z"
+ },
+ {
+  "id": 9326327968,
+  "key": "soldr-mini-v2-linux-x64-glibc-v0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 11490804,
+  "created_at": "2026-10-22T07:53:27.066642Z"
+ },
+ {
+  "id": 9326741865,
+  "key": "setup-soldr-buildcache-v2-linux-x64-bb4db7720ab9c7b0-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 226060399,
+  "created_at": "2026-10-22T08:02:20.928422Z"
+ },
+ {
+  "id": 9326582340,
+  "key": "soldr-mini-v2-macos-arm64-darwin-v0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 9629617,
+  "created_at": "2026-10-22T07:58:55.687369Z"
+ },
+ {
+  "id": 9326806073,
+  "key": "cook-base-v2-linux-x64-glibc-rustc1.95.0-f6cafa616-lf0b451a55dc2de6d-soldr0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 275506901,
+  "created_at": "2026-10-22T08:03:55.123499Z"
+ },
+ {
+  "id": 9326311715,
+  "key": "cook-base-v2-linux-x64-glibc-rustc1.95.0-fnone-lf0b451a55dc2de6d-soldrv0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 258438471,
+  "created_at": "2026-10-22T07:53:12.925228Z"
+ },
+ {
+  "id": 9326643682,
+  "key": "cook-base-v2-linux-x64-glibc-rustc1.95.0-f9e7e4902-lf0b451a55dc2de6d-soldrv0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 844973843,
+  "created_at": "2026-10-22T08:00:39.394485Z"
+ },
+ {
+  "id": 9326306406,
+  "key": "setup-soldr-buildcache-v2-linux-x64-3081971d3321c28a-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 255438019,
+  "created_at": "2026-10-22T07:52:59.512138Z"
+ },
+ {
+  "id": 9326309149,
+  "key": "setup-soldr-cargoregistry-v1-linux-x64-f0b451a55dc2de6d-3081971d3321c28a",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 112767591,
+  "created_at": "2026-10-22T07:53:03.650837Z"
+ },
+ {
+  "id": 9326817307,
+  "key": "setup-soldr-buildcache-v2-linux-x64-3081971d3321c28a-test-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 492649466,
+  "created_at": "2026-10-22T08:04:02.602927Z"
+ },
+ {
+  "id": 9326915196,
+  "key": "setup-soldr-buildcache-v2-linux-x64-258c2378581b3265-dylint-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 694887869,
+  "created_at": "2026-10-22T08:06:14.778888Z"
+ },
+ {
+  "id": 9326595927,
+  "key": "setup-soldr-cargoregistry-v1-linux-x64-f0b451a55dc2de6d-bb4db7720ab9c7b0",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 117819377,
+  "created_at": "2026-10-22T07:59:13.343556Z"
+ },
+ {
+  "id": 9326569540,
+  "key": "soldr-mini-v2-windows-x64-msvc-v0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 11467096,
+  "created_at": "2026-10-22T07:58:38.270525Z"
+ },
+ {
+  "id": 9326684586,
+  "key": "cook-base-v2-linux-x64-glibc-rustc1.95.0-fnone-lf0b451a55dc2de6d-soldrv0.9.38-xcheck-linux-x86-musl",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 566956307,
+  "created_at": "2026-10-22T08:01:25.133510Z"
+ },
+ {
+  "id": 9326552164,
+  "key": "setup-soldr-cargoregistry-v1-windows-x64-2b403828b00c09ec-49c064eaa429735b",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 141845460,
+  "created_at": "2026-10-22T07:58:16.974704Z"
+ },
+ {
+  "id": 9326679646,
+  "key": "setup-soldr-buildcache-v2-linux-x64-9752edbb8d6d2d3c-check-linux-x86-musl-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 471189539,
+  "created_at": "2026-10-22T08:01:00.430103Z"
+ },
+ {
+  "id": 9326700743,
+  "key": "setup-soldr-prepare-v3-linux-x64-x86_64-unknown-linux-musl-re162f3a368305035-s2cad5ed6678b95b3-xcheck-linux-x86-musl",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 99698219,
+  "created_at": "2026-10-22T08:01:26.968570Z"
+ },
+ {
+  "id": 9326682729,
+  "key": "setup-soldr-cargoregistry-v1-linux-x64-f0b451a55dc2de6d-9752edbb8d6d2d3c",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 112656647,
+  "created_at": "2026-10-22T08:01:04.691804Z"
+ },
+ {
+  "id": 9326694878,
+  "key": "setup-soldr-prepare-v3-linux-x64-aarch64-unknown-linux-musl-re162f3a368305035-s2cad5ed6678b95b3-xcheck-linux-arm-musl",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 93201420,
+  "created_at": "2026-10-22T08:01:19.340501Z"
+ },
+ {
+  "id": 9326688353,
+  "key": "setup-soldr-buildcache-v2-linux-x64-a853aa5c752d19df-check-linux-arm-musl-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 470790279,
+  "created_at": "2026-10-22T08:01:11.960175Z"
+ },
+ {
+  "id": 9326822658,
+  "key": "setup-soldr-buildcache-v2-windows-x64-49c064eaa429735b-2b403828b00c09ec",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 242,
+  "created_at": "2026-10-22T08:04:07.845987Z"
+ },
+ {
+  "id": 9327196934,
+  "key": "setup-soldr-buildcache-v2-linux-x64-3081971d3321c28a-integration-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 970114689,
+  "created_at": "2026-10-22T08:12:23.965293Z"
+ },
+ {
+  "id": 9326826994,
+  "key": "soldr-mini-v2-windows-arm64-msvc-v0.9.38",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 10508889,
+  "created_at": "2026-10-22T08:04:14.555220Z"
+ },
+ {
+  "id": 9326771947,
+  "key": "setup-soldr-buildcache-v2-windows-x64-06f0ef039c4ec3d1-2b403828b00c09ec",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 425690298,
+  "created_at": "2026-10-22T08:03:07.004179Z"
+ },
+ {
+  "id": 9329616318,
+  "key": "setup-soldr-dylint-output-v2-linux-x64-1885894da4c8e04a-f0b451a55dc2de6d",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 869344335,
+  "created_at": "2026-10-22T09:01:23.116268Z"
+ },
+ {
+  "id": 9309910077,
+  "key": "setup-soldr-buildcache-v2-windows-arm64-446fb45b60134d67-8a3283ede99dde73",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 250,
+  "created_at": "2026-10-21T23:41:09.024435Z"
+ },
+ {
+  "id": 9038268275,
+  "key": "setup-soldr-buildcache-v2-windows-arm64-446fb45b60134d67-47f8cd0149dac684",
+  "ref": "refs/heads/main",
+  "size_in_bytes": 253,
+  "created_at": "2026-10-16T08:19:23.830794Z"
+ }
+]

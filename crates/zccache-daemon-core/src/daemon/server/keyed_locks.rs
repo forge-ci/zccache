@@ -10,26 +10,26 @@ use super::*;
 
 #[derive(Default)]
 pub(super) struct KeyedLocks {
-    locks: DashMap<NormalizedPath, std::sync::Weak<Mutex<()>>>,
+    locks: DashMap<NormalizedPath, std::sync::Weak<Gate>>,
 }
 
 impl KeyedLocks {
     /// The lock for `key`. The returned `Arc` is independent of the map's
     /// entry guard, so callers can await `lock_owned` without holding a
     /// DashMap shard lock.
-    pub(super) fn get(&self, key: &NormalizedPath) -> Arc<Mutex<()>> {
+    pub(super) fn get(&self, key: &NormalizedPath) -> Arc<Gate> {
         match self.locks.entry(key.clone()) {
             dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                 if let Some(lock) = entry.get().upgrade() {
                     lock
                 } else {
-                    let lock = Arc::new(Mutex::new(()));
+                    let lock = Arc::new(Gate::new());
                     entry.insert(Arc::downgrade(&lock));
                     lock
                 }
             }
             dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let lock = Arc::new(Mutex::new(()));
+                let lock = Arc::new(Gate::new());
                 entry.insert(Arc::downgrade(&lock));
                 lock
             }

@@ -299,7 +299,7 @@ async fn depgraph_saves_are_exclusive_without_blocking_async_progress() {
         .await
         .expect("the runtime schedules other tasks while a save blocks");
     assert!(
-        state.depgraph_persistence.try_lock().is_err(),
+        state.depgraph_persistence.try_acquire().is_err(),
         "a running save holds the cache root's persistence guard"
     );
 

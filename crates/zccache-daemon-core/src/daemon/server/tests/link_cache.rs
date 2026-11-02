@@ -421,13 +421,18 @@ async fn side_effect_lock_allows_different_output_directories() {
     // uncontended succeeds immediately, contended fails immediately. There is
     // no duration left for load to distort.
     let _guard_a = lock_a
-        .try_lock_owned()
+        .try_acquire_for(std::time::Duration::ZERO)
+        .await
         .expect("an unheld lock must be acquirable");
     let _guard_b = lock_b
-        .try_lock_owned()
+        .try_acquire_for(std::time::Duration::ZERO)
+        .await
         .expect("a lock held for one output directory must not block another");
     assert!(
-        same_lock_a.try_lock_owned().is_err(),
+        same_lock_a
+            .try_acquire_for(std::time::Duration::ZERO)
+            .await
+            .is_err(),
         "the same output directory must remain exclusive"
     );
 }

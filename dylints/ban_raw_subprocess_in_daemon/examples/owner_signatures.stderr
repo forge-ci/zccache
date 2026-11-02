@@ -1,0 +1,16 @@
+error: `kernal_api::ProcessSession::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/crates/zccache-daemon-core/src/daemon/process_session.rs:8:13
+   |
+LL |     let _ = session.wait().await;
+   |             ^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_raw_subprocess_in_daemon)]` on by default
+
+error: `kernal_api::ProcessSession::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/crates/zccache-daemon-core/src/daemon/process_session.rs:11:16
+   |
+LL |     let wait = ProcessSession::wait;
+   |                ^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

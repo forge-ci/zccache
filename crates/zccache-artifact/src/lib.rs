@@ -6,10 +6,12 @@
 
 #![allow(clippy::missing_errors_doc)] // TODO: add error docs
 
+pub mod blob_digest;
 pub mod kv;
 mod layout;
 mod reconcile;
 mod rust_plan;
+pub mod snapshot;
 pub mod staged_lock;
 mod store;
 

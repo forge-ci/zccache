@@ -123,8 +123,9 @@ pub(super) fn validate_key(key_hex: &str) -> io::Result<()> {
 ///
 /// The daemon keeps one of these in [`SharedState`] while one or more cache
 /// hits deliver staged outputs. Individual materialization payloads clone the
-/// `Arc`, so only the transition from zero to one active hit opens and locks
-/// `.store.lock`; dropping the final payload releases cross-process exclusion.
+/// `Arc`, so active deliveries normally reuse one `.store.lock` owner.
+/// Initial acquisition is coalesced by an operation permit outside the state
+/// mutex. Dropping the final payload releases cross-process exclusion.
 pub(in crate::daemon::server) struct StagedMaterializationLock {
     // Owns the handle: this lock is shared through an `Arc` and outlives the
     // call that took it, so a borrowing guard cannot express it. Under `fs2`
@@ -176,7 +177,10 @@ fn acquire_staged_materialization_guard_from(
     wait_started: Instant,
 ) -> io::Result<StagedMaterializationGuard> {
     let root = staged_root(artifact_dir);
-    let store_lock = kernal_api::platform::fs::lock_shared_owned(open_store_lock(&root)?)?;
+    let store_lock = crate::core::wait::lock_shared_owned_for(
+        || open_store_lock(&root),
+        crate::core::wait::PROBE,
+    )?;
     #[cfg(test)]
     record_test_shared_lock_acquisition(&root);
     let wait_ns = wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -242,38 +246,57 @@ pub(in crate::daemon::server) fn acquire_staged_materialization_guard_if_present
     }
 }
 
+fn cached_staged_materialization_lock(
+    state: &super::super::SharedState,
+) -> Option<Arc<StagedMaterializationLock>> {
+    state
+        .staged_materialization_lock
+        .lock_for(crate::core::sync::STATE_TIMEOUT)
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .upgrade()
+}
+
 fn acquire_staged_materialization_guard_for_state_from(
     state: &super::super::SharedState,
     artifact_dir: &Path,
     wait_started: Instant,
 ) -> io::Result<StagedMaterializationGuard> {
-    let mut held = state
-        .staged_materialization_lock
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(store_lock) = held.upgrade() {
-        return Ok(StagedMaterializationGuard {
-            _store_lock: store_lock,
-            // Reuse avoids an OS lock syscall, but pointer validation and the
-            // daemon-local mutex are still part of guard-acquisition time.
-            wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            acquired_at: Instant::now(),
-        });
+    let delivery = |store_lock| StagedMaterializationGuard {
+        _store_lock: store_lock,
+        wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        acquired_at: Instant::now(),
+    };
+    if let Some(existing) = cached_staged_materialization_lock(state) {
+        return Ok(delivery(existing));
     }
-
+    // Only the data-free initialization permit spans the bounded OS wait.
+    // Later initializers recheck the weak slot and reuse the first lease.
+    let _initialization = state
+        .staged_materialization_init
+        .blocking_acquire_for(crate::core::sync::OPERATION_TIMEOUT);
+    if let Some(existing) = cached_staged_materialization_lock(state) {
+        return Ok(delivery(existing));
+    }
     let root = staged_root(artifact_dir);
-    let store_lock = kernal_api::platform::fs::lock_shared_owned(open_store_lock(&root)?)?;
+    #[cfg(test)]
+    super::hook::pause(
+        artifact_dir,
+        super::hook::StagedHookPoint::MaterializationStoreLockPending,
+    );
+    let store_lock = crate::core::wait::lock_shared_owned_for(
+        || open_store_lock(&root),
+        crate::core::wait::PROBE,
+    )?;
     #[cfg(test)]
     record_test_shared_lock_acquisition(&root);
     let store_lock = Arc::new(StagedMaterializationLock {
         _store_lock: store_lock,
     });
-    *held = Arc::downgrade(&store_lock);
-    Ok(StagedMaterializationGuard {
-        _store_lock: store_lock,
-        wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        acquired_at: Instant::now(),
-    })
+    *state
+        .staged_materialization_lock
+        .lock_for(crate::core::sync::STATE_TIMEOUT)
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(&store_lock);
+    Ok(delivery(store_lock))
 }
 
 /// Acquire one payload lease from a daemon-local shared staged-store lock.
@@ -317,5 +340,44 @@ mod tests {
              staged lookup disabled for that attempt"
         );
         assert_eq!(test_shared_lock_acquisition_count(&root), 0);
+    }
+}
+
+#[cfg(test)]
+mod slot_wait_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn staged_store_wait_does_not_hold_state_mutex() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = crate::core::NormalizedPath::from(directory.path());
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let identity = crate::ipc::current_backend_identity(&endpoint).unwrap();
+        let (state, _writer) = crate::daemon::server::new_shared_state(
+            &endpoint, &cache_dir, None, identity, None, None,
+        )
+        .unwrap();
+        let artifact_dir = state.artifact_dir.clone();
+        fs::create_dir_all(staged_root(artifact_dir.as_path())).unwrap();
+        let paused = super::super::hook::StagedHookGuard::arm(
+            artifact_dir.as_path(),
+            super::super::hook::StagedHookPoint::MaterializationStoreLockPending,
+        );
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            acquire_staged_materialization_guard_for_state_from(
+                &worker_state,
+                artifact_dir.as_path(),
+                Instant::now(),
+            )
+        });
+        paused.wait_until_reached();
+        let state_slot_available = state.staged_materialization_lock.try_lock().is_ok();
+        paused.resume();
+        drop(worker.join().unwrap().unwrap());
+        assert!(
+            state_slot_available,
+            "state slot held over a potentially 30-second store-lock wait"
+        );
     }
 }

@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # The zackees/ci.yml commit whose ci_lint this repository uses. The `ci-mode`
 # jobs in ci.yml and integration.yml check out the same SHA;
 # ci/tests/test_local_gate.py keeps them in step.
-CI_LINT_REF = "365508627edb8130e2c5615338b00bf02a069fa7"
+CI_LINT_REF = "41fcbca60a7901c8707411c4abf4d0b41dd71426"
 LANES = ("lint", "py-tests", "check", "docs", "dylint", "tests")
 PY = ("uv", "run", "--no-project", "--python", "3.13")
 # ci.yml's and integration.yml's workflow-level env: warnings are errors. It
@@ -78,6 +78,8 @@ class Check:
     bosn_job: str = ""
     selected_job: str | None = None
     required_steps: tuple[str, ...] = ()
+    # The event the replayed workflow must have run under (`--trigger`).
+    bosn_event: str = "pull_request"
 
 
 def checks() -> list[Check]:
@@ -248,8 +250,11 @@ def checks() -> list[Check]:
                 ".",
                 "--workflow",
                 ".github/workflows/integration.yml",
+                # #2039 removed `pull_request` from integration.yml, so a `pr`
+                # replay skips every job and act exits 1. `push` is the event
+                # the workflow still runs on; off `main` it writes no cache.
                 "--trigger",
-                "pr",
+                "push",
                 "--wait",
                 "--json",
             ),
@@ -258,8 +263,11 @@ def checks() -> list[Check]:
             min_version=(0, 1, 12),
             bosn_workflow=".github/workflows/integration.yml",
             bosn_job="integration",
+            bosn_event="push",
             required_steps=(
                 "Build integration test binaries",
+                "Install PCH regression toolchain",
+                "Strict PCH regressions (Clang 21)",
                 "Test (full workspace)",
                 "Wrapper daemon-unavailable contract (exit 125)",
                 "Strict artifact-layout validation",
@@ -475,6 +483,7 @@ def bosn_proof_error(
     expected_job: str,
     selected_job: str | None,
     required_steps: tuple[str, ...] = (),
+    expected_event: str = "pull_request",
 ) -> str | None:
     """Fail closed on wrong source, unknown evidence or unexecuted checks."""
     if not required_steps:
@@ -492,7 +501,7 @@ def bosn_proof_error(
         return "Bosn executed another commit"
     if not _run_finished(proof):
         return "Bosn run did not finish successfully"
-    if proof.engine != "act" or proof.event != "pull_request":
+    if proof.engine != "act" or proof.event != expected_event:
         return "Bosn used another engine or event"
     if proof.workflow != workflow or proof.selected_job != selected_job:
         return "Bosn executed another workflow selection"
@@ -539,6 +548,7 @@ def _run(check: Check) -> Result:
             expected_job=check.bosn_job,
             selected_job=check.selected_job,
             required_steps=check.required_steps,
+            expected_event=check.bosn_event,
         )
     return Result(
         check,

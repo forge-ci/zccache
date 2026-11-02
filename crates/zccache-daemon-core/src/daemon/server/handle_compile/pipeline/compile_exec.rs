@@ -10,6 +10,7 @@ pub(super) struct CompileExecRequest<'a> {
     pub(super) state_arc: &'a Arc<SharedState>,
     pub(super) compiler: &'a NormalizedPath,
     pub(super) effective_args: &'a [String],
+    pub(super) pch_overlay: Option<&'a Path>,
     pub(super) cwd: &'a Path,
     pub(super) cwd_path: &'a NormalizedPath,
     pub(super) source_path: &'a NormalizedPath,
@@ -48,6 +49,8 @@ pub(super) struct CompileExecOutcome {
 pub(super) enum CompileExecResult {
     Ok(CompileExecOutcome),
     Error(Response),
+    /// An internal scan failed: run the compile through the uncached bypass.
+    Uncached,
 }
 
 struct PrivateHeaderTrace {
@@ -70,6 +73,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         state_arc,
         compiler,
         effective_args,
+        pch_overlay,
         cwd,
         cwd_path,
         source_path,
@@ -265,12 +269,12 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     }
     let break_outputs_ns = t_break_outputs.elapsed().as_nanos() as u64;
 
-    let mut builder = kernal_api::SpawnSpec::new(compiler);
-    if let Some(ref rsp) = _rsp_guard {
-        builder = builder.arg(rsp.at_arg()).current_dir(cwd);
-    } else {
-        builder = builder.args(rsp_args).current_dir(cwd);
-    }
+    let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
+        compiler.as_path(),
+        cwd,
+        rsp_args,
+        _rsp_guard.as_ref(),
+    );
     builder = apply_client_env_builder(
         builder,
         client_env,
@@ -327,6 +331,30 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             source = %source_path.display(),
             "amalgamated compiler unit acquired exclusive build access"
         );
+    }
+
+    // The preprocessor pass is a compiler child too: it shares the same
+    // bounded admission as the actual compile instead of bypassing the gate.
+    if let Some(overlay) = pch_overlay {
+        if let Err(error) = super::super::pch_overlay_aliases::extend_overlay_aliases(
+            overlay,
+            compiler,
+            effective_args,
+            cwd,
+            client_env,
+            lineage,
+            None,
+        )
+        .await
+        {
+            // #2027: fail open. A failed internal scan gives up the cached
+            // path for this compile, never the compile itself.
+            crate::daemon::server::compiler_spawn::log_internal_scan_failure(
+                "PCH include alias scan",
+                &error,
+            );
+            return CompileExecResult::Uncached;
+        }
     }
 
     // Issue #532: hash pre-known rustc inputs (source + externs) on a blocking
@@ -412,6 +440,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             compiler_priority,
             sender,
             compiler.display().to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         );
         let consume = crate::daemon::compile_output::consume(receiver, context, filter);
         let (process_result, capture_result) = tokio::join!(process, consume);
@@ -422,6 +451,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
                 builder,
                 compiler_priority,
                 compiler.display().to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             )
             .await;
         (result, decision, None)

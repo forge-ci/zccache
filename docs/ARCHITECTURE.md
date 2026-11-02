@@ -14,7 +14,7 @@ This document is the index for zccache's architecture specification. Each subsys
 | [architecture/rust-artifact-plan.md](architecture/rust-artifact-plan.md) | ~120 | Rust plan ownership, thin/full semantics, restore hardening, backends, diagnostics, CLI contract |
 | [architecture/embedded-service.md](architecture/embedded-service.md) | ~290 | Embedded service MVP boundary, audit continuity, soldr/fbuild integration design |
 | [architecture/target-cache.md](architecture/target-cache.md) | ~70 | Legacy action target snapshot ownership, outputs, and rust-plan boundary |
-| [architecture/runtime.md](architecture/runtime.md) | ~130 | Concurrency model, correctness guarantees, failure modes, crash recovery |
+| [architecture/runtime.md](architecture/runtime.md) | ~130 | Concurrency, bounded synchronization, guard-free async state, crash recovery |
 | [architecture/portability.md](architecture/portability.md) | ~200 | Platform differences, kernal-api boundary, path handling, file identity, future extensions |
 | [architecture/kernal-api-migration.md](architecture/kernal-api-migration.md) | ~80 | Phase-0 kernal-api migration inventory, contracts, and measurement protocol |
 
@@ -41,9 +41,11 @@ failed cache-root audit retain its diagnostic JSONL evidence.
 - **Transactional directory outputs** → [artifact-store.md](architecture/artifact-store.md#immutable-staged-output-rollout)
 - **Reflink / hardlink COW safety** → [artifact-store.md](architecture/artifact-store.md#capability-driven-cow-materialization)
 - **`ZCCACHE_MODE` delivery modes (AUTO/LINK/COPY/REFLINK)** → [artifact-store.md](architecture/artifact-store.md#materialization-mode-zccache_mode-1683)
+- **Strict PCH serving, `ZCCACHE_PCH_MTIME_REPLAY`** → [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952)
 - **soldr target artifact contract** → [rust-artifact-plan.md](architecture/rust-artifact-plan.md)
 - **Embedded soldr/fbuild service integration** → [embedded-service.md](architecture/embedded-service.md)
 - **Shared embedded host-work admission** → [embedded-service.md § Shared host-work admission](architecture/embedded-service.md#shared-host-work-admission)
+- **Compiler-store transport snapshots** → [artifact-store.md](architecture/artifact-store.md#compiler-store-transport-snapshots-ciyml362)
 - **Embedded heap snapshots** → [embedded-service.md § Heap snapshots](architecture/embedded-service.md#heap-snapshots)
 - **Embedded maintenance limits and shutdown reporting** → [embedded-service.md § Maintenance limits and task ownership](architecture/embedded-service.md#maintenance-limits-and-task-ownership)
 - **Embedded snapshots and interrupted flushes** → [embedded-service.md § Persisted state and interrupted flushes](architecture/embedded-service.md#persisted-state-and-interrupted-flushes-1719)
