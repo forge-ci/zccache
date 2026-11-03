@@ -35,6 +35,7 @@ jobs:
   # No paths filter: the Python and feature-matrix guards also police docs.
   linux:
     name: Linux
+    needs: ci-mode
     permissions:
       actions: read
       contents: read
@@ -44,15 +45,18 @@ jobs:
 
   python-tests:
     name: Python Tests
+    needs: ci-mode
     uses: ./.github/workflows/python-tests.yml
     secrets: inherit
 
   wire-stability:
     name: Wire stability
+    needs: ci-mode
     uses: ./.github/workflows/wire-stability.yml
 
   feature-matrix:
     name: Feature matrix
+    needs: ci-mode
     uses: ./.github/workflows/feature-matrix-check.yml
 
   # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit
