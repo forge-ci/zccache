@@ -26,7 +26,6 @@
 //! binaries). `release_cwd` runs on every OS — it's cheap and the
 //! Windows-specific motivation (cwd handle pinning) is the primary driver.
 
-use std::fs;
 use std::path::Path;
 
 /// Unlock the running daemon binary on Windows so it can be replaced by
@@ -184,15 +183,15 @@ fn exe_is_deployed_daemon(exe: &Path) -> bool {
 
 /// Delete stale .old files next to the exe. Best-effort — locked files skipped.
 fn gc_old_files(dir: &Path, stem: &str) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
+    let paths = match kernal_api::platform::fs::read_dir_paths(dir) {
+        Ok(p) => p,
         Err(_) => return,
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+    for path in paths {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let name_str = name.as_deref().unwrap_or_default();
         if name_str.starts_with(stem) && name_str.contains(".old") {
-            let _ = kernal_api::platform::fs::remove_file(entry.path());
+            let _ = kernal_api::platform::fs::remove_file(&path);
         }
     }
 }

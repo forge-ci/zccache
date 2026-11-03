@@ -15,7 +15,6 @@ crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/log_io.rs
 crates/zccache-daemon-core/src/daemon/server/cached_artifact.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
-crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/out_dir.rs
@@ -25,15 +24,12 @@ crates/zccache-daemon-core/src/daemon/server/persist/link_registry.rs
 crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_paths.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
-crates/zccache-daemon-core/src/daemon/server/persist/staged_store/maintenance.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/materialize.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
 crates/zccache-daemon-core/src/daemon/server/run.rs
 crates/zccache-daemon-core/src/daemon/server/staging_root.rs
 crates/zccache-daemon-core/src/daemon/side_effect.rs
-crates/zccache-daemon-core/src/daemon/trampoline.rs
 crates/zccache-depgraph/src/snapshot/persistence.rs
-crates/zccache-depgraph/src/snapshot/quarantine.rs
 crates/zccache-depgraph/src/system_includes.rs
 crates/zccache-fingerprint/src/file_lock.rs
 crates/zccache-fingerprint/src/hash_cache.rs

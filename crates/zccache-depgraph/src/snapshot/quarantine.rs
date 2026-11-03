@@ -122,19 +122,22 @@ pub fn prune(primary: &Path) -> usize {
     let Some(dir) = primary.parent() else {
         return 0;
     };
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(paths) = kernal_api::platform::fs::read_dir_paths(dir) else {
         return 0;
     };
-    let mut candidates: Vec<(std::time::SystemTime, NormalizedPath)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
+    let mut candidates: Vec<(std::time::SystemTime, NormalizedPath)> = paths
+        .into_iter()
+        .filter_map(|path| {
+            let name = path.file_name()?;
             let version = quarantined_version(name.to_str()?)?;
             if version == DEPGRAPH_VERSION {
                 return None;
             }
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, NormalizedPath::new(entry.path())))
+            let modified = kernal_api::platform::fs::symlink_metadata(&path)
+                .ok()?
+                .modified()
+                .ok()?;
+            Some((modified, NormalizedPath::new(path)))
         })
         .collect();
     if candidates.len() <= MAX_QUARANTINED_SNAPSHOTS {
@@ -159,7 +162,7 @@ mod tests {
         let graph = crate::graph::DepGraph::new();
         super::super::save_to_file(&graph, path).unwrap();
         if version != DEPGRAPH_VERSION {
-            let mut bytes = std::fs::read(path).unwrap();
+            let mut bytes = kernal_api::platform::fs::read_file(path).unwrap();
             bytes[4..8].copy_from_slice(&version.to_le_bytes());
             kernal_api::platform::fs::write_file(path, &bytes).unwrap();
         }
@@ -170,7 +173,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let primary = tmp.path().join("depgraph.bin");
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION + 1);
-        let original = std::fs::read(&primary).unwrap();
+        let original = kernal_api::platform::fs::read_file(&primary).unwrap();
 
         let dest = quarantine_path(&primary, DEPGRAPH_VERSION + 1);
         let moved = quarantine(&primary, &dest).expect("quarantine must succeed");
@@ -181,7 +184,7 @@ mod tests {
              place is what let the next graceful shutdown destroy it"
         );
         assert_eq!(
-            std::fs::read(moved.as_path()).unwrap(),
+            kernal_api::platform::fs::read_file(moved.as_path()).unwrap(),
             original,
             "the quarantined bytes must be preserved verbatim so a future \
              migration has something to migrate"
@@ -196,10 +199,13 @@ mod tests {
         kernal_api::platform::fs::write_file(dest.as_path(), b"stale").unwrap();
 
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION + 1);
-        let fresh = std::fs::read(&primary).unwrap();
+        let fresh = kernal_api::platform::fs::read_file(&primary).unwrap();
         quarantine(&primary, &dest).expect("quarantine must replace the stale sidecar");
 
-        assert_eq!(std::fs::read(dest.as_path()).unwrap(), fresh);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(dest.as_path()).unwrap(),
+            fresh
+        );
     }
 
     #[test]
