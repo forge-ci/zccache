@@ -529,7 +529,7 @@ pub(super) fn migrate_meta_files(
     let migrated: Vec<(String, CachedArtifact, NormalizedPath)> = meta_paths
         .par_iter()
         .filter_map(|path| {
-            let data = std::fs::read(path).ok()?;
+            let data = kernal_api::platform::fs::read_file(path).ok()?;
             let artifact = bincode::deserialize::<ArtifactData>(&data).ok()?;
             let stem: String = path
                 .file_stem()
@@ -652,7 +652,7 @@ mod tests {
             "the payload guard must retain the private plan after its artifact is replaced"
         );
         assert_eq!(
-            std::fs::read(match &payloads[0] {
+            kernal_api::platform::fs::read_file(match &payloads[0] {
                 CachedPayload::File(path) => path,
                 CachedPayload::Bytes(_) => panic!("provisional payload must stay path-backed"),
             })
@@ -864,7 +864,10 @@ mod tests {
             MaterializationMode::Auto,
         )
         .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&destination).unwrap(),
+            bytes
+        );
 
         drop(payloads);
         clear_done_rx
@@ -894,7 +897,7 @@ mod tests {
         persist_staged_artifact_paths(&artifact_dir, &key, &[source.into()]).unwrap();
         let cached = lazy_artifact(bytes.len() as u64);
         let payloads = ensure_payloads_for_materialization(&cached, &artifact_dir, &key).unwrap();
-        let generation = std::fs::read_to_string(
+        let generation = kernal_api::platform::fs::read_to_string(
             artifact_dir
                 .join(".staged-v2")
                 .join(format!("{key}.current")),
@@ -927,7 +930,10 @@ mod tests {
             MaterializationMode::Auto,
         )
         .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&destination).unwrap(),
+            bytes
+        );
         drop(payloads);
 
         let removed = eviction_done_rx

@@ -493,7 +493,7 @@ fn sweep_regular_file(
     mode: RetiredSweepMode,
     report: &mut RetiredStoreSweepReport,
 ) {
-    let metadata = match std::fs::symlink_metadata(path) {
+    let metadata = match kernal_api::platform::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => metadata,
         Ok(_) => return,
         Err(_) => {

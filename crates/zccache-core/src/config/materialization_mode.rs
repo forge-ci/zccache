@@ -128,7 +128,7 @@ impl MaterializationMode {
         destination: &std::path::Path,
     ) -> std::io::Result<u64> {
         if self != Self::Copy {
-            return std::fs::copy(source, destination);
+            return kernal_api::platform::fs::copy(source, destination);
         }
         byte_copy(source, destination)
     }
@@ -169,7 +169,7 @@ fn fill(
     }
     writer.flush()?;
     drop(writer);
-    std::fs::set_permissions(destination, metadata.permissions())?;
+    kernal_api::platform::fs::set_permissions(destination, metadata.permissions())?;
     Ok(copied)
 }
 

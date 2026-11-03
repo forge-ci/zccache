@@ -455,7 +455,7 @@ mod tests {
 
         assert!(path.exists(), "a fresh live log must be reopened in place");
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            kernal_api::platform::fs::read_to_string(&path).unwrap(),
             "",
             "the reopened log starts empty"
         );
@@ -469,7 +469,7 @@ mod tests {
             "the old contents must survive as an archive"
         );
         assert_eq!(
-            std::fs::read_to_string(temp.path().join(&archives[0])).unwrap(),
+            kernal_api::platform::fs::read_to_string(temp.path().join(&archives[0])).unwrap(),
             "original\n"
         );
     }
@@ -566,7 +566,7 @@ mod tests {
         sink.shutdown().await.expect("shutdown ok");
 
         let path = output_root.join("audit.jsonl");
-        let contents = std::fs::read_to_string(&path).expect("file readable");
+        let contents = kernal_api::platform::fs::read_to_string(&path).expect("file readable");
         let lines: Vec<_> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "two events should produce two JSONL rows");
         for line in lines {

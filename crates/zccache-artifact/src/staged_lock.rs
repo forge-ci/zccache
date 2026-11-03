@@ -22,7 +22,7 @@
 //! compiling, keep passing their own tests, and silently stop excluding each
 //! other the moment either side changed a name.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 use zccache_core::NormalizedPath;
@@ -56,7 +56,7 @@ pub fn is_staged_link_or_reparse(path: &Path) -> bool {
 /// something we refuse to treat as the staged root (a link/reparse point, or
 /// not a directory).
 pub fn validate_staged_root_path(root: &Path) -> io::Result<bool> {
-    let metadata = match fs::symlink_metadata(root) {
+    let metadata = match kernal_api::platform::fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
