@@ -4,12 +4,9 @@
 #
 # These are the pre-existing call sites. Burn them down: move the file onto the
 # kernal-api fs capability and delete its line.
-crates/zccache-artifact/src/layout.rs
-crates/zccache-artifact/src/snapshot.rs
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-core/src/config/materialization_mode.rs
-crates/zccache-core/src/config/resolve.rs
 crates/zccache-core/src/config/retired_store.rs
 crates/zccache-core/src/crash.rs
 crates/zccache-core/src/lifecycle.rs

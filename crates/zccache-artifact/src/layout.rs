@@ -5,7 +5,6 @@
 //! staged generation.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::Arc;
@@ -176,7 +175,7 @@ fn load_published_generation(
     validate_key(key_hex)?;
     let root = artifact_dir.join(STAGED_ROOT);
     let pointer = root.join(format!("{key_hex}.current"));
-    let generation_hex = match fs::read_to_string(pointer) {
+    let generation_hex = match kernal_api::platform::fs::read_to_string(pointer) {
         Ok(value) => value.trim().to_string(),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -308,7 +307,7 @@ pub(crate) fn copy_artifact_generation(
         match payload {
             ResolvedArtifactPayload::File(path) => copy_snapshot_file(path, &target)?,
             ResolvedArtifactPayload::Bytes(bytes) => {
-                let mut file = fs::File::create(&target)?;
+                let mut file = kernal_api::platform::fs::create_file(&target)?;
                 std::io::Write::write_all(&mut file, bytes)?;
                 if let Some(mtime) = pack_mtime {
                     zccache_core::mtime::stamp_mtime(&target, mtime)?;
@@ -334,7 +333,7 @@ pub(crate) fn copy_artifact_generation(
         generation_hex: generation_hex.clone(),
         outputs,
     };
-    let mut file = fs::File::create(pending.path().join("manifest.bin"))?;
+    let mut file = kernal_api::platform::fs::create_file(pending.path().join("manifest.bin"))?;
     std::io::Write::write_all(
         &mut file,
         &bincode::serialize(&manifest).map_err(|e| invalid_data(e.to_string()))?,
@@ -400,21 +399,21 @@ fn write_blob_digest_sidecar(blob: &Path, digest_hex: &str) -> io::Result<()> {
     let digest = kernal_api::hash::Blake3Digest::from_hex(digest_hex)
         .map_err(|_| invalid_data("staged output digest is not hex"))?;
     let sidecar = crate::blob_digest::sidecar_path(blob);
-    let mut file = fs::File::create(sidecar.as_path())?;
+    let mut file = kernal_api::platform::fs::create_file(sidecar.as_path())?;
     std::io::Write::write_all(&mut file, digest.as_bytes())?;
     file.sync_all()
 }
 
 fn copy_snapshot_file(source: &Path, destination: &Path) -> io::Result<()> {
     let metadata = kernal_api::platform::fs::path_metadata(source)?;
-    let mut input = fs::File::open(source)?;
-    let mut output = fs::File::create(destination)?;
+    let mut input = kernal_api::platform::fs::open_read_regular_file(source)?;
+    let mut output = kernal_api::platform::fs::create_file(destination)?;
     io::copy(&mut input, &mut output)?;
     zccache_core::mtime::stamp_mtime(
         destination,
         zccache_core::mtime::FileTime::from_last_modification_time(&metadata),
     )?;
-    fs::set_permissions(destination, metadata.permissions())?;
+    kernal_api::platform::fs::set_permissions(destination, metadata.permissions())?;
     output.sync_all()
 }
 
@@ -430,7 +429,7 @@ fn publish_snapshot_pointer(
     // Revalidate copied bytes; an unsupported concurrent payload mutation must
     // fail publication, never produce a ready snapshot with an invalid digest.
     let pointer = root.join(format!("{key}.current"));
-    let mut pointer_file = fs::File::create(&pointer)?;
+    let mut pointer_file = kernal_api::platform::fs::create_file(&pointer)?;
     std::io::Write::write_all(&mut pointer_file, generation.as_bytes())?;
     pointer_file.sync_all()?;
     resolve_staged_artifact_files(destination, key, sizes)?;
@@ -448,17 +447,22 @@ fn publish_snapshot_pointer(
 /// staged root is an empty list, not an error.
 pub fn published_staged_keys(artifact_dir: &Path) -> io::Result<Vec<String>> {
     let root = artifact_dir.join(STAGED_ROOT);
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
+    let paths = match kernal_api::platform::fs::read_dir_paths(&root) {
+        Ok(paths) => paths,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
     let mut keys = Vec::new();
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+    for path in paths {
+        if !kernal_api::platform::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file())
+        {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let Some(key) = name.strip_suffix(".current") else {
             continue;
         };
@@ -508,8 +512,9 @@ fn load_manifest(
     expected_key: &str,
     expected_generation: &str,
 ) -> io::Result<StagedManifest> {
-    let manifest: StagedManifest = bincode::deserialize(&fs::read(path)?)
-        .map_err(|error| invalid_data(format!("invalid staged manifest: {error}")))?;
+    let manifest: StagedManifest =
+        bincode::deserialize(&kernal_api::platform::fs::read_file(path)?)
+            .map_err(|error| invalid_data(format!("invalid staged manifest: {error}")))?;
     if manifest.version != STAGED_MANIFEST_VERSION
         || manifest.key_hex != expected_key
         || manifest.generation_hex != expected_generation
@@ -520,7 +525,7 @@ fn load_manifest(
 }
 
 fn digest_file(path: &Path) -> io::Result<(u64, String)> {
-    let mut file = fs::File::open(path)?;
+    let mut file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let mut hasher = kernal_api::hash::Blake3Hasher::new();
     let mut buffer = [0_u8; 1024 * 1024];
     let mut size = 0_u64;
@@ -547,7 +552,7 @@ fn generation_digest(key_hex: &str, outputs: &[StagedOutput]) -> String {
 }
 
 fn load_pack(artifact_dir: &Path, key_hex: &str) -> io::Result<Option<Vec<u8>>> {
-    match fs::read(artifact_dir.join(format!("{key_hex}.pack"))) {
+    match kernal_api::platform::fs::read_file(artifact_dir.join(format!("{key_hex}.pack"))) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -740,7 +745,9 @@ mod tests {
 
     fn payload_bytes(payload: &ResolvedArtifactPayload) -> Vec<u8> {
         match payload {
-            ResolvedArtifactPayload::File(path) => fs::read(path).expect("read file payload"),
+            ResolvedArtifactPayload::File(path) => {
+                kernal_api::platform::fs::read_file(path).expect("read file payload")
+            }
             ResolvedArtifactPayload::Bytes(bytes) => bytes.as_ref().clone(),
         }
     }
@@ -804,7 +811,7 @@ mod tests {
             .expect("second payload");
         assert_eq!(first, second);
         assert_eq!(
-            fs::read(&second[0]).expect("read output"),
+            kernal_api::platform::fs::read_file(&second[0]).expect("read output"),
             b"restart-readable"
         );
     }
