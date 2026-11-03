@@ -1,3 +1,17 @@
+warning: use of deprecated method `kernal_api::platform::process::DaemonChild::wait`: waits forever for a live child; use `wait_within` (#433)
+  --> $DIR/platform_process.rs:5:29
+   |
+LL |     let wait = DaemonChild::wait;
+   |                             ^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `kernal_api::platform::process::SpawnedChild::wait`: waits forever for a live child; use `wait_within` (#433)
+  --> $DIR/platform_process.rs:7:19
+   |
+LL |     let _ = child.wait();
+   |                   ^^^^
+
 error: `kernal_api::platform::process::foreground_output` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
   --> $DIR/platform_process.rs:4:13
    |
@@ -24,5 +38,5 @@ error: `kernal_api::platform::process::spawn_sync` bypasses bounded process owne
 LL |     let _spawn = kernal_api::platform::process::spawn_sync;
    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: aborting due to 4 previous errors
+error: aborting due to 4 previous errors; 2 warnings emitted
 
