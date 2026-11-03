@@ -8,9 +8,7 @@ crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-core/src/config/materialization_mode.rs
 crates/zccache-core/src/config/retired_store.rs
-crates/zccache-core/src/crash.rs
 crates/zccache-core/src/lifecycle.rs
-crates/zccache-core/src/mtime.rs
 crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs

@@ -267,8 +267,7 @@ pub fn sibling_floor_above(path: &Path, base: FileTime) -> std::io::Result<Optio
         None => return Ok(None),
     };
     let mut max_mtime = base;
-    for entry in std::fs::read_dir(parent)?.flatten() {
-        let p = entry.path();
+    for p in kernal_api::platform::fs::read_dir_paths(parent)? {
         // Skip self: comparing against our own mtime is a no-op but
         // would waste a stat.
         if p == path {
@@ -288,7 +287,7 @@ pub fn sibling_floor_above(path: &Path, base: FileTime) -> std::io::Result<Optio
         ) {
             continue;
         }
-        if let Ok(m) = entry.metadata().and_then(|md| md.modified()) {
+        if let Ok(m) = kernal_api::platform::fs::symlink_metadata(&p).and_then(|md| md.modified()) {
             let m = FileTime::from_system_time(m);
             if m > max_mtime {
                 max_mtime = m;
