@@ -138,3 +138,28 @@ def test_release_build_job_can_mint_oidc_and_requests_signing() -> None:
     assert "pc-windows-msvc" in step["with"]["authenticode_sign"]
     tests = workflow["jobs"]["test-wheels"]["steps"]
     assert any("check-installed" in s.get("run", "") for s in tests)
+
+
+def test_authenticode_status_drops_inherited_psmodulepath(monkeypatch) -> None:
+    """Windows PowerShell 5.1 launched from a pwsh 7 step inherits pwsh's
+    PSModulePath and cannot autoload Microsoft.PowerShell.Security
+    (CouldNotAutoloadMatchingModule), which failed release run 41536370526.
+    The child must get the environment without PSModulePath."""
+    monkeypatch.setenv("PSModulePath", r"C:\Program Files\PowerShell\7\Modules")
+    seen: dict = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+
+        class Done:
+            stdout = "Valid\n"
+
+        return Done()
+
+    monkeypatch.setattr(sign.subprocess, "run", fake_run)
+    assert sign.authenticode_status(Path("x.pyd")) == "Valid"
+    assert seen["argv"][0] == "powershell"
+    assert seen["env"] is not None
+    assert not any(k.upper() == "PSMODULEPATH" for k in seen["env"])
+    assert seen["env"].get("PATH") == sign.os.environ.get("PATH")
