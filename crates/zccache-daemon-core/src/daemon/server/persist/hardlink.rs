@@ -95,17 +95,14 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
             ".zccache-detach-{pid}-{nonce}-{attempt}-{file_name}"
         ));
         let copy_result = (|| {
-            let mut src = std::fs::File::open(path)?;
-            let mut dst = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp_path)?;
+            let mut src = kernal_api::platform::fs::open_read_regular_file(path)?;
+            let mut dst = kernal_api::platform::fs::create_private_file(&tmp_path)?;
             std::io::copy(&mut src, &mut dst)?;
             // No sync: this private copy replaces a build output that the
             // compiler or tool rewrites next, and compilers never fsync their
             // outputs. The rename below is what readers must not observe torn.
             let permissions = src.metadata()?.permissions();
-            std::fs::set_permissions(&tmp_path, permissions)?;
+            kernal_api::platform::fs::set_permissions(&tmp_path, permissions)?;
             Ok::<(), std::io::Error>(())
         })();
 

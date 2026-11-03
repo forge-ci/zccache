@@ -191,7 +191,7 @@ pub(in crate::daemon::server) fn materialize_directory_payload(
 ) -> std::io::Result<u64> {
     let bytes = match payload {
         CachedPayload::Bytes(bytes) => Arc::clone(bytes),
-        CachedPayload::File(path) => Arc::new(std::fs::read(path)?),
+        CachedPayload::File(path) => Arc::new(kernal_api::platform::fs::read_file(path)?),
     };
     let parent = requested.parent().unwrap_or_else(|| Path::new("."));
     kernal_api::platform::fs::create_dir_all(parent)?;
@@ -219,7 +219,7 @@ fn pack_directory(source: &Path, archive: &Path) -> std::io::Result<u64> {
     }
     let mut entries = Vec::new();
     let root_metadata = kernal_api::platform::fs::path_metadata(source)?;
-    let root_modified = modified_since_epoch(&root_metadata);
+    let root_modified = modified_since_epoch(root_metadata.modified().unwrap_or(UNIX_EPOCH));
     collect_entries(source, source, &mut entries)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     if entries.len() > MAX_BUNDLE_ENTRIES {
@@ -248,10 +248,8 @@ fn collect_entries(
     directory: &Path,
     entries: &mut Vec<DirectoryEntry>,
 ) -> std::io::Result<()> {
-    for child in std::fs::read_dir(directory)? {
-        let child = child?;
-        let path = child.path();
-        let metadata = std::fs::symlink_metadata(&path)?;
+    for path in kernal_api::platform::fs::read_dir_paths(directory)? {
+        let metadata = kernal_api::platform::fs::symlink_metadata(&path)?;
         // `classify` rejects Windows junctions/mount points too — a bundle
         // must not archive a tree that resolves elsewhere.
         if crate::platform::fs::links::classify(&path)?
@@ -269,7 +267,7 @@ fn collect_entries(
                 "directory output contains a non-UTF-8 path",
             )
         })?;
-        let modified = modified_since_epoch(&metadata);
+        let modified = modified_since_epoch(metadata.modified().unwrap_or(UNIX_EPOCH));
         let kind = if metadata.is_dir() {
             EntryKind::Directory
         } else if metadata.is_file() {
@@ -284,7 +282,7 @@ fn collect_entries(
             path: relative.replace('\\', "/"),
             kind,
             bytes: if metadata.is_file() {
-                std::fs::read(&path)?
+                kernal_api::platform::fs::read_file(&path)?
             } else {
                 Vec::new()
             },
@@ -345,12 +343,8 @@ fn unpack_directory(bytes: &[u8], target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn modified_since_epoch(metadata: &std::fs::Metadata) -> Duration {
-    metadata
-        .modified()
-        .unwrap_or(UNIX_EPOCH)
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+fn modified_since_epoch(modified: std::time::SystemTime) -> Duration {
+    modified.duration_since(UNIX_EPOCH).unwrap_or_default()
 }
 
 /// A validated bundle member is deliberately relative, so it must not be
@@ -411,10 +405,17 @@ mod tests {
         pack_directory(&source, &archive).unwrap();
         let target = temp.path().join("target.dSYM");
 
-        unpack_directory(&std::fs::read(archive).unwrap(), &target).unwrap();
+        unpack_directory(
+            &kernal_api::platform::fs::read_file(archive).unwrap(),
+            &target,
+        )
+        .unwrap();
 
         let restored = target.join("Contents/Resources/DWARF/app");
-        assert_eq!(std::fs::read(&restored).unwrap(), b"debug-bytes");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&restored).unwrap(),
+            b"debug-bytes"
+        );
         assert_eq!(
             kernal_api::platform::fs::FileTime::from_last_modification_time(
                 &kernal_api::platform::fs::path_metadata(restored).unwrap()
@@ -495,7 +496,10 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(std::fs::read(requested.join("existing")).unwrap(), b"keep");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(requested.join("existing")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]
@@ -513,7 +517,10 @@ mod tests {
         materialize_directory_payload(&CachedPayload::File(archive.into()), requested.as_path())
             .unwrap();
 
-        assert_eq!(std::fs::read(requested.join("new")).unwrap(), b"new tree");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(requested.join("new")).unwrap(),
+            b"new tree"
+        );
         assert!(!requested.join("old").exists());
     }
 

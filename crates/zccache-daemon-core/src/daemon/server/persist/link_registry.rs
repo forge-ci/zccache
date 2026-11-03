@@ -54,7 +54,7 @@ fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
     #[cfg(test)]
     super::staged_store::perf_counters::record_hash();
 
-    let mut file = std::fs::File::open(path)?;
+    let mut file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let mut hasher = kernal_api::hash::Blake3Hasher::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -150,7 +150,7 @@ impl AuthoritativeBlobDigest {
 impl Drop for AuthoritativeBlobDigest {
     fn drop(&mut self) {
         if let Some(path) = self.path.take() {
-            let matches = std::fs::read(&path)
+            let matches = kernal_api::platform::fs::read_file(&path)
                 .map(|bytes| bytes.as_slice() == self.digest.as_slice())
                 .unwrap_or(false);
             if matches {
@@ -199,11 +199,7 @@ fn write_digest_sidecar(
             std::process::id(),
             counter
         ));
-        let mut temp = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
+        let mut temp = match kernal_api::platform::fs::create_private_file(&temp_path) {
             Ok(temp) => temp,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -239,7 +235,7 @@ pub(in crate::daemon::server) fn remove_authoritative_blob_digest(blob_path: &Pa
 }
 
 fn read_authoritative_blob_digest(blob_path: &Path) -> std::io::Result<Option<[u8; 32]>> {
-    match std::fs::read(digest_path(blob_path)) {
+    match kernal_api::platform::fs::read_file(digest_path(blob_path)) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut digest = [0_u8; 32];
             digest.copy_from_slice(&bytes);
@@ -265,17 +261,12 @@ pub(in crate::daemon::server) fn migrate_legacy_blob_digests(
     artifact_dir: &Path,
 ) -> std::io::Result<usize> {
     let mut migrated = 0;
-    for entry in std::fs::read_dir(artifact_dir)? {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        let path = entry.path();
+    for path in kernal_api::platform::fs::read_dir_paths(artifact_dir)? {
         if is_digest_migration_excluded(&path) {
             continue;
         }
-        let is_file = match entry.file_type() {
-            Ok(file_type) => file_type.is_file(),
+        let is_file = match kernal_api::platform::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata.is_file(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };

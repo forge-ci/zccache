@@ -1,9 +1,11 @@
-# Seeded mechanically from real runs of this lint over the workspace —
-# the host pass plus the Windows and macOS cross-target passes, iterating
-# until a pass reported no findings. One crates/... path per line.
+# Seeded mechanically from real runs of this lint over the workspace — the host
+# pass plus the Windows and macOS cross-target passes, iterating until a pass
+# reported no findings. One crates/... path per line.
 #
-# These are the pre-existing call sites. Burn them down: move the file onto the
-# kernal-api fs capability and delete its line.
+# File-granular: a file leaves this list only when it names `std::fs` nowhere,
+# including `File` / `OpenOptions` / `Metadata` in signatures and imports. A
+# file whose calls are all on the facade but whose signature still hands out a
+# `std::fs::File` stays here.
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-core/src/config/materialization_mode.rs
@@ -12,15 +14,10 @@ crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
-crates/zccache-daemon-core/src/daemon/server/persist/directory_bundle.rs
-crates/zccache-daemon-core/src/daemon/server/persist/hardlink.rs
-crates/zccache-daemon-core/src/daemon/server/persist/link_registry.rs
 crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
 crates/zccache-fingerprint/src/file_lock.rs
-crates/zccache-fingerprint/src/pch_inputs/mod.rs
-crates/zccache-fingerprint/src/pch_inputs/overlay.rs
 crates/zccache-fscache/src/verify.rs
 crates/zccache-hash/src/native.rs
 crates/zccache-symbols/src/marker.rs

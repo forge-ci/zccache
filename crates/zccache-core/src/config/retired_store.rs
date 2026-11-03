@@ -298,11 +298,11 @@ pub fn sweep_retired_version_store_with_mode(
 
     sweep_directory_contents(store, store, now, max_age, mode, &mut report);
 
-    let only_markers_remain = std::fs::read_dir(store)
+    let only_markers_remain = kernal_api::platform::fs::read_dir_paths(store)
         .map(|entries| {
             entries
-                .flatten()
-                .all(|entry| is_root_marker(&entry.file_name()))
+                .iter()
+                .all(|entry| entry.file_name().is_some_and(is_root_marker))
         })
         .unwrap_or(false);
 
@@ -340,23 +340,26 @@ pub fn sweep_retired_version_stores_in_with_mode(
     mode: RetiredSweepMode,
 ) -> RetiredStoreSweepReport {
     let mut report = RetiredStoreSweepReport::default();
-    let entries = match std::fs::read_dir(top_level) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(top_level) {
         Ok(entries) => entries,
         Err(_) => return report,
     };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    for entry in entries {
+        let is_dir = kernal_api::platform::fs::symlink_metadata(&entry)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = entry
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if !super::resolve::is_version_dir_name(&name) || !is_older_version_dir(&name, keep) {
             continue;
         }
         report.merge(&sweep_retired_version_store_with_mode(
-            &entry.path(),
-            max_age,
-            now,
-            mode,
+            &entry, max_age, now, mode,
         ));
     }
     report
@@ -414,25 +417,17 @@ fn sweep_directory_contents(
     mode: RetiredSweepMode,
     report: &mut RetiredStoreSweepReport,
 ) {
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(dir) {
         Ok(entries) => entries,
         Err(_) => {
             report.failed += 1;
             return;
         }
     };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                report.failed += 1;
-                continue;
-            }
-        };
-        if dir == store_root && is_root_marker(&entry.file_name()) {
+    for path in entries {
+        if dir == store_root && path.file_name().is_some_and(is_root_marker) {
             continue;
         }
-        let path = entry.path();
         let kind = match kernal_api::platform::fs::classify(&path) {
             Ok(kind) => kind,
             Err(_) => {
@@ -446,8 +441,8 @@ fn sweep_directory_contents(
             remove_link_entry(&path, report);
             continue;
         }
-        let is_dir = match entry.file_type() {
-            Ok(file_type) => file_type.is_dir(),
+        let is_dir = match kernal_api::platform::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata.is_dir(),
             Err(_) => {
                 report.failed += 1;
                 continue;
@@ -479,8 +474,8 @@ fn remove_link_entry(path: &Path, report: &mut RetiredStoreSweepReport) {
 }
 
 fn is_dir_empty(dir: &Path) -> bool {
-    std::fs::read_dir(dir)
-        .map(|mut entries| entries.next().is_none())
+    kernal_api::platform::fs::read_dir_paths(dir)
+        .map(|entries| entries.is_empty())
         .unwrap_or(false)
 }
 

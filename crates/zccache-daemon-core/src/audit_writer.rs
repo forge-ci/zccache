@@ -378,13 +378,12 @@ fn gc_audit_logs(path: &Path, file_name: &str) {
         return;
     };
     let prefix = format!("{file_name}.");
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = kernal_api::platform::fs::read_dir_paths(dir) else {
         return;
     };
 
     let mut archives: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
+        .into_iter()
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
@@ -433,10 +432,14 @@ mod tests {
     }
 
     fn names_in(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
+        let entries = kernal_api::platform::fs::read_dir_paths(dir).unwrap();
+        let mut names: Vec<String> = entries
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
             .collect();
         names.sort();
         names

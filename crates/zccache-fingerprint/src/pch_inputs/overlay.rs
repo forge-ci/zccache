@@ -52,7 +52,7 @@ pub fn write_pch_overlay(
         {
             continue;
         }
-        let bytes = std::fs::read(&replay.path)
+        let bytes = kernal_api::platform::fs::read_file(&replay.path)
             .map_err(|error| refusal(PchRefusalReason::Unreadable(error.to_string())))?;
         if bytes.len() as u64 != replay.size {
             return Err(refusal(PchRefusalReason::ChangedDuringReplay));
@@ -65,10 +65,7 @@ pub fn write_pch_overlay(
         }
         let snapshot = directory.join(format!("input-{index}"));
         let write_snapshot = || -> std::io::Result<()> {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&snapshot)?;
+            let mut file = kernal_api::platform::fs::create_private_file(&snapshot)?;
             file.write_all(&bytes)?;
             let seconds = i64::try_from(replay.recorded_secs)
                 .map_err(|_| std::io::Error::other("PCH mtime is out of range"))?;
@@ -84,10 +81,7 @@ pub fn write_pch_overlay(
     }
     let overlay = directory.join("overlay.json");
     let write_overlay = || -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&overlay)?;
+        let mut file = kernal_api::platform::fs::create_private_file(&overlay)?;
         serde_json::to_writer(
             &mut file,
             &serde_json::json!({
