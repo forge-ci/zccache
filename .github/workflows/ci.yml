@@ -16,17 +16,6 @@ on:
       - "tasks/**"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   # GEN-022 (forge-ci/ci.yml#405/#432): main merges through a merge queue,
   # which validates the exact merge commit. paths-ignore does not apply to
   # merge_group, so every queued PR runs the gate.
@@ -53,6 +42,34 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # All PR checks run in this attempt, including reusable workflow children.
+  # No paths filter: the Python and feature-matrix guards also police docs.
+  linux:
+    name: Linux
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    uses: ./.github/workflows/ci-linux.yml
+    secrets: inherit
+
+  python-tests:
+    name: Python Tests
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    uses: ./.github/workflows/python-tests.yml
+    secrets: inherit
+
+  wire-stability:
+    name: Wire stability
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    uses: ./.github/workflows/wire-stability.yml
+
+  feature-matrix:
+    name: Feature matrix
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    uses: ./.github/workflows/feature-matrix-check.yml
+
   # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit
   # (gh-readonly-queue/main/pr-<N>-<sha>), so the concurrency group above never
   # pairs a PR's rebuilt queue run with the one main's movement replaced; this
@@ -567,7 +584,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -601,7 +618,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, linux, python]
+    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

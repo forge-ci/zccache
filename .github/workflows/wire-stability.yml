@@ -12,16 +12,7 @@ name: Wire stability
 # so it runs in seconds and never falls behind on cache state.
 
 on:
-  pull_request:
-    paths:
-      - "crates/zccache-protocol/proto/**"
-      - "crates/zccache-artifact/src/rust_plan_manifest.proto"
-      - "ci/check_wire_stability.py"
-      - "ci/wire_stability_snapshot.txt"
-      - "docs/WIRE_STABILITY.md"
-      - ".github/workflows/wire-stability.yml"
-  push:
-    branches: [main]
+  workflow_call:
 
 # Auto-cancel superseded PR runs: pushing again to a feature branch
 # supersedes the in-flight run instead of queueing behind it. Non-PR events
@@ -31,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  group: wire-stability-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
