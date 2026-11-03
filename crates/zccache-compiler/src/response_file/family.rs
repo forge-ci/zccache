@@ -15,6 +15,16 @@ use crate::CompilerFamily;
 
 use super::ResponseFileError;
 
+/// Read an argfile with the compiler family's native text encoding.
+/// The Rust reader accepts UTF-8 only; MSVC response files may be UTF-16.
+pub fn read_response_file_text_for(path: &Path, family: CompilerFamily) -> std::io::Result<String> {
+    if family == CompilerFamily::Rustc {
+        std::fs::read_to_string(path)
+    } else {
+        super::read_response_file_text(path)
+    }
+}
+
 /// Split response-file `content` into arguments the way `family` reads it.
 #[must_use]
 pub fn parse_response_file_content_for(content: &str, family: CompilerFamily) -> Vec<String> {

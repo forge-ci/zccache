@@ -1,5 +1,12 @@
 # Lessons
 
+## Response-file parsing must preserve execution semantics (2026-11-02)
+
+Keeping a nested `@` argument literal in the parser is insufficient if the
+expanded argv is passed directly back to the compiler. Cover real compiler
+execution: reject nested flag injection, retain valid literal search paths
+through a cache hit, and reject unreadable top-level files before lookup.
+
 ## Link payloads include permissions (2026-10-02)
 
 Reading a linked executable into a byte buffer drops execute bits. Retain

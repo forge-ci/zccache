@@ -8,11 +8,14 @@ would silently corrupt arguments for one of them.
 
 ## Layout
 
-- `temporary.rs` — shared temporary-file creation and ownership.
+- `temporary.rs` — shared temporary-file creation and ownership. Literal
+  Rust `@` arguments use one-argument files so the compiler cannot expand
+  them again; other argument values retain their bytes and ordering.
 - `family.rs` — reading: which grammar each compiler family splits an `@file`
   with. rustc takes one argument per line, verbatim, and does not expand
   nested `@file`s (cargo's argfiles depend on this); every other family uses
-  the GCC/Clang parser in `response_file.rs`.
+  the GCC/Clang parser in `response_file.rs`. The Rust reader rejects
+  non-UTF-8 input rather than accepting MSVC's UTF-16 encoding.
 - `format.rs` — `gnu` plus the `*_if_safe` variants (`gnu_if_safe`,
   `msvc_if_safe`, `rustc_if_safe`). The `_if_safe` forms return `None` rather
   than emitting a response file when an argument cannot be represented

@@ -4,6 +4,40 @@ use super::super::*;
 use crate::compiler::CompilerFamily;
 
 #[tokio::test]
+async fn cached_rustc_expansion_rejects_invalid_response_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir: NormalizedPath = dir.path().join("cache").into();
+    let utf16 = dir.path().join("utf16.rsp");
+    std::fs::write(&utf16, [0xff, 0xfe, b'-', 0, b'O', 0]).unwrap();
+    let server =
+        DaemonServer::bind_with_cache_dir(&crate::ipc::unique_test_endpoint(), &cache_dir).unwrap();
+    for arg in [
+        "@".to_owned(),
+        "@missing.rsp".to_owned(),
+        format!("@{}", utf16.display()),
+    ] {
+        assert!(expand_args_cached(
+            server.test_state(),
+            &[arg],
+            dir.path(),
+            CompilerFamily::Rustc
+        )
+        .is_err());
+    }
+    let missing = vec!["@missing.rsp".to_owned()];
+    assert_eq!(
+        expand_args_cached(
+            server.test_state(),
+            &missing,
+            dir.path(),
+            CompilerFamily::Gcc
+        )
+        .unwrap(),
+        missing
+    );
+}
+
+#[tokio::test]
 async fn cached_expansion_parses_utf16le_response_file_for_cache_keys() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir: NormalizedPath = dir.path().join("cache").into();
@@ -18,7 +52,7 @@ async fn cached_expansion_parses_utf16le_response_file_for_cache_keys() {
         DaemonServer::bind_with_cache_dir(&crate::ipc::unique_test_endpoint(), &cache_dir).unwrap();
     let args = vec![format!("@{}", response.display())];
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Msvc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Msvc).unwrap(),
         vec!["/c", "\u{6e90}.cpp", "/Foobj\\"],
         "UTF-16 response-file flags must be visible to daemon key parsing"
     );
@@ -35,7 +69,7 @@ async fn cached_expansion_reloads_a_changed_response_file() {
     let args = vec![format!("@{}", response.display())];
 
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc).unwrap(),
         vec!["-DVALUE=one"]
     );
     std::fs::write(&response, "-DVALUE=two").unwrap();
@@ -45,7 +79,7 @@ async fn cached_expansion_reloads_a_changed_response_file() {
         .apply_changes(vec![response.clone().into()]);
 
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc).unwrap(),
         vec!["-DVALUE=two"]
     );
 }
@@ -63,7 +97,7 @@ async fn cached_expansion_reloads_a_changed_nested_response_file() {
     let args = vec![format!("@{}", outer.display())];
 
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc).unwrap(),
         vec!["-DVALUE=one"]
     );
     std::fs::write(&nested, "-DVALUE=two").unwrap();
@@ -73,7 +107,7 @@ async fn cached_expansion_reloads_a_changed_nested_response_file() {
         .apply_changes(vec![nested.clone().into()]);
 
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc).unwrap(),
         vec!["-DVALUE=two"]
     );
 }
@@ -109,7 +143,8 @@ async fn cached_expansion_reads_rustc_argfile_one_argument_per_line() {
             &args,
             dir.path(),
             CompilerFamily::Rustc
-        ),
+        )
+        .unwrap(),
         lines
     );
 }
@@ -127,7 +162,7 @@ async fn cached_expansion_is_not_shared_between_response_file_grammars() {
     let args = vec![format!("@{}", argfile.display())];
 
     assert_eq!(
-        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc),
+        expand_args_cached(server.test_state(), &args, dir.path(), CompilerFamily::Gcc).unwrap(),
         vec!["--check-cfg", "cfg(feature,", "values(a))"]
     );
     assert_eq!(
@@ -136,7 +171,8 @@ async fn cached_expansion_is_not_shared_between_response_file_grammars() {
             &args,
             dir.path(),
             CompilerFamily::Rustc
-        ),
+        )
+        .unwrap(),
         vec!["--check-cfg", "cfg(feature, values(\"a\"))"]
     );
 }

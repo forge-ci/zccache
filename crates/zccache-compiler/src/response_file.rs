@@ -13,6 +13,7 @@ use zccache_core::NormalizedPath;
 mod family;
 pub use family::{
     expand_response_files_in_for, expands_nested_response_files, parse_response_file_content_for,
+    read_response_file_text_for,
 };
 mod format;
 mod temporary;
@@ -22,6 +23,7 @@ use format::gnu_if_safe as format_rsp_content_if_safe;
 use format::{
     msvc_if_safe as format_rsp_content_msvc_if_safe, rustc_if_safe as format_rsp_content_rustc,
 };
+pub use temporary::{preserve_rustc_literal_at_args, RustcLiteralResponseFiles};
 
 /// Maximum nesting depth for response files to prevent stack overflow.
 const MAX_DEPTH: usize = 10;
@@ -183,11 +185,12 @@ fn expand_recursive(
                 return Err(ResponseFileError::TooDeep { path: resolved });
             }
 
-            let content =
-                read_response_file_text(&canonical).map_err(|e| ResponseFileError::ReadError {
+            let content = read_response_file_text_for(&canonical, family).map_err(|e| {
+                ResponseFileError::ReadError {
                     path: resolved,
                     source: e,
-                })?;
+                }
+            })?;
 
             // Nested @file references resolve against the parent file's directory
             let parent_dir = canonical.parent().unwrap_or(base_dir);

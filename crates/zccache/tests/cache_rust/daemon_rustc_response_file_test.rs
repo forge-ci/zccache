@@ -247,3 +247,62 @@ async fn test_rustc_argfile_does_not_expand_nested_at_during_execution() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // integration-level: starts a real daemon and compiler
+async fn test_rustc_literal_at_search_path_caches_but_raw_at_is_rejected() {
+    let Some(compiler_path) = zccache::test_support::find_rustc() else {
+        eprintln!("skipping test: compiler not found");
+        return;
+    };
+    zccache::test_support::test_timeout(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("lib.rs");
+        let output = tmp.path().join("search.rlib");
+        let outer = tmp.path().join("outer.rsp");
+        std::fs::create_dir(tmp.path().join("@")).unwrap();
+        std::fs::write(&source, "pub fn value() -> u8 { 42 }\n").unwrap();
+        let expanded_args: Vec<String> = vec![
+            "--crate-name".into(),
+            "literal_search".into(),
+            "--crate-type=rlib".into(),
+            source.to_string_lossy().into_owned(),
+            "-o".into(),
+            output.to_string_lossy().into_owned(),
+            "-L".into(),
+            "@".into(),
+        ];
+        std::fs::write(&outer, expanded_args.join("\n") + "\n").unwrap();
+        let args = vec![format!("@{}", outer.display())];
+        let (endpoint, server_handle, shutdown) = start_daemon().await;
+        let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
+        let session_id = start_session(&mut client).await;
+        let compiler = compiler_path.to_string_lossy();
+        let (exit_code, cached, stderr) =
+            compile(&mut client, &session_id, &compiler, &args, tmp.path()).await;
+        assert_eq!(exit_code, 0, "literal search path failed: {stderr}");
+        assert!(!cached);
+        std::fs::remove_file(&output).unwrap();
+        let (exit_code, cached, stderr) =
+            compile(&mut client, &session_id, &compiler, &args, tmp.path()).await;
+        assert_eq!(exit_code, 0, "literal search path hit failed: {stderr}");
+        assert!(cached);
+        std::fs::remove_file(&output).unwrap();
+        // The same text passed directly is an invalid top-level argfile,
+        // and must not hit the entry populated by the literal search path.
+        let (exit_code, cached, _) = compile(
+            &mut client,
+            &session_id,
+            &compiler,
+            &expanded_args,
+            tmp.path(),
+        )
+        .await;
+        shutdown.notify_one();
+        server_handle.await.unwrap();
+        assert_ne!(exit_code, 0);
+        assert!(!cached);
+        assert!(!output.exists());
+    })
+    .await;
+}

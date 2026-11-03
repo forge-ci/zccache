@@ -57,7 +57,8 @@ pub(super) async fn prepare_request_arguments(
     // fast-hit entry keyed only by the raw argument list. rustc reads cargo's
     // argfiles one argument per line, so the family picks the grammar.
     let family = crate::compiler::detect_family(&compiler_path.to_string_lossy());
-    let expanded_args = expand_args_cached(state, raw_args, cwd, family);
+    let expanded_args = expand_args_cached(state, raw_args, cwd, family)
+        .map_err(|error| compile_failure_stderr(format!("zccache: {error}")))?;
     let strict_paths_mode = strict_paths_mode_from_client_env(client_env.as_deref())
         .map_err(|err| compile_failure_stderr(format!("zccache: {err}")))?;
     crate::compiler::strict_paths::validate_args(&expanded_args, strict_paths_mode).map_err(
