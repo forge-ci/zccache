@@ -51,3 +51,17 @@ pub fn expand_response_files_in_for(
     let mut seen = HashSet::new();
     super::expand_recursive(args, base_dir, &mut seen, 0, family)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    #[test]
+    fn rustc_bare_top_level_at_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = vec!["@".to_owned()];
+        assert!(super::expand_response_files_in_for(
+            &args, dir.path(), crate::CompilerFamily::Rustc,
+        ).is_err());
+    }
+}

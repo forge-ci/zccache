@@ -230,6 +230,16 @@ async fn test_rustc_argfile_does_not_expand_nested_at_during_execution() {
         let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
         let session_id = start_session(&mut client).await;
         let args = vec![format!("@{}", outer.display())];
+        let plain_args: Vec<String> = vec![
+            "--crate-name".into(), "literal".into(), "--crate-type=rlib".into(),
+            source.to_string_lossy().into_owned(), "-o".into(),
+            output.to_string_lossy().into_owned(),
+        ];
+        let (baseline_exit, _, baseline_stderr) = compile(
+            &mut client, &session_id, &compiler_path.to_string_lossy(), &plain_args, tmp.path(),
+        ).await;
+        assert_eq!(baseline_exit, 0, "baseline compile failed: {baseline_stderr}");
+        std::fs::remove_file(&output).unwrap();
         let (exit_code, cached, stderr) = compile(
             &mut client,
             &session_id,
@@ -240,8 +250,8 @@ async fn test_rustc_argfile_does_not_expand_nested_at_during_execution() {
         .await;
         shutdown.notify_one();
         server_handle.await.unwrap();
-        assert_ne!(exit_code, 0, "nested @ argument was expanded: {stderr}");
         assert!(!cached, "invalid arguments must not produce a cache hit");
+        assert_ne!(exit_code, 0, "nested @ argument was expanded: {stderr}");
         assert!(!output.exists(), "invalid arguments produced an artifact");
         assert!(stderr.contains("multiple input filenames"), "{stderr}");
     })
