@@ -188,9 +188,10 @@ fn generic_tool_liveness_fixture() {
         };
         let (sender, receiver) = kernal_api::async_engine::channel(1);
         sender
-            .send(crate::daemon::compile_output::RawOutputChunk::Stdout(vec![
-                0,
-            ]))
+            .send_within(
+                crate::daemon::compile_output::RawOutputChunk::Stdout(vec![0]),
+                Duration::from_secs(5),
+            )
             .await
             .unwrap();
         let backpressured = case == "backpressure-controller";

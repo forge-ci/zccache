@@ -355,6 +355,11 @@ mod tests {
     use crate::daemon::process::CompilePriority;
     use kernal_api::async_engine;
 
+    /// Fixture sends and receives are bounded so a stalled capture fails the
+    /// test instead of wedging the suite (#433).
+    const SEND_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+    const RECV_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
     #[test]
     fn bounded_capture_emits_and_stores_the_same_truncation_marker() {
         let mut capture = BoundedCapture::new(4, "stderr");
@@ -384,7 +389,10 @@ mod tests {
         };
         let (raw_sender, raw_receiver) = async_engine::channel(8);
         raw_sender
-            .send(RawOutputChunk::Stderr(vec![b'x'; 2 * 1024 * 1024]))
+            .send_within(
+                RawOutputChunk::Stderr(vec![b'x'; 2 * 1024 * 1024]),
+                SEND_WITHIN,
+            )
             .await
             .expect("raw output receiver");
         drop(raw_sender);
@@ -418,7 +426,7 @@ mod tests {
         let (raw_sender, raw_receiver) = async_engine::channel(128);
         for bytes in trace.as_bytes().chunks(5) {
             raw_sender
-                .send(RawOutputChunk::Stderr(bytes.to_vec()))
+                .send_within(RawOutputChunk::Stderr(bytes.to_vec()), SEND_WITHIN)
                 .await
                 .expect("raw receiver");
         }
@@ -476,7 +484,10 @@ mod tests {
             } else {
                 RawOutputChunk::Stderr(bytes.to_vec())
             };
-            raw_sender.send(chunk).await.expect("raw receiver");
+            raw_sender
+                .send_within(chunk, SEND_WITHIN)
+                .await
+                .expect("raw receiver");
         }
         drop(raw_sender);
         let captured = super::consume(
@@ -554,9 +565,10 @@ mod tests {
         let context = OutputContext::new(sender);
         let (raw_sender, raw_receiver) = async_engine::channel(64);
         raw_sender
-            .send(RawOutputChunk::Stderr(
-                b"main.c(1): warning C4101: unreferenced\r\n".to_vec(),
-            ))
+            .send_within(
+                RawOutputChunk::Stderr(b"main.c(1): warning C4101: unreferenced\r\n".to_vec()),
+                SEND_WITHIN,
+            )
             .await
             .expect("raw receiver");
         drop(raw_sender);
@@ -610,7 +622,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let first = tokio::select! {
-            chunk = chunks.recv() => chunk.expect("first output chunk"),
+            chunk = chunks.recv_within(RECV_WITHIN) => chunk.expect("first output chunk"),
             _ = &mut operation => panic!("child exited before first output callback"),
         };
         assert!(started.elapsed() < std::time::Duration::from_millis(800));
@@ -652,7 +664,7 @@ mod tests {
         let mut operation = Box::pin(operation);
 
         let first = tokio::select! {
-            chunk = chunks.recv() => chunk.expect("startup output"),
+            chunk = chunks.recv_within(RECV_WITHIN) => chunk.expect("startup output"),
             _ = &mut operation => panic!("child exited before cancellation"),
         };
         assert!(matches!(first, OutputChunk::Stderr(bytes) if bytes == b"started\n"));

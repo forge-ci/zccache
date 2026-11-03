@@ -86,6 +86,12 @@ const DEFAULT_STALL_WINDOW: Duration = Duration::from_secs(300);
 /// `/proc/<pid>/stat` read per tick.
 const STALL_TICK: Duration = Duration::from_secs(5);
 
+/// Budget for one streaming output send. Same 5 s allowance as the compile
+/// output sink: a live consumer that stops receiving for this long is treated
+/// as disconnected rather than parking the drain forever (#433).
+#[cfg(test)]
+const OUTPUT_SEND_WITHIN: Duration = Duration::from_secs(5);
+
 /// Sampling cadence shared by every alive-stall watchdog implementation.
 pub(crate) const fn stall_tick() -> Duration {
     STALL_TICK
@@ -414,7 +420,10 @@ async fn watchdog_inner_impl(
                     stdout_bytes += n;
                     if let Some(sender) = stream.as_ref() {
                         sender
-                            .send(RawOutputChunk::Stdout(sbuf[..n].to_vec()))
+                            .send_within(
+                                RawOutputChunk::Stdout(sbuf[..n].to_vec()),
+                                OUTPUT_SEND_WITHIN,
+                            )
                             .await
                             .map_err(|_| {
                                 std::io::Error::new(
@@ -438,7 +447,10 @@ async fn watchdog_inner_impl(
                     stderr_bytes += n;
                     if let Some(sender) = stream.as_ref() {
                         sender
-                            .send(RawOutputChunk::Stderr(ebuf[..n].to_vec()))
+                            .send_within(
+                                RawOutputChunk::Stderr(ebuf[..n].to_vec()),
+                                OUTPUT_SEND_WITHIN,
+                            )
                             .await
                             .map_err(|_| {
                                 std::io::Error::new(

@@ -693,10 +693,19 @@ async fn semantic_streaming_session_forwards_chunks_without_duplicate_capture() 
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    while let Some(chunk) = receiver.recv().await {
-        match chunk {
-            crate::daemon::compile_output::RawOutputChunk::Stdout(bytes) => stdout.extend(bytes),
-            crate::daemon::compile_output::RawOutputChunk::Stderr(bytes) => stderr.extend(bytes),
+    loop {
+        match receiver
+            .recv_within(std::time::Duration::from_secs(5))
+            .await
+        {
+            Ok(crate::daemon::compile_output::RawOutputChunk::Stdout(bytes)) => {
+                stdout.extend(bytes)
+            }
+            Ok(crate::daemon::compile_output::RawOutputChunk::Stderr(bytes)) => {
+                stderr.extend(bytes)
+            }
+            Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+            Err(error) => panic!("compile output stream stalled: {error}"),
         }
     }
     assert_eq!(stdout, b"stdout");

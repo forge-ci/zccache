@@ -182,7 +182,11 @@ pub(crate) fn allocate_object_id(artifact_dir: &Path) -> io::Result<ArtifactObje
         .create(true)
         .truncate(false)
         .open(lock_path)?;
-    let _lock_guard = kernal_api::platform::fs::lock_exclusive(&lock)?;
+    // Store-lock operations carry the documented 30 s acquisition budget
+    // (`docs/architecture/runtime.md`); an expired wait returns instead of
+    // parking on a stuck cross-process holder (#433).
+    const STORE_LOCK_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+    let _lock_guard = kernal_api::platform::fs::lock_exclusive_for(&lock, STORE_LOCK_WITHIN)?;
 
     let counter_path = artifact_dir.join(COUNTER_FILE);
     let last = match read_counter(&counter_path) {
