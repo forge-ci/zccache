@@ -27,9 +27,14 @@ pub(super) fn acquire_fetch_lock(request: &ResolvedFetchRequest) -> Result<Fetch
         .open(&lock_path)
         .map_err(|e| e.to_string())?;
     let lock = match request.wait_mode {
-        WaitMode::Block => {
-            kernal_api::platform::fs::lock_exclusive_owned(file).map_err(|e| e.to_string())?
-        }
+        // `WaitMode::Block` waits for a peer download of the same artifact.
+        // The fetch is one user-requested download, so its lock carries the
+        // whole-command budget rather than an unbounded hold (#433).
+        WaitMode::Block => kernal_api::platform::fs::lock_exclusive_owned_for(
+            file,
+            crate::core::wait::WHOLE_COMMAND,
+        )
+        .map_err(|e| e.to_string())?,
         WaitMode::NoWait => kernal_api::platform::fs::try_lock_exclusive_owned(file)
             .map_err(|_| "locked".to_string())?,
     };

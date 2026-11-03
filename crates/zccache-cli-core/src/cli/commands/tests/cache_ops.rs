@@ -313,7 +313,9 @@ fn warm_waits_for_the_staged_store_lock_before_materializing() {
     // Stand in for daemon maintenance holding the store exclusively.
     let staged = zccache_artifact::staged_lock::staged_root(&artifact_dir);
     let gc_lock = zccache_artifact::staged_lock::open_store_lock(staged.as_path()).unwrap();
-    let gc_lock_guard = kernal_api::platform::fs::lock_exclusive(&gc_lock).unwrap();
+    let gc_lock_guard =
+        kernal_api::platform::fs::lock_exclusive_for(&gc_lock, std::time::Duration::from_secs(30))
+            .unwrap();
 
     // The outcome travels through the channel, not just a unit tick, so that an
     // early `Err` return (which would also unblock the recv and look exactly
