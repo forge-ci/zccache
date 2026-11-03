@@ -253,6 +253,25 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         }
     };
 
+    let literal_rsp_guard = if is_rustc && _rsp_guard.is_none() {
+        match crate::compiler::response_file::preserve_rustc_literal_at_args(
+            rsp_args,
+            &state.depfile_tmpdir,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                return CompileExecResult::Error(Response::Error {
+                    message: format!("failed to preserve literal compiler arguments: {error}"),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let spawn_args = literal_rsp_guard
+        .as_ref()
+        .map_or(rsp_args, |guard| guard.args());
+
     let output_paths = staged_plan
         .as_ref()
         .map_or(expected_outputs, StagedCompilePlan::output_paths);
@@ -272,7 +291,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
         compiler.as_path(),
         cwd,
-        rsp_args,
+        spawn_args,
         _rsp_guard.as_ref(),
     );
     builder = apply_client_env_builder(
@@ -559,6 +578,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     // the same — the guard drops when `run_compile_exec` returns, which is
     // before any subsequent post-exec work touches the response file.
     drop(_rsp_guard);
+    drop(literal_rsp_guard);
 
     CompileExecResult::Ok(CompileExecOutcome {
         exit_code,

@@ -104,6 +104,7 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     assert "Verify nested Dylint cache contract" in by_lane["check"].required_steps
     assert by_lane["dylint"].required_steps == (
         "Run Dylint",
+        "Rust argfile execution regressions",
         "Prove custom-lint selection for every OS",
     )
     assert "Test (full workspace)" in by_lane["tests"].required_steps
@@ -114,3 +115,15 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
         block = _job_block(workflow, check.bosn_job)
         for step in check.required_steps:
             assert f"name: {step}" in block
+
+
+def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
+    block = _job_block("ci.yml", "dylint")
+    assert "name: Rust argfile execution regressions" in block
+    assert "soldr rustup which rustc" in block
+    assert (
+        "soldr cargo test -p zccache --features test-support --test cache_rust "
+        "daemon_rustc_response_file_test:: -- --ignored --test-threads=1"
+    ) in block
+    check = next(check for check in local_gate.checks() if check.lane == "dylint")
+    assert "Rust argfile execution regressions" in check.required_steps

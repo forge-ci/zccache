@@ -383,6 +383,12 @@ jobs:
         # The Clippy workflow runs only on main pushes without -D warnings
         # (#944), so the ban is enforced here for every PR and merge group.
         run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
+      - name: Rust argfile execution regressions
+        run: |
+          native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"
+          export PATH="${native_compiler_dir}:${PATH}"
+          test -x "${native_compiler_dir}/rustc"
+          soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |

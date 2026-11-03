@@ -226,7 +226,11 @@ def checks() -> list[Check]:
             bosn_workflow=".github/workflows/ci.yml",
             bosn_job="dylint",
             selected_job="dylint",
-            required_steps=("Run Dylint", "Prove custom-lint selection for every OS"),
+            required_steps=(
+                "Run Dylint",
+                "Rust argfile execution regressions",
+                "Prove custom-lint selection for every OS",
+            ),
         ),
         Check(
             "rustdoc",
