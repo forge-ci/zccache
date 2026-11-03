@@ -612,7 +612,6 @@ def _bosn_failure_details(output: str) -> str:
         f"  failing step: {job}: {failure.get('step', step)} (exit {code})\n"
         + bosn_failure_summary(output + "\n" + logs.output, code)
         + f"\n  failing step log tail (last 40 lines):\n{tail}"
-        + (f"\n  diagnostics unavailable: {report.output}" if report.returncode else "")
     )
 
 

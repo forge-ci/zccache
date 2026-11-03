@@ -196,7 +196,8 @@ def test_failed_step_diagnostics_fetches_scoped_logs(monkeypatch) -> None:
     def capture(argv):
         calls.append(argv)
         if 'report' in argv:
-            return local_gate.Captured(0, json.dumps({'first_failure': {'job': 'job-key', 'section': 'Main:9', 'step': 'Test', 'exit_code': 100}}))
+            # A valid report returns the failed run's exit status.
+            return local_gate.Captured(1, json.dumps({'first_failure': {'job': 'job-key', 'section': 'Main:9', 'step': 'Test', 'exit_code': 100}}))
         return local_gate.Captured(0, 'FAIL [0.3s] crate test_name\n' + 'later doctest output\n' * 50)
     monkeypatch.setattr(local_gate, '_diagnostic_command', capture)
     summary = local_gate._bosn_failure_details(json.dumps({'id': 'run-id'}))
@@ -204,6 +205,7 @@ def test_failed_step_diagnostics_fetches_scoped_logs(monkeypatch) -> None:
     assert 'failing step: job-key: Test (exit 100)' in summary
     assert calls[1] == ['bosn', 'ci', 'logs', 'run-id', '--job', 'job-key', '--step', 'Main:9']
     assert summary.count('later doctest output') == 40
+    assert 'diagnostics unavailable' not in summary
 
 
 def test_integration_workflow_summary_handles_colored_nextest(tmp_path) -> None:
