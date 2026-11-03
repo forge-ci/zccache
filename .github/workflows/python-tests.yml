@@ -38,6 +38,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Called by ci.yml on merge_group so the queue's `CI summary` runs it.
+  workflow_call:
 
 permissions:
   actions: read
@@ -48,7 +50,9 @@ permissions:
 # key on run_id so each gets its own group -- GitHub keeps only ONE pending
 # run per group, so a shared group silently drops queued main-push SHAs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  # Literal prefix, not github.workflow: when ci.yml calls this workflow,
+  # github.workflow is the caller's "CI" and would collide with its group.
+  group: Python Tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

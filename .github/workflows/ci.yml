@@ -119,6 +119,28 @@ jobs:
       actions: read
       contents: read
 
+  # Merge-queue validation lanes. The standard Linux check+test and Python
+  # suites live in ci-linux.yml / python-tests.yml, which run on push and
+  # pull_request but have no merge_group trigger, so without these calls the
+  # queue's required `CI summary` blessed merge commits nothing had compiled
+  # or tested. Only the core lanes run here: arm/musl cells, wheels, wine,
+  # cook-size, coverage and PEP 517 smoke stay on push-to-main/nightly.
+  # PR runs keep using the standalone workflows (no duplicate PR cost).
+  linux:
+    name: Linux x86
+    needs: cache-pre-prune
+    if: github.event_name == 'merge_group' || github.event_name == 'pull_request' # TEMP proof, narrowed before merge
+    uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
+    with:
+      os: ubuntu-latest
+
+  python:
+    name: Python Tests
+    if: github.event_name == 'merge_group' || github.event_name == 'pull_request' # TEMP proof, narrowed before merge
+    uses: ./.github/workflows/python-tests.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for native-pytest's S3 build cache
+
   # GATE-001 mirror: runs exactly the local gate's `lint` lane and nothing
   # else, so every check here is one `ci-lint local-gate run` already ran.
   # Add a check to ci/local_gate.py's `lint` lane, never as a step here.
@@ -578,7 +600,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, linux, python]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
