@@ -13,7 +13,6 @@ crates/zccache-core/src/config/retired_store.rs
 crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs

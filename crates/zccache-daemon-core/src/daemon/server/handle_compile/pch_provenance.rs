@@ -109,7 +109,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
             let visible = mappings.get(&key).ok_or_else(|| {
                 invalid(format!("executed import snapshot missing: {}", record.path))
             })?;
-            let mut file = std::fs::File::open(visible)?;
+            let mut file = kernal_api::platform::fs::open_read_regular_file(visible)?;
             let metadata = file.metadata()?;
             let seconds =
                 kernal_api::platform::fs::FileTime::from_last_modification_time(&metadata)
@@ -212,10 +212,7 @@ pub(super) fn preserve_import_sidecar(
         .file_name()
         .ok_or_else(|| invalid("sidecar filename missing"))?;
     let path = NormalizedPath::new(directory.path()).join(name);
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&path)?;
+    let mut file = kernal_api::platform::fs::create_private_file(&path)?;
     file.write_all(bytes)?;
     Ok(NormalizedPath::new(path))
 }
