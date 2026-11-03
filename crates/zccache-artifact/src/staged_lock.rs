@@ -193,8 +193,9 @@ mod tests {
         let root = staged_root(dir.path());
         kernal_api::platform::fs::create_dir_all(root.as_path()).unwrap();
 
-        let exclusive = kernal_api::platform::fs::lock_exclusive_owned(
+        let exclusive = kernal_api::platform::fs::lock_exclusive_owned_for(
             open_store_lock(root.as_path()).unwrap(),
+            std::time::Duration::from_secs(5),
         )
         .unwrap();
 

@@ -186,6 +186,10 @@ impl SettleBuffer {
 mod tests {
     use super::*;
 
+    /// Every receive here is bounded: a settle loop that stops emitting must
+    /// fail the test instead of wedging the suite forever (#433).
+    const RECV_WITHIN: Duration = Duration::from_secs(5);
+
     #[tokio::test]
     async fn single_event_settles() {
         let (raw_tx, raw_rx) = mpsc::unbounded_channel();
@@ -199,7 +203,7 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("a.c".into())).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -228,7 +232,7 @@ mod tests {
         }
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 5);
@@ -256,7 +260,7 @@ mod tests {
         raw_tx.send(WatchEvent::Modified(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -283,7 +287,7 @@ mod tests {
         raw_tx.send(WatchEvent::Removed(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert!(changed.is_empty());
@@ -310,7 +314,7 @@ mod tests {
         raw_tx.send(WatchEvent::Created(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -341,7 +345,7 @@ mod tests {
             .unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -370,7 +374,7 @@ mod tests {
         raw_tx.send(WatchEvent::Overflow).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
 
         handle.await.unwrap();
@@ -396,7 +400,7 @@ mod tests {
         drop(raw_tx);
 
         // Error should trigger overflow, discarding the pending Modified event.
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
 
         handle.await.unwrap();
@@ -416,7 +420,7 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("x.c".into())).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         assert!(matches!(event, SettledEvent::Batch { .. }));
         handle.await.unwrap();
     }
@@ -438,7 +442,7 @@ mod tests {
 
         // Should get at least one overflow event.
         let mut overflow_count = 0;
-        while let Some(event) = settled_rx.recv().await {
+        while let Ok(event) = settled_rx.recv_within(RECV_WITHIN).await {
             if matches!(event, SettledEvent::Overflow) {
                 overflow_count += 1;
             }
@@ -463,7 +467,7 @@ mod tests {
 
         let mut saw_overflow = false;
         let mut saw_batch = false;
-        while let Some(event) = settled_rx.recv().await {
+        while let Ok(event) = settled_rx.recv_within(RECV_WITHIN).await {
             match event {
                 SettledEvent::Overflow => saw_overflow = true,
                 SettledEvent::Batch { changed, .. } => {
@@ -496,7 +500,7 @@ mod tests {
 
         // Collect all batches — total changed files should be 200.
         let mut total_changed = 0;
-        while let Some(event) = settled_rx.recv().await {
+        while let Ok(event) = settled_rx.recv_within(RECV_WITHIN).await {
             if let SettledEvent::Batch { changed, .. } = event {
                 total_changed += changed.len();
             }
@@ -526,7 +530,7 @@ mod tests {
             .unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 // new.c (Created), edit.c (Modified), renamed.c (from Renamed.to)
@@ -554,7 +558,7 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("b.c".into())).unwrap();
         drop(raw_tx); // Close before 500ms window
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         match event {
             SettledEvent::Batch { changed, .. } => {
                 assert_eq!(changed.len(), 2);
@@ -578,7 +582,7 @@ mod tests {
         raw_tx.send(WatchEvent::Overflow).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx.recv_within(RECV_WITHIN).await.unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
         handle.await.unwrap();
     }
@@ -595,9 +599,12 @@ mod tests {
 
         drop(raw_tx);
 
-        // Should get None (channel closed, no events).
-        let event = settled_rx.recv().await;
-        assert!(event.is_none());
+        // Should get a disconnect (channel closed, no events), not a value.
+        let event = settled_rx.recv_within(RECV_WITHIN).await;
+        assert!(matches!(
+            event,
+            Err(kernal_api::async_engine::RecvTimeoutError::Disconnected)
+        ));
 
         handle.await.unwrap();
     }
