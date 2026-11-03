@@ -166,3 +166,57 @@ def test_missing_job_is_a_violation_once_only_the_observer_remains() -> None:
         {"name": "Cache pre-prune barrier / Wait", "runner_name": "GitHub Actions 3", "completed_at": "2026-09-29T04:41:00Z"},
     ]
     assert not observe_runner_queue.upstream_pending(jobs, ["macos / Test"], self_runner="GitHub Actions 7")
+
+
+def test_started_at_without_an_acquired_runner_is_still_queued() -> None:
+    # forge-ci/zccache run 41494338424: GitHub stamped `macos / Test` with
+    # started_at == created_at while no hosted runner had acquired it
+    # (runner_name ""), so the observer exited 0 and the job was later
+    # cancelled with "not acquired by Runner of type hosted".
+    observation = observe_runner_queue.observe_once(
+        RUN,
+        [_job(status="queued", started_at="2026-08-28T05:30:00Z", runner_name="")],
+        ["matrix (macos-15)"],
+        now=NOW,
+        configured_runner="macos-15",
+    )[0]
+
+    assert observation.state is observe_runner_queue.QueueState.QUEUED
+    assert observation.queue_age == timedelta(minutes=30)
+    assert observe_runner_queue.queue_violations([observation], timedelta(minutes=15)) == [observation]
+
+
+# Decision-function fixtures for the wrapper-e2e false-cancel (run 41507829143).
+_MAX = timedelta(minutes=15)
+V = observe_runner_queue.Verdict
+
+
+def _decide(job: dict[str, object] | None, *, deadline_expired: bool, missing_visible: bool = False) -> observe_runner_queue.Verdict:
+    jobs = [job] if job is not None else []
+    observations = observe_runner_queue.observe_once(RUN, jobs, ["matrix (macos-15)"], now=NOW, configured_runner="macos-15")
+    return observe_runner_queue.decide(observations, _MAX, missing_visible=missing_visible, deadline_expired=deadline_expired)[0]
+
+
+def test_never_acquired_is_named_starvation() -> None:
+    assert _decide(_job(), deadline_expired=False) is V.STARVED
+
+
+def test_acquired_and_passed_exits_clean_even_at_deadline() -> None:
+    job = _job(status="completed", conclusion="success", started_at="2026-08-28T05:31:00Z", completed_at="2026-08-28T05:50:00Z")
+    assert _decide(job, deadline_expired=True) is V.PASS
+
+
+def test_acquired_and_failed_is_not_the_observers_failure() -> None:
+    job = _job(status="completed", conclusion="failure", started_at="2026-08-28T05:31:00Z", completed_at="2026-08-28T05:50:00Z")
+    assert _decide(job, deadline_expired=True) is V.PASS
+
+
+def test_still_queued_at_deadline_is_a_named_failure() -> None:
+    recent = _job(created_at="2026-08-28T05:55:00Z")
+    assert _decide(recent, deadline_expired=False) is V.WAIT
+    assert _decide(recent, deadline_expired=True) is V.DEADLINE_QUEUED
+
+
+def test_gated_behind_upstream_at_deadline_is_a_named_failure() -> None:
+    assert _decide(None, deadline_expired=False) is V.WAIT
+    assert _decide(None, deadline_expired=True) is V.DEADLINE_UPSTREAM

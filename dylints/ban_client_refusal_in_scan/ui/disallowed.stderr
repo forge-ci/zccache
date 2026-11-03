@@ -1,0 +1,41 @@
+error: `pch_inputs::PchRefusal` is a client-visible refusal constructed inside an internal compiler scan; return a plain scan error and let the fail-open caller decide (#2027)
+  --> $DIR/disallowed.rs:22:13
+   |
+LL |       let _ = PchRefusal {
+   |  _____________^
+LL | |         path: String::new(),
+LL | |         reason: PchRefusalReason::Unreadable(String::new()),
+LL | |     };
+   | |_____^
+   |
+   = note: `#[deny(ban_client_refusal_in_scan)]` on by default
+
+error: `pch_inputs::PchRefusalReason::Unreadable` is a client-visible refusal constructed inside an internal compiler scan; return a plain scan error and let the fail-open caller decide (#2027)
+  --> $DIR/disallowed.rs:24:17
+   |
+LL |         reason: PchRefusalReason::Unreadable(String::new()),
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `pch_inputs::PchRefusalReason::ChangedDuringReplay` is a client-visible refusal constructed inside an internal compiler scan; return a plain scan error and let the fail-open caller decide (#2027)
+  --> $DIR/disallowed.rs:26:13
+   |
+LL |     let _ = PchRefusalReason::ChangedDuringReplay;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `CompileExecResult::Error` is a client-visible refusal constructed inside an internal compiler scan; return a plain scan error and let the fail-open caller decide (#2027)
+  --> $DIR/disallowed.rs:27:13
+   |
+LL |     let _ = CompileExecResult::Error(Response::Error {
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `Response::Error` is a client-visible refusal constructed inside an internal compiler scan; return a plain scan error and let the fail-open caller decide (#2027)
+  --> $DIR/disallowed.rs:27:38
+   |
+LL |       let _ = CompileExecResult::Error(Response::Error {
+   |  ______________________________________^
+LL | |         message: String::new(),
+LL | |     });
+   | |_____^
+
+error: aborting due to 5 previous errors
+

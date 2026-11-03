@@ -596,7 +596,7 @@ fn warn_rustc_identity_fallback(path: &Path, reason: &'static str) {
 }
 
 fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
@@ -625,7 +625,7 @@ fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
 }
 
 async fn rustc_identity_async(path: std::path::PathBuf) -> Option<RustcIdentity> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
@@ -665,7 +665,7 @@ async fn rustc_identity_async(path: std::path::PathBuf) -> Option<RustcIdentity>
 /// stubbed binaries (unit tests) or broken toolchains.
 #[allow(dead_code)] // Direct helper retained for the identity-output unit test.
 pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     // The running-process boundary makes this cold-path probe consoleless.
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
@@ -699,7 +699,7 @@ pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
 /// (e.g. some `cl.exe` invocations) that only print version info to
 /// stderr — see the TODO below.
 pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("--version");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "--version");
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -726,7 +726,7 @@ pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
 /// Async sibling of [`hash_cc_identity`]. See that function's doc comment
 /// for the rationale (issue #1166).
 pub(super) async fn hash_cc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("--version");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "--version");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -755,7 +755,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
     client_env: Vec<(String, String)>,
 ) -> Option<ContentHash> {
     let cmd = client_env.into_iter().fold(
-        kernal_api::SpawnSpec::new(&path).arg("-V"),
+        super::compiler_spawn::compiler_identity_probe_spawn(&path, "-V"),
         |spec, (key, value)| spec.env(key, value),
     );
     let timeout = rustc_probe_timeout();
@@ -773,7 +773,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
 
 #[allow(dead_code)] // The cache calls `rustc_identity_async` to retain provenance.
 pub(super) async fn hash_rustc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -791,6 +791,10 @@ pub(super) async fn hash_rustc_identity_async(path: std::path::PathBuf) -> Optio
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 mod probe_timeout_tests {
     //! Issue #972: the `<compiler> -vV` identity probe must be bounded so a
     //! hung wrapper compiler cannot block cache-key computation.

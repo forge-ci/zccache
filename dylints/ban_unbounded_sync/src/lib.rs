@@ -32,7 +32,7 @@ rustc_session::impl_lint_pass!(BoundedSync => [BAN_UNBOUNDED_SYNC, BAN_GUARD_ACR
 #[unsafe(no_mangle)]
 pub fn register_lints(_: &rustc_session::Session, store: &mut rustc_lint::LintStore) {
     store.register_lints(&[BAN_UNBOUNDED_SYNC, BAN_GUARD_ACROSS_AWAIT]);
-    store.register_late_pass(|_| Box::new(BoundedSync));
+    store.register_late_lint_pass(Box::new(|_| Box::new(BoundedSync)));
 }
 
 /// `(crate, type, method)` triples. The crate is the first def-path segment;

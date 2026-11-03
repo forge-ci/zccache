@@ -8,14 +8,8 @@ name: Python Tests
 # other native platform families; a matrix here would rebuild the same PyO3
 # contracts without adding a distinct source-level test surface.
 #
-# This is a dedicated workflow rather than a job in `ci.yml` because `ci.yml`
-# sets `paths-ignore: "**/*.md"`. Several of these tests exist specifically to
-# police Markdown -- test_doc_links, test_readme_coverage, test_crate_docs,
-# test_documented_commands -- so hanging them off `ci.yml` would skip them on
-# exactly the docs-only PRs they are meant to gate (#1487 was one).
-#
-# No paths filter: the suite asserts against Markdown, workflow YAML,
-# Cargo.toml, and perf fixtures, so almost any change can move it.
+# Called by CI on pull_request and merge_group, including docs-only changes.
+# Main pushes run through the same CI aggregate.
 #
 # Runs on `ubuntu-latest` for `git` and `jq`, both preinstalled -- `jq` is
 # required by the `perf/lib/common.sh` helpers that test_perf_infrastructure_guard
@@ -34,10 +28,7 @@ name: Python Tests
 #     --with pyyaml python -m pytest ci/tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 permissions:
   actions: read
@@ -48,7 +39,9 @@ permissions:
 # key on run_id so each gets its own group -- GitHub keeps only ONE pending
 # run per group, so a shared group silently drops queued main-push SHAs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  # Literal prefix, not github.workflow: when ci.yml calls this workflow,
+  # github.workflow is the caller's "CI" and would collide with its group.
+  group: Python Tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -95,6 +88,9 @@ jobs:
             python -m pytest ci/tests -q -rs --durations=10
 
   native-pytest:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     name: native Python suites (Linux)
     needs: cache-pre-prune
     runs-on: ubuntu-latest
@@ -103,6 +99,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
+      # Run 41507829214 hit soldr's 5 GiB build-volume block; free unused SDKs first.
+      - name: Reclaim hosted runner disk
+        run: python3 ci/reclaim_runner_disk.py
 
       # The PyO3 modules use abi3-py310, and 3.13 is the canonical workflow
       # interpreter. setup-python also supplies the interpreter PYO3 probes.
@@ -118,6 +117,8 @@ jobs:
 
       - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
           # Global auto keeps local saves warm; the remote permission preserves

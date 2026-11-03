@@ -19,8 +19,10 @@
 
 use std::path::Path;
 use zccache::compiler::response_file::{
-    expand_response_files, parse_response_file_content, ResponseFileError,
+    expand_response_files, expand_response_files_in_for, parse_response_file_content,
+    ResponseFileError,
 };
+use zccache::compiler::CompilerFamily;
 use zccache::core::NormalizedPath;
 
 fn s(v: &[&str]) -> Vec<String> {
@@ -534,4 +536,47 @@ fn stress_expand_many_siblings() {
     for (i, arg) in result.iter().enumerate() {
         assert_eq!(arg, &format!("-DSIB_{i}"));
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION: RUSTC ARGFILES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// rustc expands a top-level `@file` one argument per line, but an `@` line
+/// inside it is an ordinary argument. The GCC grammar splits on whitespace,
+/// strips quotes and expands the nested file.
+#[test]
+fn expand_rustc_argfile_keeps_lines_and_nested_at_verbatim() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("nested.rsp"), "-DNESTED").unwrap();
+    std::fs::write(
+        dir.path().join("outer.rsp"),
+        "--check-cfg\ncfg(feature, values(\"a\"))\n--cfg\nfeature=\"a\"\n@nested.rsp\n",
+    )
+    .unwrap();
+    let args = s(&["--crate-type=lib", "@outer.rsp"]);
+
+    assert_eq!(
+        expand_response_files_in_for(&args, dir.path(), CompilerFamily::Rustc).unwrap(),
+        s(&[
+            "--crate-type=lib",
+            "--check-cfg",
+            "cfg(feature, values(\"a\"))",
+            "--cfg",
+            "feature=\"a\"",
+            "@nested.rsp",
+        ])
+    );
+    assert_eq!(
+        expand_response_files_in_for(&args, dir.path(), CompilerFamily::Gcc).unwrap(),
+        s(&[
+            "--crate-type=lib",
+            "--check-cfg",
+            "cfg(feature,",
+            "values(a))",
+            "--cfg",
+            "feature=a",
+            "-DNESTED",
+        ])
+    );
 }

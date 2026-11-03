@@ -1,3 +1,14 @@
+# PR #2019 — rustc response files
+
+- [x] Preserve the fully pushed release branch and update local main.
+- [x] Review compiler-family parsing, cached expansion and regression coverage.
+- [x] Merge current main into the contributor branch locally without conflicts.
+- [x] Run the real rustc argfile regression in isolated Bosn (compile miss and hit).
+- [x] Verify literal `@` arguments survive compiler execution without a second expansion.
+- [ ] Run the complete isolated local gate.
+- [ ] Push the validated update to #2019, observe checks and merge through the queue.
+- [ ] Return the checkout to clean, current main after merge.
+
 # #1116 container summary handoff
 
 - [x] Reproduce the real Linux campaign failure: root-owned 0644 summary,
@@ -1346,6 +1357,12 @@ Issue: https://github.com/zackees/zccache/issues/1578
 - [x] Validate committed no-cook candidate e3b4520: full gate passed in 954 s, stamped e587de8e; all 3478 tests passed. Explicit ci-tests default serialized nextest, so restore num-cpus parallelism in the final slice.
 - [x] Add RED old-lock retention/bootstrap checks; retire measured Test and Integration generations, reserve the initial 1.2 GB without double-counting, and replay the captured 7.90 GB inventory at a 9.10 GB forecast below the unchanged 9.20 GB target.
 - [ ] Review and validate the final committed planner/parallelism slice before push.
+# #1036 explicitly authorized remote Docker campaign
+
+- [x] Verify the local quiet-host check rejects competing Cargo/clang/rustc builds.
+- [x] Add a manual option to the existing benchmark workflow for all three unchanged five-sample Docker campaigns and retained evidence.
+- [ ] Validate workflow/cache guards and complete committed-tree gate before push.
+- [ ] Merge the focused PR, run on the final source ref, download raw evidence, and inspect all correctness and performance results.
 # Shared CI compiler-store snapshots (ci.yml#362)
 
 - [x] Observe an isolated RED test retaining multi-output metadata and verdicts.
@@ -1559,3 +1576,9 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+## PR #2056 honest CI summary recovery
+
+- [x] Recover agg-2056 onto current main; retain concurrency fixes and remove obsolete queue-only duplicate callers.
+- [ ] Validate summary, workflow guards, and local gate; review final diff.
+- [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.

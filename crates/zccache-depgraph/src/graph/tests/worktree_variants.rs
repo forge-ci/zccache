@@ -495,3 +495,51 @@ fn env_dep_value_flip_returns_the_earlier_artifact_key() {
         "the env snapshot must follow the flip so the next check is a plain hit"
     );
 }
+
+/// soldr#4017: a registry crate's context is registered once per checkout
+/// (the checkout is its key root), and an instance can stay `Cold` forever
+/// -- a request served by another path or a compile that never updated the
+/// graph. A later checkout must rebase from a *warm* equivalent instance, not
+/// whichever instance happens to be oldest, or every fresh checkout inherits
+/// `Cold` and misses (`context_not_found`) although an equivalent checkout
+/// holds a valid artifact.
+#[test]
+fn equivalent_root_rebases_from_a_warm_instance_not_the_oldest_cold_one() {
+    let graph = DepGraph::new();
+    let logical_key = ContextKey::from_raw([0x40; 32]);
+    let shared_source = "/registry/src/index/regdep-1.0.0";
+    let register = |root: &str| {
+        graph.register_rustc_with_key_and_root_result(
+            logical_key,
+            context(shared_source),
+            Some(NormalizedPath::from(root)),
+            Vec::new(),
+            None,
+        )
+    };
+    let no_includes = || ScanResult {
+        resolved: Vec::new(),
+        unresolved: Vec::new(),
+        has_computed: false,
+    };
+
+    let stale = register("/checkout-stale");
+    assert_eq!(stale.state, ContextState::Cold);
+
+    let warm = register("/checkout-warm");
+    let artifact = graph
+        .update(&warm.map_key, no_includes(), equivalent_hash)
+        .expect("the warm checkout's compile must update its instance");
+
+    let fresh = register("/checkout-fresh");
+    assert!(fresh.rebased_from_equivalent_root);
+    assert_eq!(
+        fresh.state,
+        ContextState::Warm,
+        "a fresh checkout must inherit the warm equivalent instance"
+    );
+    assert!(matches!(
+        graph.check(&fresh.map_key, |_| true, equivalent_hash),
+        CacheVerdict::Hit { artifact_key } if artifact_key == artifact
+    ));
+}

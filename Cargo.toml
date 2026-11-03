@@ -34,13 +34,14 @@ exclude = [
     "dylints/ban_normalized_path_deref_containment",
     "dylints/ban_dashmap_guard_across_blocking",
     "dylints/ban_discarded_write_result",
+    "dylints/ban_client_refusal_in_scan",
     "dylints/enforce_platform_boundary",
     "dylints/ban_registered_env_read",
     "dylints/ban_unbounded_sync",
 ]
 
 [workspace.package]
-version = "1.15.8"
+version = "1.15.14"
 edition = "2021"
 rust-version = "1.95.0"
 license = "AGPL-3.0-only"
@@ -89,7 +90,7 @@ sevenz-rust = { package = "sevenz-rust2", version = "0.22.2" }
 # Exact pin: kernal-api is below 1.0, so every consumer pins the same published
 # release (kernal-api COMPATIBILITY.md). 0.1.26 adds automatic APE loading
 # for compiler spawns; no local path or patch override remains.
-kernal-api = { version = "=0.1.26", default-features = false }
+kernal-api = { version = "=0.1.33", default-features = false }
 zccache = { path = "crates/zccache" }
 zccache-artifact = { path = "crates/zccache-artifact" }
 zccache-audit = { path = "crates/zccache-audit" }

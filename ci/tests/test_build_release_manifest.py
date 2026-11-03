@@ -111,7 +111,7 @@ def test_manifest_is_deterministically_ordered(tmp_path: Path) -> None:
 def test_manifest_targets_match_workflow_upload_release_true() -> None:
     # Guard: the manifest test's target set stays in sync with the workflow's
     # `upload_release: "true"` matrix rows.
-    workflow = _repo_text(".github", "workflows", "release-auto.yml")
+    workflow = _repo_text(".github", "workflows", "auto-release.yml")
     blocks = workflow.split("- target: ")
     releasing = set()
     for block in blocks[1:]:

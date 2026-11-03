@@ -1,15 +1,26 @@
 //! Discover include aliases before a private PCH view changes file identity.
+//!
+//! The scan is an internal compiler run (#2027): it goes through
+//! `compiler_spawn::internal_scan_spawn` and reports plain
+//! [`AliasScanError`]s. Callers fail open, compiling with the un-extended
+//! view instead of returning a client-visible refusal.
 
 use std::path::Path;
 
 use super::super::*;
-use crate::fingerprint::pch_inputs::{PchRefusal, PchRefusalReason};
 
-fn refusal(path: &Path, error: impl std::fmt::Display) -> PchRefusal {
-    PchRefusal {
-        path: path.to_string_lossy().into_owned(),
-        reason: PchRefusalReason::Unreadable(format!("PCH alias scan: {error}")),
+/// Why the alias scan could not extend a private PCH view.
+#[derive(Debug)]
+pub(in crate::daemon::server) struct AliasScanError(String);
+
+impl std::fmt::Display for AliasScanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "PCH alias scan: {}", self.0)
     }
+}
+
+fn refusal(path: &Path, error: impl std::fmt::Display) -> AliasScanError {
+    AliasScanError(format!("{}: {error}", path.display()))
 }
 
 /// Retain each original spelling, including hardlinks and symlinked directories.
@@ -22,7 +33,7 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
     client_env: &Option<Vec<(String, String)>>,
     lineage: &crate::daemon::lineage::Lineage,
     stdin: Option<&[u8]>,
-) -> Result<(), PchRefusal> {
+) -> Result<(), AliasScanError> {
     let fail = |error| refusal(overlay_path, error);
     let bytes = std::fs::read(overlay_path).map_err(|error| fail(error.to_string()))?;
     let mut document: serde_json::Value =
@@ -64,18 +75,15 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
         "zccache_pch_alias_scan".to_owned(),
     ]);
     scan_args.splice(insertion..insertion, private_flags);
-    let response = crate::compiler::response_file::write_response_file_if_needed(
-        &scan_args,
-        directory,
+    let (builder, _response_file) = super::super::compiler_spawn::internal_scan_spawn(
+        compiler.as_path(),
         crate::compiler::CompilerFamily::Clang,
+        &scan_args,
+        Some(cwd),
+        Some(directory),
     )
-    .map_err(|error| fail(error.to_string()))?;
-    let mut builder = kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd);
-    builder = if let Some(response) = &response {
-        builder.arg(response.at_arg())
-    } else {
-        builder.args(&scan_args)
-    };
+    .map_err(|error| fail(error.to_string()))?
+    .into_parts();
     let builder = super::super::client_env::apply_client_env_builder(
         builder,
         client_env,
@@ -156,7 +164,7 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
 fn coalesce_roots(
     roots: &mut [serde_json::Value],
     overlay: &Path,
-) -> Result<Vec<(String, NormalizedPath)>, PchRefusal> {
+) -> Result<Vec<(String, NormalizedPath)>, AliasScanError> {
     let mut mappings: Vec<(String, NormalizedPath)> = Vec::new();
     for root in roots {
         let original = root["name"]

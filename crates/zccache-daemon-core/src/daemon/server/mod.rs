@@ -188,6 +188,7 @@ mod compile_concurrency;
 mod compile_progress;
 pub(crate) mod compile_resource_gate;
 mod compiler_hash;
+mod compiler_spawn;
 mod connection;
 mod dependency_policy;
 mod depfile_root;

@@ -49,6 +49,8 @@ pub(super) struct CompileExecOutcome {
 pub(super) enum CompileExecResult {
     Ok(CompileExecOutcome),
     Error(Response),
+    /// An internal scan failed: run the compile through the uncached bypass.
+    Uncached,
 }
 
 struct PrivateHeaderTrace {
@@ -251,6 +253,25 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         }
     };
 
+    let literal_rsp_guard = if is_rustc && _rsp_guard.is_none() {
+        match crate::compiler::response_file::preserve_rustc_literal_at_args(
+            rsp_args,
+            &state.depfile_tmpdir,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                return CompileExecResult::Error(Response::Error {
+                    message: format!("failed to preserve literal compiler arguments: {error}"),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let spawn_args = literal_rsp_guard
+        .as_ref()
+        .map_or(rsp_args, |guard| guard.args());
+
     let output_paths = staged_plan
         .as_ref()
         .map_or(expected_outputs, StagedCompilePlan::output_paths);
@@ -267,12 +288,12 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     }
     let break_outputs_ns = t_break_outputs.elapsed().as_nanos() as u64;
 
-    let mut builder = kernal_api::SpawnSpec::new(compiler);
-    if let Some(ref rsp) = _rsp_guard {
-        builder = builder.arg(rsp.at_arg()).current_dir(cwd);
-    } else {
-        builder = builder.args(rsp_args).current_dir(cwd);
-    }
+    let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
+        compiler.as_path(),
+        cwd,
+        spawn_args,
+        _rsp_guard.as_ref(),
+    );
     builder = apply_client_env_builder(
         builder,
         client_env,
@@ -334,7 +355,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     // The preprocessor pass is a compiler child too: it shares the same
     // bounded admission as the actual compile instead of bypassing the gate.
     if let Some(overlay) = pch_overlay {
-        if let Err(refusal) = super::super::pch_overlay_aliases::extend_overlay_aliases(
+        if let Err(error) = super::super::pch_overlay_aliases::extend_overlay_aliases(
             overlay,
             compiler,
             effective_args,
@@ -345,9 +366,13 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         )
         .await
         {
-            return CompileExecResult::Error(Response::Error {
-                message: format!("PCH alias validation failed: {refusal}"),
-            });
+            // #2027: fail open. A failed internal scan gives up the cached
+            // path for this compile, never the compile itself.
+            crate::daemon::server::compiler_spawn::log_internal_scan_failure(
+                "PCH include alias scan",
+                &error,
+            );
+            return CompileExecResult::Uncached;
         }
     }
 
@@ -553,6 +578,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     // the same — the guard drops when `run_compile_exec` returns, which is
     // before any subsequent post-exec work touches the response file.
     drop(_rsp_guard);
+    drop(literal_rsp_guard);
 
     CompileExecResult::Ok(CompileExecOutcome {
         exit_code,
