@@ -128,8 +128,8 @@ jobs:
   # PR runs keep using the standalone workflows (no duplicate PR cost).
   linux:
     name: Linux x86
-    needs: cache-pre-prune
-    if: github.event_name == 'merge_group' || github.event_name == 'pull_request' # TEMP proof, narrowed before merge
+    needs: [ci-mode, cache-pre-prune]
+    if: github.event_name == 'merge_group'
     uses: ./.github/workflows/ci-check.yml
     secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
@@ -137,7 +137,8 @@ jobs:
 
   python:
     name: Python Tests
-    if: github.event_name == 'merge_group' || github.event_name == 'pull_request' # TEMP proof, narrowed before merge
+    needs: ci-mode
+    if: github.event_name == 'merge_group'
     uses: ./.github/workflows/python-tests.yml
     secrets: inherit # SOLDR_S3_CACHE_* for native-pytest's S3 build cache
 
