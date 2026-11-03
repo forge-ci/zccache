@@ -626,10 +626,15 @@ pub fn parse_rustc_plan_with_syntax(
             continue;
         }
 
-        // Positional arg — source file candidate (.rs)
-        if arg.ends_with(".rs") {
-            source_file = Some(arg.clone());
+        // Only the single modeled source may enter the artifact cache.
+        // Ignoring another positional input can reuse a valid artifact for
+        // an invocation the compiler would reject before compilation.
+        if !arg.ends_with(".rs") || source_file.is_some() {
+            return RustcPlan::NonCacheable {
+                reason: "unsupported Rust positional input layout".to_string(),
+            };
         }
+        source_file = Some(arg.clone());
 
         i += 1;
     }

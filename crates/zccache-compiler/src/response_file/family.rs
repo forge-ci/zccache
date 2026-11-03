@@ -1,8 +1,8 @@
 //! Response-file grammar per compiler family.
 //!
-//! GCC, Clang and MSVC split an `@file` on whitespace, honour quotes and
-//! escapes, and expand nested `@file`s ([`super::parse_response_file_content`]).
-//! rustc does none of that: `rustc_driver_impl/src/args.rs` makes every line
+//! Non-Rust families retain the existing whitespace/quote reader and nested
+//! expansion ([`super::parse_response_file_content`]).
+//! The Rust reader in `rustc_driver_impl/src/args.rs` makes every line
 //! one argument, verbatim, and never expands an `@` line read from a file.
 //! Cargo relies on this when a command line is too long for Windows: its
 //! argfile holds one argument per line, including `--check-cfg` values such
@@ -61,7 +61,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let args = vec!["@".to_owned()];
         assert!(super::expand_response_files_in_for(
-            &args, dir.path(), crate::CompilerFamily::Rustc,
-        ).is_err());
+            &args,
+            dir.path(),
+            crate::CompilerFamily::Rustc,
+        )
+        .is_err());
     }
 }

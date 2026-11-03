@@ -158,8 +158,8 @@ fn expand_recursive(
 
     for arg in args {
         if let Some(filename) = arg.strip_prefix('@') {
-            if filename.is_empty() {
-                // Bare `@` is not a response file reference
+            if filename.is_empty() && family != crate::CompilerFamily::Rustc {
+                // Keep the legacy non-Rust handling of a bare `@`.
                 result.push(arg.clone());
                 continue;
             }
