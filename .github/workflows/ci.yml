@@ -3,30 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   # GEN-022 (forge-ci/ci.yml#405/#432): main merges through a merge queue,
   # which validates the exact merge commit. paths-ignore does not apply to
   # merge_group, so every queued PR runs the gate.
@@ -53,6 +31,34 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # All PR checks run in this attempt, including reusable workflow children.
+  # No paths filter: the Python and feature-matrix guards also police docs.
+  linux:
+    name: Linux
+    needs: ci-mode
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ci-linux.yml
+    secrets: inherit
+
+  python-tests:
+    name: Python Tests
+    needs: ci-mode
+    uses: ./.github/workflows/python-tests.yml
+    secrets: inherit
+
+  wire-stability:
+    name: Wire stability
+    needs: ci-mode
+    uses: ./.github/workflows/wire-stability.yml
+
+  feature-matrix:
+    name: Feature matrix
+    needs: ci-mode
+    uses: ./.github/workflows/feature-matrix-check.yml
+
   # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit
   # (gh-readonly-queue/main/pr-<N>-<sha>), so the concurrency group above never
   # pairs a PR's rebuilt queue run with the one main's movement replaced; this
@@ -383,6 +389,12 @@ jobs:
         # The Clippy workflow runs only on main pushes without -D warnings
         # (#944), so the ban is enforced here for every PR and merge group.
         run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
+      - name: Rust argfile execution regressions
+        run: |
+          native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"
+          export PATH="${native_compiler_dir}:${PATH}"
+          test -x "${native_compiler_dir}/rustc"
+          soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |
@@ -538,7 +550,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -572,7 +584,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

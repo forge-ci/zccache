@@ -22,8 +22,8 @@ import urllib.request
 BLOCKING = frozenset(
     {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 )
-# Itself and maintenance jobs that are not part of the verdict.
-EXEMPT_PREFIXES = ("CI summary", "Cache janitor", "Cancel superseded")
+# Only the running aggregate itself is outside the verdict.
+EXEMPT_PREFIXES = ("CI summary",)
 
 
 def blocking_jobs(jobs: list[dict]) -> list[tuple[str, str]]:

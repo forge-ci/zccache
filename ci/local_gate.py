@@ -48,6 +48,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TypeAlias
 
@@ -203,6 +204,10 @@ def checks() -> list[Check]:
         # critical path), and until it had a lane here an attested head could
         # not skip it -- so every attested PR still paid it. Replay the real
         # job rather than mirroring its steps, so the lane cannot drift.
+        # Locally it takes ~8-11m warm and up to ~30-55m when the dylint
+        # build-cache was evicted from Bosn's per-repository act cache budget
+        # (8 GiB, LRU) or the host is oversubscribed; the timing summary
+        # printed after the lane shows which step grew.
         Check(
             "Dylint (isolated Bosn Actions)",
             (
@@ -226,7 +231,11 @@ def checks() -> list[Check]:
             bosn_workflow=".github/workflows/ci.yml",
             bosn_job="dylint",
             selected_job="dylint",
-            required_steps=("Run Dylint", "Prove custom-lint selection for every OS"),
+            required_steps=(
+                "Run Dylint",
+                "Rust argfile execution regressions",
+                "Prove custom-lint selection for every OS",
+            ),
         ),
         Check(
             "rustdoc",
@@ -522,6 +531,47 @@ def bosn_fidelity_error(host_arch: str, daemon: Captured) -> str | None:
     return None
 
 
+def _epoch(value: JsonValue) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def bosn_timing_summary(output: str, *, top: int = 8) -> str | None:
+    """Where a Bosn replay spent its wall clock: queue wait, run time and the
+    slowest job steps, read from the receipt. A replay can take 6x its usual
+    time on a contended host or a cold cache; this makes a slow lane show
+    which step grew without opening `bosn ci show`. Best effort: a receipt it
+    cannot read yields None, never a gate failure."""
+    try:
+        document = _document(json.loads(next(line for line in output.splitlines() if line.startswith("{"))))
+        created, started, finished = (document.get(k) for k in ("created_at", "started_at", "finished_at"))
+        steps: list[tuple[float, str]] = []
+        for group in _values(_document(document["tree"])["groups"]):
+            for job in _values(_document(group)["jobs"]):
+                job_doc = _document(job)
+                for section in _values(job_doc["sections"]):
+                    sec = _document(section)
+                    begin, end = _epoch(sec.get("started_at")), _epoch(sec.get("completed_at"))
+                    if begin is not None and end is not None:
+                        steps.append((end - begin, f"{_text(job_doc['job_id'])}: {_text(sec['name'])}"))
+    except (StopIteration, KeyError, ValueError, TypeError):
+        return None
+    if not all(isinstance(v, (int, float)) for v in (created, started, finished)):
+        return None
+    assert isinstance(created, (int, float)) and isinstance(started, (int, float)) and isinstance(finished, (int, float))
+    lines = [
+        f"  bosn run {document.get('id', '?')}: queued {started - created:.0f}s, "
+        f"ran {finished - started:.0f}s (act {document.get('act_version', '?')})"
+    ]
+    for seconds, name in sorted(steps, reverse=True)[:top]:
+        lines.append(f"  {seconds:7.0f}s  {name}")
+    return "\n".join(lines)
+
+
 def _run(check: Check) -> Result:
     head = None
     if check.bosn_workflow:
@@ -592,6 +642,9 @@ def _save_log(result: Result) -> Path:
 def _report(result: Result) -> None:
     status = "ok  " if result.code == 0 else "FAIL"
     print(f"{status} {result.seconds:6.1f}s  {result.check.name}", flush=True)
+    summary = bosn_timing_summary(result.output) if result.check.bosn_workflow else None
+    if summary:
+        print(summary, flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

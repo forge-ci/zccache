@@ -277,6 +277,9 @@ def installed_pe_files() -> list[Path]:
 def authenticode_status(binary: Path) -> str:
     """Windows' own verdict on a PE's signature (chain, timestamp, hash)."""
     literal = str(binary.resolve()).replace("'", "''")
+    # A pwsh 7 step exports its own PSModulePath; Windows PowerShell 5.1 then
+    # cannot autoload Microsoft.PowerShell.Security. Let 5.1 use its default.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
     completed = subprocess.run(
         [
             "powershell",
@@ -288,6 +291,7 @@ def authenticode_status(binary: Path) -> str:
         stdout=subprocess.PIPE,
         text=True,
         check=True,
+        env=env,
     )
     return completed.stdout.strip()
 

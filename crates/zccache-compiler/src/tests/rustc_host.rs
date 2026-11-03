@@ -3,6 +3,25 @@ use super::args;
 use crate::{parse_rustc_invocation_with_host, ParsedInvocation, RustcHost};
 
 #[test]
+fn rustc_unmodeled_positional_inputs_are_not_cacheable() {
+    for host in [RustcHost::Linux, RustcHost::Macos, RustcHost::Windows] {
+        for extra in ["@nested.rsp", "second.rs"] {
+            let arguments = args(&[
+                "--crate-name",
+                "fixture",
+                "--crate-type=rlib",
+                "source.rs",
+                extra,
+            ]);
+            assert!(matches!(
+                parse_rustc_invocation_with_host("rustc", &arguments, host, false),
+                ParsedInvocation::NonCacheable { .. }
+            ));
+        }
+    }
+}
+
+#[test]
 fn lexical_path_syntax_is_independent_of_compiler_host() {
     use crate::rustc_path::RustcPathSyntax;
     assert_eq!(
