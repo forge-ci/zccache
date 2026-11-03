@@ -16,15 +16,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  aggregation-proof:
-    name: Deliberate Linux aggregation failure
-    runs-on: ubuntu-24.04
-    timeout-minutes: 1
-    steps:
-      - run: |
-          echo 'Deliberate constituent failure to verify CI summary'
-          exit 1
-
   # GEN-021 verified reuse, SHADOW mode only (zackees/ci.yml#162). It records
   # whether this main push's tree is byte-identical to a PR head whose Linux
   # CI passed the jobs listed below, in the job summary. Observation only:
