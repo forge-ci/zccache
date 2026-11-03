@@ -3,17 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   pull_request:
     branches: [main]
   # GEN-022 (forge-ci/ci.yml#405/#432): main merges through a merge queue,
@@ -50,24 +39,20 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/ci-linux.yml
     secrets: inherit
 
   python-tests:
     name: Python Tests
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/python-tests.yml
     secrets: inherit
 
   wire-stability:
     name: Wire stability
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/wire-stability.yml
 
   feature-matrix:
     name: Feature matrix
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: ./.github/workflows/feature-matrix-check.yml
 
   # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit

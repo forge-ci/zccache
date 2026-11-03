@@ -12,8 +12,6 @@ name: Wire stability
 # so it runs in seconds and never falls behind on cache state.
 
 on:
-  push:
-    branches: [main]
   workflow_call:
 
 # Auto-cancel superseded PR runs: pushing again to a feature branch

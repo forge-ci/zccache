@@ -9,7 +9,7 @@ name: Python Tests
 # contracts without adding a distinct source-level test surface.
 #
 # Called by CI on pull_request and merge_group, including docs-only changes.
-# Standalone main pushes retain the existing post-merge validation.
+# Main pushes run through the same CI aggregate.
 #
 # Runs on `ubuntu-latest` for `git` and `jq`, both preinstalled -- `jq` is
 # required by the `perf/lib/common.sh` helpers that test_perf_infrastructure_guard
@@ -28,8 +28,6 @@ name: Python Tests
 #     --with pyyaml python -m pytest ci/tests
 
 on:
-  push:
-    branches: [main]
   workflow_call:
 
 permissions:

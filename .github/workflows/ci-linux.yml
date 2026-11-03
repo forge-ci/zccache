@@ -3,19 +3,6 @@ name: Linux
 on:
   # Manual full run (includes native arm64); see the `arm` job.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   workflow_call:
 
 permissions:
@@ -69,12 +56,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          python3 -m ci_lint reuse-check --workflow ci-linux.yml --mode shadow
+          python3 -m ci_lint reuse-check --workflow ci.yml --mode shadow
           --max-age-hours 24
-          --required-job "x86 / Check"
-          --required-job "x86 / Test"
-          --required-job "x86-musl / Check (linux-x86-musl)"
-          --required-job "arm-musl / Check (linux-arm-musl)"
+          --required-job "Linux / x86 / Check"
+          --required-job "Linux / x86 / Test"
+          --required-job "Linux / x86-musl / Check (linux-x86-musl)"
+          --required-job "Linux / arm-musl / Check (linux-arm-musl)"
 
   cache-pre-prune:
     name: Cache pre-prune barrier

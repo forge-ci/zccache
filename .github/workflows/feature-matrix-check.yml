@@ -7,14 +7,6 @@ name: Feature Matrix Check
 #   uv run --with pyyaml python ci/render_feature_matrix.py
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/feature-matrix.yaml"
-      - "docs/FEATURE-MATRIX.md"
-      - "ci/render_feature_matrix.py"
-      - "README.md"
-      - ".github/workflows/feature-matrix-check.yml"
   workflow_call:
 
 # Auto-cancel superseded PR runs: pushing again to a feature branch
