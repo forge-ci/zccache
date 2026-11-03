@@ -40,7 +40,6 @@
 //! platform zccache ships (see its own doc comments for the per-platform
 //! mechanics).
 
-use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -65,11 +64,7 @@ pub const LAST_ACTIVE_MARKER_FILE: &str = ".last-active";
 /// # Errors
 /// Returns any I/O error from opening the marker or setting its mtime.
 pub fn touch_store_activity_marker(store: &Path) -> io::Result<()> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(store.join(LAST_ACTIVE_MARKER_FILE))?;
+    let file = kernal_api::platform::fs::create_file(store.join(LAST_ACTIVE_MARKER_FILE))?;
     file.set_modified(SystemTime::now())
 }
 
@@ -289,7 +284,7 @@ pub fn sweep_retired_version_store_with_mode(
     if mode == RetiredSweepMode::Routine {
         let marker_recent =
             kernal_api::platform::fs::path_metadata(store.join(LAST_ACTIVE_MARKER_FILE))
-                .is_ok_and(|metadata| !is_older_than(&metadata, now, max_age));
+                .is_ok_and(|metadata| !is_older_than(metadata.modified().ok(), now, max_age));
         if marker_recent {
             report.stores_recently_active += 1;
             return report;
@@ -382,11 +377,7 @@ fn acquire_store_lock(
     store: &Path,
 ) -> Result<Option<kernal_api::platform::fs::OwnedFileLock>, LockAcquireOutcome> {
     let lock_path = store.join(WRITER_LOCK_FILE_NAME);
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-    {
+    let file = match kernal_api::platform::fs::open_read_regular_file(&lock_path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(LockAcquireOutcome::Failed),
@@ -506,7 +497,7 @@ fn sweep_regular_file(
     );
     let should_delete = match (mode, link_count) {
         (RetiredSweepMode::Pressure, Some(1)) => true,
-        _ => is_older_than(&metadata, now, max_age),
+        _ => is_older_than(metadata.modified().ok(), now, max_age),
     };
     if !should_delete {
         return;
@@ -524,10 +515,8 @@ fn sweep_regular_file(
     }
 }
 
-fn is_older_than(metadata: &Metadata, now: SystemTime, max_age: Duration) -> bool {
-    metadata
-        .modified()
-        .ok()
+fn is_older_than(modified: Option<SystemTime>, now: SystemTime, max_age: Duration) -> bool {
+    modified
         .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|age| age >= max_age)
 }

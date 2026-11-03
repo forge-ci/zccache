@@ -23,6 +23,10 @@ name = "ban_std_fs_outside_adapters"
 # `std::fs` call was `read`/`read_to_string`, now on the 0.1.36 read side).
 # 2026-11-01: 0.1.2 shrinks allowlist 63 -> 56 (read-side burn onto
 # kernal-api 0.1.36: read_file / read_to_string / symlink_metadata).
+# 2026-11-03: 0.1.13 shrinks allowlist 14 -> 8 (marker footer reads/appends, object-store counters and lock,
+# staged-store sync/write/read/lock, retired-store marker/lock/age check, fscache verify metadata and the
+# staged-root link removal move onto open_read_regular_file/open_shared_append/create_file/create_private_file/
+# open_read_write_file/open_lock_file/read_to_string from the 0.1.37 facade).
 # 2026-11-03: 0.1.12 shrinks allowlist 15 -> 14 (pch provenance import
 # verification moves File::open and OpenOptions create_new+write onto
 # open_read_regular_file/create_private_file from the 0.1.37 facade).
@@ -32,7 +36,7 @@ name = "ban_std_fs_outside_adapters"
 # read_dir/read/set_permissions/File/OpenOptions/Metadata uses onto
 # read_dir_paths/symlink_metadata/read_file/set_permissions/
 # open_read_regular_file/create_private_file).
-version = "0.1.12"
+version = "0.1.13"
 description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
 edition = "2021"
 publish = false

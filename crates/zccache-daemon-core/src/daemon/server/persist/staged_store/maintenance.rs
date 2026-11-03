@@ -215,7 +215,7 @@ pub(super) fn remove_staged_tree(path: &Path) -> io::Result<u64> {
         Err(error) => return Err(error),
     };
     if is_staged_link_or_reparse(path) {
-        remove_staged_link_or_reparse(path, &metadata)?;
+        remove_staged_link_or_reparse(path, metadata.is_dir())?;
         return Ok(0);
     }
     if metadata.is_dir() {

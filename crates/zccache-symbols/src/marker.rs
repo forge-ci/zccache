@@ -19,7 +19,6 @@
 //! Absence of the magic means "dev build"; callers fall back to local
 //! `target/release/*.{pdb,dwp,dSYM}` rather than attempting any fetch.
 
-use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -60,7 +59,7 @@ pub fn read_marker_from_current_exe() -> Option<ReleaseMarker> {
 /// symbolicate` when the user passes `--binary <path>` explicitly.
 #[must_use]
 pub fn read_marker_from_path(path: &Path) -> Option<ReleaseMarker> {
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = kernal_api::platform::fs::open_read_regular_file(path).ok()?;
     let len = file.metadata().ok()?.len();
     if len < MARKER_SIZE as u64 {
         return None;
@@ -80,7 +79,7 @@ pub fn read_marker_from_path(path: &Path) -> Option<ReleaseMarker> {
 /// exceeds its on-disk slot.
 pub fn write_marker_to_binary(path: &Path, marker: &ReleaseMarker) -> std::io::Result<()> {
     let footer = encode_footer(marker)?;
-    let mut file = OpenOptions::new().append(true).open(path)?;
+    let mut file = kernal_api::platform::fs::open_shared_append(path)?;
     file.write_all(&footer)?;
     file.flush()?;
     Ok(())

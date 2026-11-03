@@ -9,14 +9,8 @@
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-core/src/config/materialization_mode.rs
-crates/zccache-core/src/config/retired_store.rs
 crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
-crates/zccache-daemon-core/src/daemon/server/persist/object_store.rs
-crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
-crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
 crates/zccache-fingerprint/src/file_lock.rs
-crates/zccache-fscache/src/verify.rs
 crates/zccache-hash/src/native.rs
-crates/zccache-symbols/src/marker.rs

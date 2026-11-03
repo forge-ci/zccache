@@ -5,7 +5,7 @@
 
 use super::metadata::{Confidence, FileMetadata, MetadataCache};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use zccache_core::{NormalizedPath, Result};
 use zccache_hash::ContentHash;
 
@@ -21,10 +21,10 @@ pub enum VerifyResult {
 }
 
 impl MetadataCache {
-    fn metadata_from_fs(fs_meta: std::fs::Metadata) -> Result<FileMetadata> {
+    fn metadata_from_parts(mtime: SystemTime, size: u64) -> Result<FileMetadata> {
         Ok(FileMetadata {
-            mtime: fs_meta.modified()?,
-            size: fs_meta.len(),
+            mtime,
+            size,
             confidence: Confidence::High,
             last_verified: Instant::now(),
             content_hash: None,
@@ -39,7 +39,8 @@ impl MetadataCache {
     ///
     /// Returns an error if the file cannot be stat'd (not found, permission denied, etc.).
     pub fn stat_file(path: &Path) -> Result<FileMetadata> {
-        Self::metadata_from_fs(kernal_api::platform::fs::path_metadata(path)?)
+        let metadata = kernal_api::platform::fs::path_metadata(path)?;
+        Self::metadata_from_parts(metadata.modified()?, metadata.len())
     }
 
     /// Verify whether the cached entry for `path` still matches the filesystem.
@@ -185,8 +186,9 @@ impl MetadataCache {
 }
 
 fn hash_file_snapshot(path: &Path) -> Result<(FileMetadata, ContentHash, FileMetadata)> {
-    let file = std::fs::File::open(path)?;
-    let pre = MetadataCache::metadata_from_fs(file.metadata()?)?;
+    let file = kernal_api::platform::fs::open_read_regular_file(path)?;
+    let metadata = file.metadata()?;
+    let pre = MetadataCache::metadata_from_parts(metadata.modified()?, metadata.len())?;
     let hash = zccache_hash::hash_open_file(&file, pre.size)?;
     let post = MetadataCache::stat_file(path)?;
     Ok((pre, hash, post))
@@ -196,7 +198,6 @@ fn hash_file_snapshot(path: &Path) -> Result<(FileMetadata, ContentHash, FileMet
 mod tests {
     use super::Confidence;
     use super::*;
-    use std::fs;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -604,7 +605,7 @@ mod tests {
 
         sleep_for_mtime();
         use std::io::Write;
-        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = kernal_api::platform::fs::open_shared_append(&path).unwrap();
         f.write_all(b"line 2\n").unwrap();
         drop(f);
 
