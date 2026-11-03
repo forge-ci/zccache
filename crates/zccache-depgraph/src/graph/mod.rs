@@ -15,6 +15,10 @@ mod maintenance;
 mod register;
 mod update;
 
+#[cfg(test)]
+#[path = "tests/normalized_inputs.rs"]
+mod normalized_input_tests;
+
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
