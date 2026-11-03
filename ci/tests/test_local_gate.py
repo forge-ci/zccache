@@ -10,6 +10,7 @@ the isolated lane never learned about.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -127,3 +128,47 @@ def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
     ) in block
     check = next(check for check in local_gate.checks() if check.lane == "dylint")
     assert "Rust argfile execution regressions" in check.required_steps
+
+
+def _receipt(sections: list[dict[str, object]]) -> str:
+    return json.dumps(
+        {
+            "id": "run-1",
+            "act_version": "0.2.89-act2.36",
+            "created_at": 100.0,
+            "started_at": 130.0,
+            "finished_at": 730.0,
+            "tree": {"groups": [{"jobs": [{"job_id": "dylint", "sections": sections}]}]},
+        }
+    )
+
+
+def test_bosn_timing_summary_names_queue_wait_and_slowest_steps() -> None:
+    summary = local_gate.bosn_timing_summary(
+        _receipt(
+            [
+                {
+                    "name": "Run Dylint",
+                    "started_at": "2026-11-02T21:00:00Z",
+                    "completed_at": "2026-11-02T21:03:39Z",
+                },
+                {
+                    "name": "zackees/setup-soldr@v0",
+                    "started_at": "2026-11-02T20:58:00Z",
+                    "completed_at": "2026-11-02T20:59:34Z",
+                },
+                {"name": "never started", "started_at": None, "completed_at": None},
+            ]
+        )
+    )
+    assert summary is not None
+    lines = summary.splitlines()
+    assert "queued 30s, ran 600s (act 0.2.89-act2.36)" in lines[0]
+    assert lines[1].split() == ["219s", "dylint:", "Run", "Dylint"]
+    assert "setup-soldr" in lines[2]
+    assert len(lines) == 3
+
+
+def test_bosn_timing_summary_never_fails_the_gate_on_odd_output() -> None:
+    assert local_gate.bosn_timing_summary("not json") is None
+    assert local_gate.bosn_timing_summary('{"tree": {}}') is None
