@@ -1585,3 +1585,9 @@ native kernal foreground/sync APIs are included in UI and the full gate.
 - [x] Fail tests first for colored nextest parsing, unknown failure and SIGKILL classification.
 - [x] Add scoped step logs, parsed failures and timestamped host/runner samples.
 - [ ] Complete pre-push review and validation; publish an unmerged PR.
+
+## PR #2056 honest CI summary recovery
+
+- [x] Recover agg-2056 onto current main; retain concurrency fixes and remove obsolete queue-only duplicate callers.
+- [ ] Validate summary, workflow guards, and local gate; review final diff.
+- [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.

@@ -3,30 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
   # GEN-022 (forge-ci/ci.yml#405/#432): main merges through a merge queue,
   # which validates the exact merge commit. paths-ignore does not apply to
   # merge_group, so every queued PR runs the gate.
@@ -53,6 +31,34 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # All PR checks run in this attempt, including reusable workflow children.
+  # No paths filter: the Python and feature-matrix guards also police docs.
+  linux:
+    name: Linux
+    needs: ci-mode
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ci-linux.yml
+    secrets: inherit
+
+  python-tests:
+    name: Python Tests
+    needs: ci-mode
+    uses: ./.github/workflows/python-tests.yml
+    secrets: inherit
+
+  wire-stability:
+    name: Wire stability
+    needs: ci-mode
+    uses: ./.github/workflows/wire-stability.yml
+
+  feature-matrix:
+    name: Feature matrix
+    needs: ci-mode
+    uses: ./.github/workflows/feature-matrix-check.yml
+
   # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit
   # (gh-readonly-queue/main/pr-<N>-<sha>), so the concurrency group above never
   # pairs a PR's rebuilt queue run with the one main's movement replaced; this
@@ -118,29 +124,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-
-  # Merge-queue validation lanes. The standard Linux check+test and Python
-  # suites live in ci-linux.yml / python-tests.yml, which run on push and
-  # pull_request but have no merge_group trigger, so without these calls the
-  # queue's required `CI summary` blessed merge commits nothing had compiled
-  # or tested. Only the core lanes run here: arm/musl cells, wheels, wine,
-  # cook-size, coverage and PEP 517 smoke stay on push-to-main/nightly.
-  # PR runs keep using the standalone workflows (no duplicate PR cost).
-  linux:
-    name: Linux x86
-    needs: [ci-mode, cache-pre-prune]
-    if: github.event_name == 'merge_group'
-    uses: ./.github/workflows/ci-check.yml
-    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
-    with:
-      os: ubuntu-latest
-
-  python:
-    name: Python Tests
-    needs: ci-mode
-    if: github.event_name == 'merge_group'
-    uses: ./.github/workflows/python-tests.yml
-    secrets: inherit # SOLDR_S3_CACHE_* for native-pytest's S3 build cache
 
   # GATE-001 mirror: runs exactly the local gate's `lint` lane and nothing
   # else, so every check here is one `ci-lint local-gate run` already ran.
@@ -567,7 +550,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -601,7 +584,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, linux, python]
+    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

@@ -83,12 +83,16 @@ def _check_job_writers(
 ) -> bool:
     triggers = workflow.get(True, workflow.get("on", {})) or {}
     pushes_main = triggers.get("push", {}).get("branches") == ["main"]
+    # Reusable producers inherit the caller's main-push event. Keep their
+    # historical writer registrations too: pre-consolidation runs may still
+    # be writing while the first consolidated CI run reaches the barrier.
+    main_capable = pushes_main or "workflow_call" in triggers
     wait = _wait_evidence(workflow, job, has_wait_job)
-    requires_wait = pushes_main or "workflow_call" in triggers
+    requires_wait = main_capable
     observed_writer = False
     if (
         str(job.get("uses", "")).startswith("./.github/workflows/ci-check")
-        and pushes_main
+        and main_capable
     ):
         _require_wait(wait, label)
         observed_writer = True
@@ -112,9 +116,9 @@ def _check_job_writers(
         if writes_cache or writes_uv or writes_action or direct_api:
             if requires_wait:
                 _require_wait(wait, label, index)
-            if pushes_main:
+            if main_capable:
                 observed_writer = True
-        if uses == "./.github/actions/build-target" and pushes_main:
+        if uses == "./.github/actions/build-target" and main_capable:
             observed_writer = True
     return observed_writer
 
