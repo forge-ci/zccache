@@ -148,7 +148,7 @@ pub(in crate::daemon::server) fn canonicalize_logical_depfile(
     private_root: &Path,
     requested: &NormalizedPath,
 ) -> io::Result<()> {
-    let bytes = std::fs::read(path)?;
+    let bytes = kernal_api::platform::fs::read_file(path)?;
     let staged_path = path.to_string_lossy();
     let canonical_path = canonical_output_path(requested);
     let mut rewritten =
@@ -189,7 +189,7 @@ pub(in crate::daemon::server) fn rehydrate_logical_depfile(
     path: &Path,
     requested_outputs: &[NormalizedPath],
 ) -> io::Result<()> {
-    let bytes = std::fs::read(path)?;
+    let bytes = kernal_api::platform::fs::read_file(path)?;
     let rewritten = rehydrate_logical_depfile_bytes(&bytes, requested_outputs);
     if rewritten != bytes {
         // This is a compiler-visible output, not the durable published copy.
@@ -210,7 +210,7 @@ pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
     generated_name: Option<&str>,
 ) -> io::Result<()> {
     const PREFIX: &[u8] = b"# env-dep:OUT_DIR=";
-    let bytes = std::fs::read(path)?;
+    let bytes = kernal_api::platform::fs::read_file(path)?;
     let mut old_out_dir = None;
     for line in bytes.split(|byte| *byte == b'\n') {
         if let Some(value) = line.strip_prefix(PREFIX) {
@@ -316,10 +316,7 @@ fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
         std::process::id()
     ));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
+        let mut file = kernal_api::platform::fs::create_file(&temporary)?;
         file.write_all(bytes)?;
         drop(file);
         // The destination depfile is often the COW-lite hardlink materialized
@@ -452,7 +449,7 @@ mod tests {
         );
         kernal_api::platform::fs::write_file(&depfile, original).expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
-        let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
+        let text = kernal_api::platform::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert!(text.contains(&String::from_utf8_lossy(&new_generated).into_owned()));
         assert!(text.contains(&format!("# env-dep:OUT_DIR={b_text}")));
         assert!(
@@ -483,7 +480,7 @@ mod tests {
         .expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs"))
             .expect("overlapping path should still rebase");
-        let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
+        let text = kernal_api::platform::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert_eq!(
             text,
             format!(
@@ -506,7 +503,7 @@ mod tests {
         kernal_api::platform::fs::write_file(&depfile, &original).expect("dep-info fixture");
         assert!(rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).is_err());
         assert_eq!(
-            std::fs::read(&depfile).expect("original dep-info"),
+            kernal_api::platform::fs::read_file(&depfile).expect("original dep-info"),
             original.as_bytes()
         );
     }
@@ -532,7 +529,7 @@ mod tests {
         )
         .expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("private.rs")).expect("rebase dep-info");
-        let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
+        let text = kernal_api::platform::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert!(text.contains(&String::from_utf8_lossy(&new_generated).into_owned()));
         assert!(text.contains(&format!("# env-dep:OUT_DIR={b_text}")));
         assert!(!text.contains(a_text.as_ref()));
@@ -553,7 +550,7 @@ mod tests {
         original.extend_from_slice(b"\r\n");
         kernal_api::platform::fs::write_file(&depfile, original).expect("dep-info fixture");
         rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
-        let bytes = std::fs::read(&depfile).expect("rebased dep-info");
+        let bytes = kernal_api::platform::fs::read_file(&depfile).expect("rebased dep-info");
         let new_generated = b.join("bindgen.rs");
         let new_quoted = quote_make_depfile_path(new_generated.to_string_lossy().as_bytes());
         assert!(bytes
@@ -582,7 +579,7 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            std::fs::read(&depfile).expect("unchanged dep-info"),
+            kernal_api::platform::fs::read_file(&depfile).expect("unchanged dep-info"),
             original
         );
     }
@@ -670,14 +667,13 @@ mod tests {
         rehydrate_logical_depfile(&depfile, &[output]).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(&depfile).unwrap(),
+            kernal_api::platform::fs::read_to_string(&depfile).unwrap(),
             format!("{}: input.h\n", temp.path().join("foo.o").display())
         );
         assert_eq!(
-            std::fs::read_dir(temp.path())
+            kernal_api::platform::fs::read_dir_paths(temp.path())
                 .unwrap()
-                .filter_map(Result::ok)
-                .count(),
+                .len(),
             1,
             "temporary replacement files must not remain visible"
         );
@@ -712,7 +708,7 @@ mod tests {
         let requested_output: NormalizedPath = requested_root.join("object name # $.o").into();
 
         canonicalize_logical_depfile(&staged_depfile, &private_root, &requested_depfile).unwrap();
-        let canonical = std::fs::read_to_string(&staged_depfile).unwrap();
+        let canonical = kernal_api::platform::fs::read_to_string(&staged_depfile).unwrap();
         assert!(
             canonical.contains(STAGED_OUTPUT_REMAP_ROOT),
             "escaped private root must be canonicalized: {canonical}"
@@ -724,7 +720,7 @@ mod tests {
 
         rehydrate_logical_depfile(&staged_depfile, &[requested_depfile, requested_output]).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&staged_depfile).unwrap(),
+            kernal_api::platform::fs::read_to_string(&staged_depfile).unwrap(),
             format!(
                 r"{}/workspace\ root\ \#\ $$/object\ name\ \#\ $$.o: source.h{}",
                 temp.path().display(),
@@ -749,7 +745,7 @@ mod tests {
         kernal_api::platform::fs::write_file(&staged_depfile, bytes).unwrap();
 
         canonicalize_logical_depfile(&staged_depfile, &private_root, &requested_depfile).unwrap();
-        let canonical = std::fs::read(&staged_depfile).unwrap();
+        let canonical = kernal_api::platform::fs::read_file(&staged_depfile).unwrap();
         assert_eq!(canonical[0], 0xff);
         assert!(contains_staged_output_marker(&canonical));
         assert!(!canonical
@@ -761,7 +757,7 @@ mod tests {
             &[requested_depfile.clone(), requested_output.clone()],
         )
         .unwrap();
-        let rehydrated = std::fs::read(&staged_depfile).unwrap();
+        let rehydrated = kernal_api::platform::fs::read_file(&staged_depfile).unwrap();
         assert_eq!(rehydrated[0], 0xff);
         assert!(rehydrated
             .windows(requested_depfile.to_string_lossy().len())

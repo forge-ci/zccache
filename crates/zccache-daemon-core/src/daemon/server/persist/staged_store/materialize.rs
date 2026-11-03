@@ -1,8 +1,6 @@
 //! Independent requested-path materialization and physical-work observations.
 
 use crate::core::config::MaterializationMode;
-#[cfg(test)]
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -186,7 +184,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
         {
             // Test seam: keep a write descriptor on the temporary open while
             // paused, modelling the descriptor `copy_output` holds mid-copy.
-            let open_for_write = fs::OpenOptions::new().write(true).open(&temporary)?;
+            let open_for_write = kernal_api::platform::fs::open_read_write_file(&temporary)?;
             super::hook::pause(
                 destination,
                 super::StagedHookPoint::MaterializeTemporaryOpen,

@@ -32,21 +32,28 @@ pub(super) fn versioned_top_level(cache_dir: &Path) -> Option<(NormalizedPath, S
 /// `file_may_free_space_on_removal`. Symlinks/reparse points are never
 /// followed; a file whose link count is unknown is treated as shared.
 pub(super) fn retired_store_bytes(top_level: &Path, current: &str) -> u64 {
-    let Ok(entries) = std::fs::read_dir(top_level) else {
+    let Ok(entries) = kernal_api::platform::fs::read_dir_paths(top_level) else {
         return 0;
     };
     let mut total = 0_u64;
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+    for path in entries {
+        if !kernal_api::platform::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_dir())
+        {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
         if !crate::core::config::is_version_dir_name(&name)
             || !crate::core::config::is_older_version_dir(&name, current)
         {
             continue;
         }
-        total = total.saturating_add(unshared_tree_bytes(&entry.path()));
+        total = total.saturating_add(unshared_tree_bytes(&path));
     }
     total
 }
@@ -57,13 +64,12 @@ fn unshared_tree_bytes(root: &Path) -> u64 {
     {
         return 0;
     }
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = kernal_api::platform::fs::read_dir_paths(root) else {
         return 0;
     };
     let mut total = 0_u64;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+    for path in entries {
+        let Ok(metadata) = kernal_api::platform::fs::symlink_metadata(&path) else {
             continue;
         };
         if crate::platform::fs::links::classify(&path)

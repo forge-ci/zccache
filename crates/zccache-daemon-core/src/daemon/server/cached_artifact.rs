@@ -511,14 +511,15 @@ pub(super) fn migrate_meta_files(
     use rayon::prelude::*;
 
     // Collect .meta file paths first.
-    let meta_paths: Vec<NormalizedPath> = match std::fs::read_dir(artifact_dir) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|e| e.path().into())
-            .filter(|p: &NormalizedPath| p.extension().and_then(|e| e.to_str()) == Some("meta"))
-            .collect(),
-        Err(_) => return 0,
-    };
+    let meta_paths: Vec<NormalizedPath> =
+        match kernal_api::platform::fs::read_dir_paths(artifact_dir) {
+            Ok(paths) => paths
+                .into_iter()
+                .map(NormalizedPath::from)
+                .filter(|p: &NormalizedPath| p.extension().and_then(|e| e.to_str()) == Some("meta"))
+                .collect(),
+            Err(_) => return 0,
+        };
 
     if meta_paths.is_empty() {
         return 0;

@@ -89,20 +89,20 @@ pub fn snapshot_directory_excluding(
     excluded_names: &HashSet<std::ffi::OsString>,
 ) -> std::io::Result<DirSnapshot> {
     let mut snap = DirSnapshot::default();
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(snap),
         Err(error) => return Err(error),
     };
-    for entry in entries {
-        let entry = entry?;
-        if excluded_names.contains(&entry.file_name()) {
+    for path in entries {
+        let Some(name) = path.file_name().map(std::ffi::OsStr::to_os_string) else {
+            continue;
+        };
+        if excluded_names.contains(&name) {
             continue;
         }
-        if entry.metadata()?.is_file() {
-            let path = entry.path();
-            snap.entries
-                .insert(entry.file_name(), stable_file_entry(&path)?);
+        if kernal_api::platform::fs::path_metadata(&path)?.is_file() {
+            snap.entries.insert(name, stable_file_entry(&path)?);
         }
     }
     Ok(snap)
@@ -118,19 +118,19 @@ pub fn detect_side_effects(
 ) -> std::io::Result<SideEffectScan> {
     let mut results = Vec::new();
 
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for path in kernal_api::platform::fs::read_dir_paths(dir)? {
+        let Some(name) = path.file_name().map(std::ffi::OsStr::to_os_string) else {
+            continue;
+        };
 
         // Skip the primary output and already-captured secondaries.
         if name == primary_name || already_captured.contains(&name) {
             continue;
         }
 
-        if !entry.metadata()?.is_file() {
+        if !kernal_api::platform::fs::path_metadata(&path)?.is_file() {
             continue;
         }
-        let path = entry.path();
         let current = stable_file_entry(&path)?;
 
         // Strong content identity catches same-size changes on filesystems
@@ -172,7 +172,6 @@ pub fn detect_side_effects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     fn snapshot(dir: &Path) -> DirSnapshot {
@@ -296,7 +295,7 @@ mod tests {
 
         // Create a file exceeding MAX_SIDE_EFFECT_SIZE (use sparse-like approach).
         let big_path = dir.path().join("huge.dll");
-        let f = fs::File::create(&big_path).unwrap();
+        let f = kernal_api::platform::fs::create_file(&big_path).unwrap();
         f.set_len(MAX_SIDE_EFFECT_SIZE + 1).unwrap();
 
         let found =

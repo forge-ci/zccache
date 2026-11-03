@@ -113,10 +113,8 @@ impl DaemonServer {
                 let result = kernal_api::async_engine::launch_blocking(move || {
                     let migrated = migrate_legacy_blob_digests(&migration_root)?;
                     use std::io::Write;
-                    let mut marker_file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&marker)?;
+                    let mut marker_file =
+                        kernal_api::platform::fs::create_private_file(&marker)?;
                     marker_file.write_all(b"v1\n")?;
                     marker_file.sync_all()?;
                     Ok::<usize, std::io::Error>(migrated)

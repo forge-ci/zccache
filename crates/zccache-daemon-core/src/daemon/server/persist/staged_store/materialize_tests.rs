@@ -12,9 +12,9 @@ use crate::core::config::MaterializationMode;
 fn staged_persist_and_materialization_report_physical_work() {
     let dir = tempfile::tempdir().unwrap();
     let artifact_dir = dir.path().join("artifacts");
-    fs::create_dir_all(&artifact_dir).unwrap();
+    kernal_api::platform::fs::create_dir_all(&artifact_dir).unwrap();
     let source = dir.path().join("source.rlib");
-    fs::write(&source, b"observable staged payload").unwrap();
+    kernal_api::platform::fs::write_file(&source, b"observable staged payload").unwrap();
 
     let persisted =
         persist_staged_artifact_paths(&artifact_dir, &"9".repeat(64), &[source.into()]).unwrap();
@@ -30,14 +30,17 @@ fn staged_persist_and_materialization_report_physical_work() {
         materialize_independent_with_mode(&payload, &destination, MaterializationMode::Auto)
             .unwrap();
     assert_eq!(materialized.reflink_count + materialized.copy_count, 1);
-    assert_eq!(fs::read(destination).unwrap(), b"observable staged payload");
+    assert_eq!(
+        kernal_api::platform::fs::read_file(destination).unwrap(),
+        b"observable staged payload"
+    );
 }
 
 #[test]
 fn independent_materialization_faults_fall_back_or_fail_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.rlib");
-    fs::write(&source, b"independent materialization payload").unwrap();
+    kernal_api::platform::fs::write_file(&source, b"independent materialization payload").unwrap();
 
     let fallback = dir.path().join("fallback.rlib");
     let reflink_fault = StagedFaultGuard::arm(dir.path(), [StagedFaultPoint::MaterializeReflink]);
@@ -47,7 +50,7 @@ fn independent_materialization_faults_fall_back_or_fail_cleanly() {
     assert_eq!(observed.copy_count, 1);
     assert_eq!(observed.copy_bytes, 35);
     assert_eq!(
-        fs::read(&fallback).unwrap(),
+        kernal_api::platform::fs::read_file(&fallback).unwrap(),
         b"independent materialization payload"
     );
     reflink_fault.assert_all_consumed();
@@ -73,8 +76,8 @@ fn independent_materialization_publishes_only_complete_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.bin");
     let destination = dir.path().join("destination.bin");
-    fs::write(&source, b"new complete output").unwrap();
-    fs::write(&destination, b"old complete output").unwrap();
+    kernal_api::platform::fs::write_file(&source, b"new complete output").unwrap();
+    kernal_api::platform::fs::write_file(&destination, b"old complete output").unwrap();
 
     let hook = StagedHookGuard::arm(&destination, StagedHookPoint::MaterializePublish);
     let source_for_thread = source.clone();
@@ -88,10 +91,16 @@ fn independent_materialization_publishes_only_complete_outputs() {
     });
 
     hook.wait_until_reached();
-    assert_eq!(fs::read(&destination).unwrap(), b"old complete output");
+    assert_eq!(
+        kernal_api::platform::fs::read_file(&destination).unwrap(),
+        b"old complete output"
+    );
     hook.resume();
     materialize.join().unwrap().unwrap();
-    assert_eq!(fs::read(&destination).unwrap(), b"new complete output");
+    assert_eq!(
+        kernal_api::platform::fs::read_file(&destination).unwrap(),
+        b"new complete output"
+    );
 }
 
 /// zccache#1562: a child forked while the materialization copy held a
@@ -103,14 +112,13 @@ fn independent_materialization_publishes_only_complete_outputs() {
 #[cfg(target_os = "linux")]
 #[test]
 fn materialized_executable_runs_while_a_child_is_between_fork_and_exec() {
-    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("build_script_build-source");
     let destination = dir.path().join("build-script-build");
-    fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+    kernal_api::platform::fs::write_file(&source, b"#!/bin/sh\nexit 0\n").unwrap();
+    kernal_api::platform::fs::make_executable(&source).unwrap();
 
     let hook = StagedHookGuard::arm(&destination, StagedHookPoint::MaterializeTemporaryOpen);
     let source_for_thread = source.clone();
@@ -178,14 +186,13 @@ fn materialized_executable_runs_while_a_child_is_between_fork_and_exec() {
 #[cfg(target_os = "linux")]
 #[test]
 fn materialized_executable_runs_after_a_foreign_fork_inherits_the_copy() {
-    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("build_script_build-source");
     let destination = dir.path().join("build-script-build");
-    fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+    kernal_api::platform::fs::write_file(&source, b"#!/bin/sh\nexit 0\n").unwrap();
+    kernal_api::platform::fs::make_executable(&source).unwrap();
 
     let hook = StagedHookGuard::arm(&destination, StagedHookPoint::MaterializeTemporaryOpen);
     let source_for_thread = source.clone();
