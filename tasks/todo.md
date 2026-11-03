@@ -1576,3 +1576,9 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+## PR #2056 honest CI summary recovery
+
+- [x] Recover agg-2056 onto current main; retain concurrency fixes and remove obsolete queue-only duplicate callers.
+- [ ] Validate summary, workflow guards, and local gate; review final diff.
+- [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.
