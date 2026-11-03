@@ -1576,3 +1576,12 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+# Local replay failure diagnostics (#2058)
+
+- [x] Reconstruct Integration failure from Bosn receipts and raw nextest output.
+- [x] Correlate exit 137 with engine disappearance; document missing kill provenance.
+- [x] File zccache #2058 and Bosn #810 after duplicate searches.
+- [x] Fail tests first for colored nextest parsing, unknown failure and SIGKILL classification.
+- [x] Add scoped step logs, parsed failures and timestamped host/runner samples.
+- [ ] Complete pre-push review and validation; publish an unmerged PR.
