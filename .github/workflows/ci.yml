@@ -634,7 +634,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
