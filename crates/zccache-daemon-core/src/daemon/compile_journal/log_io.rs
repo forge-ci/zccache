@@ -5,19 +5,7 @@
 //! constructed (#1165 finding 7). They live here now because the compile
 //! journal is their only consumer.
 
-use std::fs::File;
-use std::path::Path;
 use std::time::SystemTime;
-
-/// Open a file in append mode with sharing flags that allow deletion on Windows.
-///
-/// On Windows, Rust's default `OpenOptions` uses `FILE_SHARE_READ | FILE_SHARE_WRITE`
-/// but omits `FILE_SHARE_DELETE`, which prevents any other process from deleting or
-/// renaming the file while a handle is open. This helper adds `FILE_SHARE_DELETE`
-/// so log files remain deletable at any time.
-pub(crate) fn open_append(path: &Path) -> std::io::Result<File> {
-    crate::platform::fs::durability::open_shared_append(path)
-}
 
 /// Format a `SystemTime` as `YYYY-MM-DDTHH:MM:SS.mmmZ` in UTC.
 ///

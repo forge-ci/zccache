@@ -603,18 +603,10 @@ fn try_write_to_path(
     let mut line = serde_json::to_string(&serde_json::Value::Object(envelope))?;
     line.push('\n');
 
-    let mut file = open_append(log_path)?;
+    let mut file = kernal_api::platform::fs::open_shared_append(log_path)?;
     file.write_all(line.as_bytes())?;
     file.flush()?;
     Ok(())
-}
-
-/// Open a file in append mode with sharing flags that allow deletion
-/// on Windows. Mirrors the compile journal's `log_io::open_append`;
-/// duplicated here so `zccache-core` doesn't need to depend on the
-/// daemon crate.
-fn open_append(path: &Path) -> std::io::Result<std::fs::File> {
-    kernal_api::platform::fs::open_shared_append(path)
 }
 
 /// Absolute path to the live lifecycle log file.
@@ -741,7 +733,8 @@ mod tests {
         let dedicated = crate::config::log_dir()
             .as_path()
             .join(TERMINATION_LOG_FILENAME);
-        let contents = std::fs::read_to_string(&dedicated).expect("dedicated log written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&dedicated).expect("dedicated log written");
         let mine: Vec<serde_json::Value> = contents
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("line parses"))
@@ -757,7 +750,7 @@ mod tests {
         // The whole point is that this is a *separate* stream: writing here
         // must not append to the interleaved lifecycle log.
         let lifecycle = log_file_path().as_path().to_path_buf();
-        let lifecycle_has_ours = std::fs::read_to_string(&lifecycle)
+        let lifecycle_has_ours = kernal_api::platform::fs::read_to_string(&lifecycle)
             .unwrap_or_default()
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -783,7 +776,8 @@ mod tests {
         );
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         // Concurrent tests elsewhere in the crate legitimately emit their
         // own lifecycle events while this test's cache-dir override is
         // active: `write_event` reads the env at call time, and async
@@ -883,7 +877,7 @@ mod tests {
 
         write_event(EVENT_SPAWN, serde_json::json!({"first": true}));
 
-        let live = std::fs::read_to_string(&log_path).expect("live log readable");
+        let live = kernal_api::platform::fs::read_to_string(&log_path).expect("live log readable");
         assert_eq!(live.lines().count(), 1, "live log should hold new event");
         let v: serde_json::Value = serde_json::from_str(live.trim()).expect("jsonl parses");
         assert_eq!(v["first"], true);
@@ -1016,7 +1010,8 @@ mod tests {
         );
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         let v: serde_json::Value =
             serde_json::from_str(contents.trim()).expect("jsonl line parses");
 
@@ -1047,7 +1042,8 @@ mod tests {
         emit_takeover_lifecycle_events(1111, 2222, "9.9.9", "\\\\.\\pipe\\test");
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "expected daemon-died + pipe-handover");
 
@@ -1093,7 +1089,7 @@ mod tests {
 
         assert!(log_path.exists());
         assert!(!archive.exists());
-        let contents = std::fs::read_to_string(&log_path).unwrap();
+        let contents = kernal_api::platform::fs::read_to_string(&log_path).unwrap();
         assert_eq!(contents.lines().count(), 2);
     }
 }

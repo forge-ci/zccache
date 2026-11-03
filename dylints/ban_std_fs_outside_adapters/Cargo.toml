@@ -17,7 +17,7 @@ name = "ban_std_fs_outside_adapters"
 # `std::fs` call was `read`/`read_to_string`, now on the 0.1.36 read side).
 # 2026-11-01: 0.1.2 shrinks allowlist 63 -> 56 (read-side burn onto
 # kernal-api 0.1.36: read_file / read_to_string / symlink_metadata).
-version = "0.1.8"
+version = "0.1.9"
 description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
 edition = "2021"
 publish = false

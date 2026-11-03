@@ -19,7 +19,7 @@ pub fn compute_aggregate_hash(files: &[ScannedFile]) -> Result<String> {
     // Phase 1: Read all file contents in parallel (I/O bound).
     let contents: std::result::Result<Vec<Vec<u8>>, std::io::Error> = files
         .par_iter()
-        .map(|file| std::fs::read(&file.absolute))
+        .map(|file| kernal_api::platform::fs::read_file(&file.absolute))
         .collect();
     let contents = contents?;
 
@@ -211,7 +211,6 @@ pub(crate) mod tests {
     use super::super::scan;
     use super::*;
     use kernal_api::platform::fs::{set_file_mtime, FileTime};
-    use std::fs;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, TempDir) {
@@ -230,10 +229,12 @@ pub(crate) mod tests {
 
     /// Move `path`'s mtime two seconds forward.
     pub(crate) fn bump_mtime(path: &std::path::Path) {
-        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
-        let later =
-            file.metadata().unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
-        file.set_modified(later).unwrap();
+        let later = kernal_api::platform::fs::path_metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            + std::time::Duration::from_secs(2);
+        set_file_mtime(path, FileTime::from_system_time(later)).unwrap();
     }
 
     fn scan_dir(dir: &std::path::Path) -> Vec<ScannedFile> {

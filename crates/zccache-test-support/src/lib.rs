@@ -346,7 +346,7 @@ fn linux_loop(name: &'static str, filesystem: &str, mkfs: &str) -> FixtureResult
         .tempdir()
         .map_err(|error| skip(name, error.to_string()))?;
     let image = temp.path().join(format!("{filesystem}.img"));
-    std::fs::File::create(&image)
+    kernal_api::platform::fs::create_file(&image)
         .and_then(|file| file.set_len(512 * 1024 * 1024))
         .map_err(|error| skip(name, error.to_string()))?;
     let loop_output = run_privileged("losetup", &["--find", "--show", &image.to_string_lossy()])

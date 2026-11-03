@@ -505,7 +505,7 @@ impl CompilerHashCache {
     /// Any I/O error other than `NotFound`, any bincode decode failure,
     /// or any version mismatch.
     pub(super) fn load_from_disk(path: &Path) -> std::io::Result<Self> {
-        let bytes = match std::fs::read(path) {
+        let bytes = match kernal_api::platform::fs::read_file(path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::debug!(
@@ -546,15 +546,13 @@ impl CompilerHashCache {
 
 fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
-        let mut f = std::fs::File::create(tmp)?;
+        let mut f = kernal_api::platform::fs::create_file(tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }
     kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        let _ = kernal_api::platform::fs::sync_directory(parent);
     }
     Ok(())
 }

@@ -26,8 +26,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use crate::core::NormalizedPath;
-
-use super::log_io::open_append;
+use crate::platform::fs::durability::open_shared_append;
 
 /// Maximum global journal size before rotation (50 MB).
 pub(super) const JOURNAL_MAX_SIZE: u64 = 50 * 1024 * 1024;
@@ -108,7 +107,7 @@ pub(super) fn journal_thread(
                     // Write to global journal.
                     let line_bytes = line.len() as u64 + 1; // +1 for newline
                     if writeln!(global_file, "{line}").is_err() {
-                        if let Ok(f) = open_append(&global_path) {
+                        if let Ok(f) = open_shared_append(&global_path) {
                             global_file = BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, f);
                             let _ = writeln!(global_file, "{line}");
                         }
@@ -119,7 +118,7 @@ pub(super) fn journal_thread(
                     // Write to session journal if requested.
                     if let Some(path) = session_path {
                         let file = session_files.entry(path.clone()).or_insert_with(|| {
-                            match open_append(&path) {
+                            match open_shared_append(&path) {
                                 Ok(f) => BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, f),
                                 Err(e) => {
                                     tracing::debug!("session journal open error: {e}");
@@ -129,7 +128,7 @@ pub(super) fn journal_thread(
                                         clippy::expect_used,
                                         reason = "NUL on Windows / /dev/null on Unix must exist; their absence indicates a fundamentally broken host where the daemon cannot recover"
                                     )]
-                                    let fallback = open_append(&path).unwrap_or_else(|_| {
+                                    let fallback = open_shared_append(&path).unwrap_or_else(|_| {
                                         // Last resort: /dev/null equivalent. The HashMap
                                         // entry will be cleaned up on CloseSession.
                                         std::fs::File::open(if crate::platform::host::is_windows() {
@@ -186,7 +185,7 @@ pub(super) fn rotate_journal(path: &Path) -> Option<(std::fs::File, u64)> {
         return None;
     }
     // Open a fresh file.
-    let file = open_append(path).ok()?;
+    let file = open_shared_append(path).ok()?;
     gc_journal_files(path);
     Some((file, 0))
 }

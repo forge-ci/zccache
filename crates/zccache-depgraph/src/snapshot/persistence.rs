@@ -245,7 +245,7 @@ fn fit_to_budget(graph: &DepGraph, opts: &SaveOptions) -> Result<Vec<u8>, Snapsh
 }
 
 fn write_tmp(tmp_path: &Path, payload: &[u8], fail_injection: bool) -> Result<(), SnapshotError> {
-    let file = std::fs::File::create(tmp_path)?;
+    let file = kernal_api::platform::fs::create_file(tmp_path)?;
     let mut writer = BufWriter::new(file);
 
     // Header: magic + version (LE u32) + payload len (LE u64).
@@ -378,7 +378,7 @@ pub fn load_from_file(path: &Path) -> Result<DepGraph, SnapshotError> {
 /// persisted wall-clock age exceeds `opts.ttl` are dropped; the rest keep
 /// their persisted wall-clock `last_accessed_unix_ms` verbatim.
 pub fn load_from_file_with(path: &Path, opts: &LoadOptions) -> Result<DepGraph, SnapshotError> {
-    let file = std::fs::File::open(path)?;
+    let file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let file_len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
 

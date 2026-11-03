@@ -55,9 +55,9 @@ pub(super) fn record_pch_imports(
     // These fixtures have just compiled against known, unchanged imports.
     // Production producers freeze these snapshots before executing clang.
     let mut plan = crate::fingerprint::pch_inputs::PchServePlan::default();
-    for mut input in imports(&std::fs::read(pch)?)? {
+    for mut input in imports(&kernal_api::platform::fs::read_file(pch)?)? {
         input.content_xxh3 = Some(crate::fingerprint::pch_inputs::content_xxh3(
-            &std::fs::read(&input.path)?,
+            &kernal_api::platform::fs::read_file(&input.path)?,
         ));
         plan.require_snapshot(&input).map_err(invalid)?;
     }
@@ -74,7 +74,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
     logical_output: &Path,
     overlay_path: Option<&Path>,
 ) -> std::io::Result<Option<NormalizedPath>> {
-    let bytes = std::fs::read(pch)?;
+    let bytes = kernal_api::platform::fs::read_file(pch)?;
     let records = imports(&bytes)?;
     if records.is_empty() {
         match kernal_api::platform::fs::remove_file(sidecar_path(logical_output)) {
@@ -87,7 +87,8 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
     let mut mappings = HashMap::new();
     if let Some(overlay) = overlay_path {
         let document: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(overlay)?).map_err(invalid)?;
+            serde_json::from_slice(&kernal_api::platform::fs::read_file(overlay)?)
+                .map_err(invalid)?;
         let roots = document["roots"]
             .as_array()
             .ok_or_else(|| invalid("overlay roots missing"))?;
@@ -184,7 +185,7 @@ pub(super) fn cached_import_sidecar(
         return Ok(None);
     }
     let path = sidecar_path(pch);
-    let sidecar = std::fs::read(&path)?;
+    let sidecar = kernal_api::platform::fs::read_file(&path)?;
     validate(bytes, &sidecar, &records)?;
     Ok(Some((NormalizedPath::new(path), sidecar)))
 }
@@ -227,7 +228,7 @@ fn verify_current(
 ) -> std::io::Result<()> {
     for import in &provenance.imports {
         let path = Path::new(&import.path);
-        let bytes = std::fs::read(path)?;
+        let bytes = kernal_api::platform::fs::read_file(path)?;
         if crate::hash::hash_bytes(&bytes).to_hex() != import.blake3 {
             return Err(invalid(format!(
                 "imported bytes changed: {}",
@@ -257,7 +258,7 @@ fn verify_loaded(
     if records.is_empty() {
         return Ok(());
     }
-    match std::fs::read(sidecar_path(pch)) {
+    match kernal_api::platform::fs::read_file(sidecar_path(pch)) {
         Ok(sidecar) => verify_current(
             &validate(bytes, &sidecar, &records)?,
             visited,
@@ -281,7 +282,7 @@ fn verify_loaded(
             }
             for record in records {
                 let path = Path::new(&record.path);
-                let bytes = std::fs::read(path)?;
+                let bytes = kernal_api::platform::fs::read_file(path)?;
                 verify_loaded(path, &bytes, visited, verified, false)?;
             }
             Ok(())
@@ -312,7 +313,7 @@ fn import_hashes(pch: &Path, require_bound: bool) -> std::io::Result<HashMap<Str
     let mut verified = HashMap::new();
     verify_loaded(
         pch,
-        &std::fs::read(pch)?,
+        &kernal_api::platform::fs::read_file(pch)?,
         &mut std::collections::HashSet::new(),
         &mut verified,
         require_bound,
@@ -323,7 +324,7 @@ fn import_hashes(pch: &Path, require_bound: bool) -> std::io::Result<HashMap<Str
 fn payload_bytes(payload: &CachedPayload) -> std::io::Result<Cow<'_, [u8]>> {
     match payload {
         CachedPayload::Bytes(bytes) => Ok(Cow::Borrowed(bytes.as_slice())),
-        CachedPayload::File(path) => Ok(Cow::Owned(std::fs::read(path)?)),
+        CachedPayload::File(path) => Ok(Cow::Owned(kernal_api::platform::fs::read_file(path)?)),
     }
 }
 
