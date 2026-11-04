@@ -7,8 +7,6 @@
 # file whose calls are all on the facade but whose signature still hands out a
 # `std::fs::File` stays here.
 crates/zccache-artifact/src/staged_lock.rs
-crates/zccache-compile-trace/src/lib.rs
-crates/zccache-core/src/config/materialization_mode.rs
 crates/zccache-core/src/wait.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
