@@ -886,3 +886,88 @@ mod pdb_sidecar_tests {
         assert!(!msvc_target_writes_pdb(&aarch_gnu));
     }
 }
+
+#[test]
+fn explicit_o_output_family_matches_rustc_emit_precedence() {
+    let cwd = Path::new("/repo");
+    for (emit, primary, expected) in [
+        ("metadata", "out/custom.output", vec!["out/custom.output"]),
+        ("dep-info", "out/custom.output", vec!["out/custom.output"]),
+        (
+            "metadata,metadata",
+            "out/custom.output",
+            vec!["out/custom.output"],
+        ),
+        (
+            "metadata=kind.rmeta,obj=kind.obj",
+            "kind.rmeta",
+            vec!["kind.rmeta", "kind.obj"],
+        ),
+        ("metadata=kind.rmeta", "kind.rmeta", vec!["kind.rmeta"]),
+        (
+            "metadata=kind.rmeta,obj",
+            "kind.rmeta",
+            vec!["kind.rmeta", "out/custom.output"],
+        ),
+        (
+            "metadata,obj",
+            "out/libprobe.rmeta",
+            vec!["out/custom.o", "out/libprobe.rmeta"],
+        ),
+        (
+            "dep-info,metadata",
+            "out/libprobe.rmeta",
+            vec!["out/custom.d", "out/libprobe.rmeta"],
+        ),
+        (
+            "metadata,link=kind.rlib",
+            "kind.rlib",
+            vec!["kind.rlib", "out/custom.output"],
+        ),
+    ] {
+        let parsed = crate::depgraph::parse_rustc_args(
+            &[
+                "--crate-name=probe".into(),
+                "--crate-type=lib".into(),
+                format!("--emit={emit}"),
+                "-o".into(),
+                "out/custom.output".into(),
+                "--out-dir=ignored".into(),
+                "probe.rs".into(),
+            ],
+            cwd,
+        );
+        let mut actual = rustc_expected_output_paths(&parsed, &cwd.join(primary), cwd, None);
+        actual.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        let mut expected: Vec<_> = expected
+            .into_iter()
+            .map(|p| NormalizedPath::new(cwd.join(p)))
+            .collect();
+        expected.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        assert_eq!(actual, expected, "emit={emit}");
+    }
+}
+
+#[test]
+fn explicit_o_collection_does_not_capture_stale_conventional_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let primary = temp.path().join("custom.output");
+    std::fs::write(&primary, b"current").unwrap();
+    std::fs::write(temp.path().join("libprobe.rmeta"), b"stale").unwrap();
+    let parsed = crate::depgraph::parse_rustc_args(
+        &[
+            "--crate-name=probe".into(),
+            "--crate-type=lib".into(),
+            "--emit=metadata".into(),
+            "-o".into(),
+            "custom.output".into(),
+            "probe.rs".into(),
+        ],
+        temp.path(),
+    );
+    let outputs = collect_rustc_output_files(&parsed, &primary, temp.path());
+    assert_eq!(
+        outputs.iter().map(|o| o.path.clone()).collect::<Vec<_>>(),
+        vec![NormalizedPath::new(primary)]
+    );
+}

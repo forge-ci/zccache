@@ -920,3 +920,39 @@ fn rustc_lib_without_test_flag_stays_cacheable() {
     );
     assert!(matches!(result, ParsedInvocation::Cacheable(_)));
 }
+
+#[test]
+fn explicit_o_primary_obeys_emit_path_and_multi_output_precedence() {
+    for (emit, expected) in [
+        ("metadata", "out/custom.output"),
+        ("metadata=kind.rmeta", "kind.rmeta"),
+        ("metadata=kind.rmeta,obj=kind.obj", "kind.rmeta"),
+        ("metadata,metadata", "out/custom.output"),
+        ("metadata,obj", "out/libprobe.rmeta"),
+        ("obj,asm", "out/custom.o"),
+        ("metadata=kind.rmeta,obj", "kind.rmeta"),
+        ("metadata,link=kind.rlib", "kind.rlib"),
+        ("dep-info,metadata,link", "out/libprobe.rlib"),
+    ] {
+        let parsed = parse_invocation(
+            "rustc",
+            &args(&[
+                "--crate-type=lib",
+                "--crate-name=probe",
+                &format!("--emit={emit}"),
+                "-o",
+                "out/custom.output",
+                "--out-dir=ignored",
+                "probe.rs",
+            ]),
+        );
+        let ParsedInvocation::Cacheable(compilation) = parsed else {
+            panic!("expected cacheable")
+        };
+        assert_eq!(
+            compilation.output_file,
+            NormalizedPath::new(expected),
+            "emit={emit}"
+        );
+    }
+}

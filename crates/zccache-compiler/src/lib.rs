@@ -40,7 +40,9 @@ mod parse_rustc;
 pub mod parse_rustfmt;
 #[cfg(feature = "native")]
 pub mod response_file;
+mod rustc_explicit_output;
 mod rustc_path;
+pub use rustc_explicit_output::rustc_explicit_output_plan;
 #[cfg(feature = "native")]
 pub mod side_outputs;
 #[cfg(feature = "native")]
