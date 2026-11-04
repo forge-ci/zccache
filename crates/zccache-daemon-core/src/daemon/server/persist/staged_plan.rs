@@ -927,7 +927,9 @@ fn cc_has_unsupported_side_outputs(args: &[String]) -> bool {
             || lower == "-mj"
             || lower.starts_with("-fmodule")
             || lower.starts_with("-Winvalid-pch")
-            || lower.starts_with("/fd")
+            // `/Fd` is deliberately absent (issue #1940): it names the PDB that
+            // only `/Zi`/`/ZI` writes, so it is not an extra side output and must
+            // not push a `/Fd`-carrying compile off the staged lane.
             || lower.starts_with("/fp")
             || lower.starts_with("/fa")
             || lower.starts_with("/fi")
