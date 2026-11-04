@@ -167,15 +167,17 @@ impl AuditSink {
         kernal_api::platform::fs::create_dir_all(&output_root)?;
         let path = output_root.join(config.event_log.as_deref().unwrap_or("audit.jsonl"));
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = kernal_api::platform::fs::open_shared_append(&path)?;
         // Start from the on-disk length so a restart onto an existing file
-        // resumes counting rather than granting it a fresh budget.
-        let mut current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        // resumes counting rather than granting it a fresh budget. The handle
+        // is boxed as a write sink so the rotation path swaps handles without
+        // naming a host file type at this seam.
+        let mut current_size = kernal_api::platform::fs::path_metadata(&path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         let rotate_path = path.clone();
-        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        let mut writer: BufWriter<Box<dyn Write + Send>> =
+            BufWriter::with_capacity(64 * 1024, Box::new(file));
 
         let (sender, mut receiver) = async_engine::channel::<Command>(WRITER_QUEUE_CAPACITY);
         let lost_events = Arc::new(AtomicU64::new(0));
@@ -350,7 +352,7 @@ impl AuditSink {
 /// Returns `None` if the rename or reopen fails, in which case the caller
 /// keeps writing to the existing handle: an audit log that is too large beats
 /// one that silently stops recording.
-fn rotate_audit_log(path: &Path) -> Option<std::fs::File> {
+fn rotate_audit_log(path: &Path) -> Option<Box<dyn Write + Send>> {
     let file_name = path.file_name()?.to_string_lossy().into_owned();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -359,13 +361,9 @@ fn rotate_audit_log(path: &Path) -> Option<std::fs::File> {
     let rotated = path.with_file_name(format!("{file_name}.{nanos:020}"));
     kernal_api::platform::fs::rename(path, &rotated).ok()?;
 
-    let fresh = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()?;
+    let fresh = kernal_api::platform::fs::open_shared_append(path).ok()?;
     gc_audit_logs(path, &file_name);
-    Some(fresh)
+    Some(Box::new(fresh))
 }
 
 /// Keep only the newest [`AUDIT_MAX_FILES`] archives beside `path`.

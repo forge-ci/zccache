@@ -8,7 +8,6 @@
 # `std::fs::File` stays here.
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-core/src/wait.rs
-crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/journal_thread.rs
 crates/zccache-fingerprint/src/file_lock.rs
 crates/zccache-hash/src/native.rs

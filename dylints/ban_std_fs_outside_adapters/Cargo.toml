@@ -36,7 +36,11 @@ name = "ban_std_fs_outside_adapters"
 # read_dir/read/set_permissions/File/OpenOptions/Metadata uses onto
 # read_dir_paths/symlink_metadata/read_file/set_permissions/
 # open_read_regular_file/create_private_file).
-version = "0.1.13"
+# 2026-11-04: 0.1.14 shrinks allowlist 6 -> 5 (audit-log writer opens and
+# rotates its append handle through open_shared_append, sizes it with
+# path_metadata and boxes the sink as dyn Write + Send so the seam no
+# longer names a host file type).
+version = "0.1.14"
 description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
 edition = "2021"
 publish = false
