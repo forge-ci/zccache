@@ -153,9 +153,19 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Validate release metadata
         run: |
@@ -258,7 +268,7 @@ jobs:
           python -m ci.release_workflow check-registries
 
   bootstrap-zccache:
-    name: Bootstrap zccache (bare Cargo)
+    name: Bootstrap zccache (uncached soldr)
     runs-on: ubuntu-24.04
     needs: preflight
     steps:
@@ -266,21 +276,31 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.checkout_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
-          targets: x86_64-unknown-linux-gnu
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Build bootstrap zccache without a compiler wrapper
         env:
-          CARGO: cargo
+          # soldr owns the toolchain, but must not wrap its own bootstrap.
+          ZCCACHE_DISABLE: "1"
           RUSTC_WRAPPER: ""
           RUSTC_WORKSPACE_WRAPPER: ""
         shell: bash
         run: |
           set -euo pipefail
           unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
-          "$CARGO" build --release --target x86_64-unknown-linux-gnu \
+          soldr cargo build --release --target x86_64-unknown-linux-gnu \
             -p zccache --features zccache-bin --bin zccache
           mkdir -p bootstrap-zccache
           install -m 0755 \
@@ -741,9 +761,19 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Publish crates to crates.io
         env:

@@ -1,3 +1,10 @@
+# Release Rust frontdoors
+
+- [x] Reproduce bootstrap and crate package/publish bypassing soldr with focused tests.
+- [x] Route the release bootstrap and crate commands through soldr without compiler caching.
+- [ ] Run release regressions, workflow cache footprint, review and required validation.
+- [ ] Push and merge the version-unchanged repair before rehearsing a release.
+
 # PR #2019 — rustc response files
 
 - [x] Preserve the fully pushed release branch and update local main.
