@@ -32,6 +32,7 @@ from ci.release_checks import (
     stamp_internal_dependency_versions,
     validate_release_metadata,
 )
+from ci.soldr import cargo_command
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
@@ -562,7 +563,7 @@ def verify_rust_crates_locally() -> None:
     log("  Prepared crates/zccache as a self-contained crates.io package")
 
     for crate in RUST_PUBLISH_ORDER:
-        run(["cargo", "package", "--allow-dirty", "-p", crate], cwd=ROOT)
+        run(cargo_command("package", "--allow-dirty", "-p", crate), cwd=ROOT)
 
 
 def verify_crate_visible(crate: str, version: str) -> None:
@@ -592,7 +593,7 @@ def publish_rust_crates(version: str, existing_crates: set[str] | None = None) -
         if crate in existing_crates:
             log(f"  Skipping {crate} {version}; already published")
             continue
-        run(["cargo", "publish", "--allow-dirty", "-p", crate], cwd=ROOT)
+        run(cargo_command("publish", "--allow-dirty", "-p", crate), cwd=ROOT)
         verify_crate_visible(crate, version)
 
 

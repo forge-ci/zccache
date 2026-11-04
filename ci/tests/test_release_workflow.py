@@ -4,6 +4,7 @@ import csv
 import io
 import os
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -173,6 +174,53 @@ def _release_workflow_job(job: str) -> str:
     match = re.search(r"\n  [a-z][a-z0-9-]*:\n", text[start + 1 :])
     end = len(text) if match is None else start + 1 + match.start()
     return text[start:end]
+
+
+def test_release_bootstrap_uses_soldr_without_a_compiler_wrapper() -> None:
+    job = _release_workflow_job("bootstrap-zccache")
+    assert "uses: zackees/setup-soldr@" in job
+    assert "dtolnay/rust-toolchain" not in job
+    assert 'cache: "false"' in job
+    assert 'ZCCACHE_DISABLE: "1"' in job
+    assert "unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER" in job
+    assert "soldr cargo build --release --target x86_64-unknown-linux-gnu" in job
+    assert "CARGO: cargo" not in job
+
+
+def test_release_metadata_uses_soldr(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ci import release_checks
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr("ci.soldr.soldr_executable", lambda: "/managed/soldr")
+
+    def run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"packages": []}')
+
+    monkeypatch.setattr(release_checks.subprocess, "run", run)
+    assert release_checks.read_workspace_metadata() == {"packages": []}
+    assert commands == [["/managed/soldr", "cargo", "metadata", "--no-deps", "--format-version", "1"]]
+    assert "uses: zackees/setup-soldr@" in _release_workflow_job("preflight")
+
+
+def test_release_crate_commands_use_soldr(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(release_workflow, "validate_release_metadata", lambda: None)
+    monkeypatch.setattr(release_workflow, "stamp_internal_dependency_versions", list)
+    monkeypatch.setattr(release_workflow, "prepare_zccache_crate_for_publish", lambda _root: None)
+    monkeypatch.setattr(release_workflow, "RUST_PUBLISH_ORDER", ["crate-a", "crate-b"])
+    monkeypatch.setattr(release_workflow, "verify_crate_visible", lambda *_args: None)
+    monkeypatch.setattr("ci.soldr.soldr_executable", lambda: "/managed/soldr")
+    monkeypatch.setattr(release_workflow, "run", lambda cmd, **_kwargs: commands.append(cmd))
+
+    release_workflow.publish_rust_crates("1.2.3", {"crate-a"})
+
+    assert commands == [
+        ["/managed/soldr", "cargo", "package", "--allow-dirty", "-p", "crate-a"],
+        ["/managed/soldr", "cargo", "package", "--allow-dirty", "-p", "crate-b"],
+        ["/managed/soldr", "cargo", "publish", "--allow-dirty", "-p", "crate-b"],
+    ]
+    assert "uses: zackees/setup-soldr@" in _release_workflow_job("publish-crates")
 
 
 def _smoke_legs() -> list[str]:
