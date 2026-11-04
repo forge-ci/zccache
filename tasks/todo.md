@@ -1591,3 +1591,18 @@ native kernal foreground/sync APIs are included in UI and the full gate.
 - [x] Recover agg-2056 onto current main; retain concurrency fixes and remove obsolete queue-only duplicate callers.
 - [ ] Validate summary, workflow guards, and local gate; review final diff.
 - [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.
+
+## Hosted runner observer prerequisite alignment (2026-11-04)
+
+- [x] Read CLAUDE.md and compare API timestamps for all four reported runs.
+- [x] Reproduce missing prerequisite edges with a failing CI contract test.
+- [x] Give observers the same prerequisites as watched jobs; retain starvation failures.
+- [x] Verify prerequisite/condition parity across all five observer workflows.
+- [ ] Complete local gate and pre-push review; push branch and open an unmerged PR.
+
+Evidence: macOS run 41760074116 observer ended 03:16:07Z; barrier ended
+03:20:45Z; watched job created 03:20:46Z, started 03:20:52Z, passed 03:30:51Z.
+The upstream barrier outlived the observer; the macOS queue lasted six seconds.
+The jobs API does not retain a first-visible timestamp; created_at and observer
+logs establish that the job did not exist during observation. Auto-release
+already has prerequisite/condition parity and remains unchanged.

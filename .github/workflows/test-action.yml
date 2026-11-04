@@ -216,6 +216,8 @@ jobs:
   # Test that save-cache: false works (for PR builds)
   observe-macos-queue:
     name: Observe macOS runner queue
+    # Start the queue budget only when the watched jobs become eligible.
+    needs: cache-pre-prune
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
