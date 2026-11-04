@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 MACOS_WORKFLOWS = {
@@ -26,12 +28,16 @@ def _workflow(name: str) -> str:
 def _job(text: str, name: str) -> str:
     marker = f"  {name}:\n"
     start = text.index(marker)
-    following = re.search(r"^  [a-z][a-z0-9-]*:\n", text[start + len(marker) :], re.MULTILINE)
+    following = re.search(
+        r"^  [a-z][a-z0-9-]*:\n", text[start + len(marker) :], re.MULTILINE
+    )
     end = start + len(marker) + following.start() if following else len(text)
     return text[start:end]
 
 
-def test_all_load_bearing_macos_lanes_use_the_supported_arm_runner_and_observer() -> None:
+def test_all_load_bearing_macos_lanes_use_the_supported_arm_runner_and_observer() -> (
+    None
+):
     """No direct macOS 14 consumer may return without a bounded observer."""
     for workflow_name, expected_jobs in MACOS_WORKFLOWS.items():
         workflow = _workflow(workflow_name)
@@ -39,7 +45,10 @@ def test_all_load_bearing_macos_lanes_use_the_supported_arm_runner_and_observer(
         assert "permissions:" in workflow and "actions: read" in workflow, workflow_name
         observer = _job(workflow, "observe-macos-queue")
         assert "astral-sh/setup-uv@v6" in observer, workflow_name
-        assert "uv run --no-project --python 3.13 python ci/observe_runner_queue.py" in observer, workflow_name
+        assert (
+            "uv run --no-project --python 3.13 python ci/observe_runner_queue.py"
+            in observer
+        ), workflow_name
         assert "--runner macos-15" in observer, workflow_name
         for job in expected_jobs:
             assert f'--job "{job}"' in observer, (workflow_name, job)
@@ -62,3 +71,23 @@ def test_intel_wheel_smoke_remains_outside_every_publish_needs_edge() -> None:
     publish_jobs = ("publish-pypi", "publish-crates")
     for job in publish_jobs:
         assert "test-wheels-ungated" not in _job(workflow, job)
+
+
+def test_queue_observers_wait_for_the_watched_jobs_prerequisites() -> None:
+    """Run 41760074116: a 59-minute barrier is not macOS queue time."""
+    watched_jobs = {
+        "ci-macos.yml": ["macos"],
+        "fs-matrix.yml": ["matrix"],
+        "wrapper-e2e.yml": ["wrapper-e2e"],
+        "test-action.yml": ["test-action"],
+        "auto-release.yml": ["test-wheels", "test-wheels-ungated"],
+    }
+    for workflow_name, names in watched_jobs.items():
+        jobs = yaml.safe_load(_workflow(workflow_name))["jobs"]
+        observer = jobs["observe-macos-queue"]
+        for name in names:
+            watched = jobs[name]
+            assert observer.get("needs") == watched.get("needs"), (workflow_name, name)
+            assert observer.get("if") == watched.get("if"), (workflow_name, name)
+        assert observer["timeout-minutes"] == 60
+        assert observer.get("continue-on-error", False) is False

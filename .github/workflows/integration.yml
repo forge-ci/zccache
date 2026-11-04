@@ -25,18 +25,8 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
-  pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
 
 permissions:
   actions: read
@@ -256,7 +246,9 @@ jobs:
             {
               echo '## Integration Test Failures'
               echo '```'
-              grep -E '^\s+(FAIL|SIGSEGV|SIGABRT|TIMEOUT) \[' test-output.txt
+              # nextest emits ANSI color even when tee captures its output.
+              sed -E 's/\x1B\[[0-?]*[ -/]*[@-~]//g' test-output.txt > test-output-plain.txt
+              grep -E '^\s+(FAIL|SIGSEGV|SIGABRT|TIMEOUT|ABORT) \[' test-output-plain.txt || echo "unknown failure (exit $status); see Test (full workspace) log"
               awk '/^failures:$/,/^test result:/' test-output.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"

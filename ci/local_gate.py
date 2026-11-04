@@ -48,6 +48,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TypeAlias
 
@@ -78,6 +79,8 @@ class Check:
     bosn_job: str = ""
     selected_job: str | None = None
     required_steps: tuple[str, ...] = ()
+    # The event the replayed workflow must have run under (`--trigger`).
+    bosn_event: str = "pull_request"
 
 
 def checks() -> list[Check]:
@@ -201,6 +204,10 @@ def checks() -> list[Check]:
         # critical path), and until it had a lane here an attested head could
         # not skip it -- so every attested PR still paid it. Replay the real
         # job rather than mirroring its steps, so the lane cannot drift.
+        # Locally it takes ~8-11m warm and up to ~30-55m when the dylint
+        # build-cache was evicted from Bosn's per-repository act cache budget
+        # (8 GiB, LRU) or the host is oversubscribed; the timing summary
+        # printed after the lane shows which step grew.
         Check(
             "Dylint (isolated Bosn Actions)",
             (
@@ -224,7 +231,11 @@ def checks() -> list[Check]:
             bosn_workflow=".github/workflows/ci.yml",
             bosn_job="dylint",
             selected_job="dylint",
-            required_steps=("Run Dylint", "Prove custom-lint selection for every OS"),
+            required_steps=(
+                "Run Dylint",
+                "Rust argfile execution regressions",
+                "Prove custom-lint selection for every OS",
+            ),
         ),
         Check(
             "rustdoc",
@@ -248,8 +259,11 @@ def checks() -> list[Check]:
                 ".",
                 "--workflow",
                 ".github/workflows/integration.yml",
+                # #2039 removed `pull_request` from integration.yml, so a `pr`
+                # replay skips every job and act exits 1. `push` is the event
+                # the workflow still runs on; off `main` it writes no cache.
                 "--trigger",
-                "pr",
+                "push",
                 "--wait",
                 "--json",
             ),
@@ -258,6 +272,7 @@ def checks() -> list[Check]:
             min_version=(0, 1, 12),
             bosn_workflow=".github/workflows/integration.yml",
             bosn_job="integration",
+            bosn_event="push",
             required_steps=(
                 "Build integration test binaries",
                 "Install PCH regression toolchain",
@@ -477,6 +492,7 @@ def bosn_proof_error(
     expected_job: str,
     selected_job: str | None,
     required_steps: tuple[str, ...] = (),
+    expected_event: str = "pull_request",
 ) -> str | None:
     """Fail closed on wrong source, unknown evidence or unexecuted checks."""
     if not required_steps:
@@ -494,7 +510,7 @@ def bosn_proof_error(
         return "Bosn executed another commit"
     if not _run_finished(proof):
         return "Bosn run did not finish successfully"
-    if proof.engine != "act" or proof.event != "pull_request":
+    if proof.engine != "act" or proof.event != expected_event:
         return "Bosn used another engine or event"
     if proof.workflow != workflow or proof.selected_job != selected_job:
         return "Bosn executed another workflow selection"
@@ -515,6 +531,117 @@ def bosn_fidelity_error(host_arch: str, daemon: Captured) -> str | None:
     return None
 
 
+def _epoch(value: JsonValue) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def bosn_timing_summary(output: str, *, top: int = 8) -> str | None:
+    """Where a Bosn replay spent its wall clock: queue wait, run time and the
+    slowest job steps, read from the receipt. A replay can take 6x its usual
+    time on a contended host or a cold cache; this makes a slow lane show
+    which step grew without opening `bosn ci show`. Best effort: a receipt it
+    cannot read yields None, never a gate failure."""
+    try:
+        document = _document(json.loads(next(line for line in output.splitlines() if line.startswith("{"))))
+        created, started, finished = (document.get(k) for k in ("created_at", "started_at", "finished_at"))
+        steps: list[tuple[float, str]] = []
+        for group in _values(_document(document["tree"])["groups"]):
+            for job in _values(_document(group)["jobs"]):
+                job_doc = _document(job)
+                for section in _values(job_doc["sections"]):
+                    sec = _document(section)
+                    begin, end = _epoch(sec.get("started_at")), _epoch(sec.get("completed_at"))
+                    if begin is not None and end is not None:
+                        steps.append((end - begin, f"{_text(job_doc['job_id'])}: {_text(sec['name'])}"))
+    except (StopIteration, KeyError, ValueError, TypeError):
+        return None
+    if not all(isinstance(v, (int, float)) for v in (created, started, finished)):
+        return None
+    assert isinstance(created, (int, float)) and isinstance(started, (int, float)) and isinstance(finished, (int, float))
+    lines = [
+        f"  bosn run {document.get('id', '?')}: queued {started - created:.0f}s, "
+        f"ran {finished - started:.0f}s (act {document.get('act_version', '?')})"
+    ]
+    for seconds, name in sorted(steps, reverse=True)[:top]:
+        lines.append(f"  {seconds:7.0f}s  {name}")
+    return "\n".join(lines)
+
+
+def bosn_failure_summary(output: str, code: int | None) -> str:
+    """Parse colored nextest output without mistaking a missing list for success."""
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    failures = list(dict.fromkeys(
+        line.strip() for line in clean.splitlines()
+        if re.search(r"\b(?:FAIL|SIGSEGV|SIGABRT|TIMEOUT|ABORT|LEAK FAIL)\s+\[", line)
+    ))
+    lines = ["  parsed failures:", *(f"    {line}" for line in failures)]
+    if not failures:
+        lines.append(f"    unknown failure (exit {code if code is not None else 'unknown'})")
+    if re.search(r"\bact exit 137\b", clean) or code == 137:
+        lines.append("  killed (SIGKILL/OOM?) under load; exit 137 does not identify the killer")
+    return "\n".join(lines)
+
+
+def _bosn_failure_details(output: str) -> str:
+    """Best effort diagnostics; never changes the proof or retries a failed lane."""
+    try:
+        document = _document(json.loads(next(line for line in output.splitlines() if line.startswith("{"))))
+        run_id = _text(document["id"])
+    except (StopIteration, KeyError, ValueError, TypeError):
+        return bosn_failure_summary(output, 1)
+    report = _diagnostic_command(["bosn", "ci", "report", run_id, "--tail", "40", "--json"])
+    try:
+        failure = _document(_document(json.loads(report.output))["first_failure"])
+        job, step = _text(failure["job"]), _text(failure["section"])
+        value = failure.get("exit_code")
+        code = value if type(value) is int else None
+    except (KeyError, ValueError, TypeError):
+        value = document.get("act_exit_code")
+        code = value if type(value) is int else None
+        return (bosn_failure_summary(output, code)
+                + f"\n  failure report unavailable (exit {report.returncode}):\n{report.output[-12000:]}"
+                + "\n  receipt/output tail:\n" + "\n".join(output.splitlines()[-40:])[-12000:])
+    logs = _diagnostic_command(["bosn", "ci", "logs", run_id, "--job", job, "--step", step])
+    tail = "\n".join(logs.output.splitlines()[-40:])[-12000:]
+    return (
+        f"  failing step: {job}: {failure.get('step', step)} (exit {code})\n"
+        + bosn_failure_summary(output + "\n" + logs.output, code)
+        + f"\n  failing step log tail (last 40 lines):\n{tail}"
+    )
+
+
+def _diagnostic_command(argv: list[str]) -> Captured:
+    with tempfile.TemporaryFile() as out:
+        try:
+            proc = subprocess.run(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                  stdout=out, stderr=subprocess.STDOUT, check=False, timeout=60)
+            code = proc.returncode
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return Captured(1, f"diagnostics unavailable: {error}")
+        out.seek(0)
+        return Captured(code, out.read().decode("utf-8", errors="replace"))
+
+
+def _host_context(label: str) -> str:
+    sampled_at = time.time()
+    try:
+        load = "/".join(f"{value:.2f}" for value in os.getloadavg())
+    except (AttributeError, OSError):
+        load = "unavailable"
+    runners = _diagnostic_command(["bosn", "ci", "runners", "list", "--json"])
+    try:
+        state = _document(_document(json.loads(runners.output))["runners"])
+        concurrency = f"{state.get('running', '?')}/{state.get('limit', '?')} running/limit; queued={state.get('queued', '?')}"
+    except (KeyError, TypeError, ValueError):
+        concurrency = "unavailable"
+    return f"  host sample ({label}, epoch {sampled_at:.0f}): load1/5/15={load}; runners={concurrency}\n"
+
+
 def _run(check: Check) -> Result:
     head = None
     if check.bosn_workflow:
@@ -527,6 +654,7 @@ def _run(check: Check) -> Result:
         head = run_captured(["git", "rev-parse", "HEAD"])
         if head.returncode != 0:
             return Result(check, 1, 0.0, "cannot determine this checkout's HEAD")
+    context = _host_context("before replay") if check.bosn_workflow else ""
     result = _run_plain(check)
     if not check.bosn_workflow:
         return result
@@ -541,12 +669,15 @@ def _run(check: Check) -> Result:
             expected_job=check.bosn_job,
             selected_job=check.selected_job,
             required_steps=check.required_steps,
+            expected_event=check.bosn_event,
         )
     return Result(
         check,
         1 if error else 0,
         result.seconds,
-        result.output + (f"\nlocal gate: {error}\n" if error else ""),
+        result.output + (f"\nlocal gate: {error}\n" + context
+                         + _host_context("after failed replay")
+                         + _bosn_failure_details(result.output) + "\n" if error else ""),
     )
 
 
@@ -584,6 +715,9 @@ def _save_log(result: Result) -> Path:
 def _report(result: Result) -> None:
     status = "ok  " if result.code == 0 else "FAIL"
     print(f"{status} {result.seconds:6.1f}s  {result.check.name}", flush=True)
+    summary = bosn_timing_summary(result.output) if result.check.bosn_workflow else None
+    if summary:
+        print(summary, flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

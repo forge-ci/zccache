@@ -390,3 +390,89 @@ async fn msvc_cl_caller_supplied_show_includes_survives_a_cache_hit() {
     shutdown.notify_one();
     server_handle.await.unwrap();
 }
+
+/// Issue #1940: the CMake Visual Studio / Ninja generators pass
+/// `/Fd<target>.pdb` on **every** MSVC compile. zccache used to classify `/Fd`
+/// as an unmodeled side output, so every CMake/MSVC compile was non-cacheable
+/// and zccache cached nothing for such a project. `/Fd` only names the PDB that
+/// `/Zi`/`/ZI` writes; with `/Z7` (debug info embedded in the object) no PDB is
+/// produced, so the object is self-contained and the second identical compile
+/// must be a cache hit.
+#[tokio::test]
+#[ignore] // integration: needs a vcvars Developer Command Prompt with cl.exe
+async fn msvc_cl_cmake_fd_flag_compile_is_cacheable() {
+    let Some(cl) = zccache::test_support::find_on_path("cl.exe") else {
+        eprintln!("skipping: cl.exe not found (run from a vcvars shell)");
+        return;
+    };
+    if std::env::var_os("INCLUDE").is_none() {
+        eprintln!("skipping: INCLUDE unset (run from a vcvars shell)");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().to_string_lossy().into_owned();
+    let log_dir = tmp.path().join("logs");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    let log = log_dir.join("session.log");
+
+    let source = tmp.path().join("cmake_unit.cpp");
+    let object = tmp.path().join("cmake_unit.obj");
+    let pdb = tmp.path().join("cmake_target.pdb");
+    std::fs::write(
+        &source,
+        "#include <cstdio>\nint f(void){ return (int)sizeof(FILE); }\n",
+    )
+    .unwrap();
+
+    let compiler = cl.to_string_lossy().into_owned();
+    // The exact shape CMake emits for an MSVC Debug/RelWithDebInfo compile:
+    // `/nologo /c /Z7 /Fd<target>.pdb /Fo<obj> <src>`.
+    let args = vec![
+        "/nologo".to_string(),
+        "/c".to_string(),
+        "/Z7".to_string(),
+        format!("/Fd{}", pdb.display()),
+        format!("/Fo{}", object.display()),
+        source.to_string_lossy().into_owned(),
+    ];
+
+    let (endpoint, server_handle, shutdown, _cache_root) = start_daemon().await;
+    let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
+    let sid = start_session(&mut client, &cwd, &log.to_string_lossy()).await;
+
+    let (code, cached, stderr) = compile(&mut client, &sid, &compiler, args.clone(), &cwd).await;
+    assert_eq!(
+        code,
+        0,
+        "first compile failed: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(
+        !cached,
+        "first compile must be a miss (issue #1940: /Fd must not force non-cacheable)"
+    );
+    assert!(object.exists(), "first compile produced no object");
+    let expected = std::fs::read(&object).unwrap();
+    std::fs::remove_file(&object).unwrap();
+
+    let (code, cached, stderr) = compile(&mut client, &sid, &compiler, args, &cwd).await;
+    assert_eq!(
+        code,
+        0,
+        "second compile failed: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(
+        cached,
+        "issue #1940: a CMake-shaped cl.exe compile carrying /Fd (+/Z7) must be a cache hit"
+    );
+    assert_eq!(
+        std::fs::read(&object).unwrap(),
+        expected,
+        "cache hit materialized a different object"
+    );
+
+    shutdown.notify_one();
+    server_handle.await.unwrap();
+}

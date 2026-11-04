@@ -123,3 +123,75 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         );
     }
 }
+
+/// #1987 residual: the units of one multi-file request share one verdict per
+/// input path. The first unit's check fills the memo with every stat-verified
+/// input; later units read it instead of re-stating shared headers, so a
+/// memo entry, not a fresh stat, decides for the rest of the request.
+#[tokio::test]
+async fn multi_request_memo_verifies_each_input_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = super::bind_isolated_server(dir.path());
+    let paths: Vec<NormalizedPath> = ["a.cpp", "inc/shared.h"]
+        .iter()
+        .map(|p| dir.path().join(p).into())
+        .collect();
+    for path in &paths {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"body").unwrap();
+        server.state.cache_system.journal().register(path.clone());
+        server
+            .state
+            .cache_system
+            .lookup_since(path, Clock::ZERO)
+            .unwrap();
+    }
+    let ctx = CompileContext {
+        source_file: paths[0].clone(),
+        include_search: crate::depgraph::IncludeSearchPaths::default(),
+        defines: vec![],
+        undefines: vec![],
+        flags: vec![],
+        force_includes: vec![],
+        unknown_flags: vec![],
+        compiler_hash: crate::hash::hash_bytes(b"fixture"),
+    };
+    let graph = server.state.dep_graph.load();
+    let key = graph.register(ctx);
+    let scan = crate::depgraph::ScanResult {
+        resolved: vec![paths[1].clone()],
+        unresolved: vec![],
+        has_computed: false,
+    };
+    let expected = graph
+        .update(&key, scan, |path: &Path| {
+            std::fs::read(path)
+                .ok()
+                .map(|b| crate::hash::hash_bytes(&b))
+        })
+        .unwrap()
+        .hash()
+        .to_hex();
+    let clock = server.state.cache_system.current_clock();
+    let memo = InputHashMemo::new();
+    let fresh = |memo: Option<&InputHashMemo>| {
+        context_artifact_is_fresh_with(&server.state, &key, &paths[0], clock, None, &expected, memo)
+    };
+
+    assert!(fresh(Some(&memo)), "first unit verifies and fills the memo");
+    for path in &paths {
+        assert!(
+            memo.get(path).is_some_and(|hash| hash.is_some()),
+            "memo holds the stat-verified hash of {}",
+            path.display()
+        );
+    }
+    assert_eq!(memo.len(), paths.len(), "one entry per distinct input");
+
+    // A later unit trusts the request's verdict for a shared header instead
+    // of stating it again: a recorded miss declines it even though the file
+    // on disk is unchanged (and the memo-free check still accepts).
+    memo.insert(paths[1].clone(), None);
+    assert!(!fresh(Some(&memo)), "later unit reads the request verdict");
+    assert!(fresh(None), "single-request path still stats");
+}

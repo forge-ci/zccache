@@ -35,6 +35,7 @@ fn check_unit_cache(
         shared_base,
         shared_dep_flags,
         scan_cache,
+        input_hashes,
         cache_now,
         dependency_mode,
         materialization_mode,
@@ -117,13 +118,14 @@ fn check_unit_cache(
         let entry = owned_fast_hit_entry(&state.fast_hit_cache, &context_key);
         if let Some(entry) = entry {
             if cache_entry_fresh_at(cache_now, entry.cached_at, FAST_HIT_MAX_AGE)
-                && context_artifact_is_fresh(
+                && context_artifact_is_fresh_with(
                     state,
                     &context_key,
                     &source_path,
                     entry.clock,
                     None,
                     &entry.artifact_key_hex,
+                    Some(input_hashes),
                 )
             {
                 let artifact_key_hex = &entry.artifact_key_hex;
@@ -535,6 +537,7 @@ pub(super) async fn handle_compile_multi(
     // ── Phase 1: Check cache for each unit (parallel, as-completed) ──
     let mut join_set = tokio::task::JoinSet::new();
     let scan_cache = Arc::clone(&state.include_scan_cache);
+    let input_hashes = Arc::new(InputHashMemo::new());
     for (idx, compilation) in compilations.iter().enumerate() {
         let request_profile = crate::daemon::staged_stats::current_request_profile();
         let state = Arc::clone(&state);
@@ -545,6 +548,7 @@ pub(super) async fn handle_compile_multi(
         let shared_base = Arc::clone(&shared_base);
         let shared_dep_flags = shared_dep_flags.clone();
         let scan_cache = Arc::clone(&scan_cache);
+        let input_hashes = Arc::clone(&input_hashes);
         let cache_now = compile_start;
         join_set.spawn(crate::daemon::staged_stats::scope_optional_request_profile(
             request_profile,
@@ -564,6 +568,7 @@ pub(super) async fn handle_compile_multi(
                                     shared_base: Some(&shared_base),
                                     shared_dep_flags: Some(&shared_dep_flags),
                                     scan_cache: &scan_cache,
+                                    input_hashes: &input_hashes,
                                     cache_now,
                                     dependency_mode,
                                     materialization_mode,

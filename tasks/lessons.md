@@ -1,5 +1,14 @@
 # Lessons
 
+## Response-file parsing must preserve execution semantics (2026-11-02)
+
+Keeping a nested `@` argument literal in the parser is insufficient if the
+expanded argv is passed directly back to the compiler. Cover real compiler
+execution: reject nested flag injection, retain valid literal search paths
+through a cache hit, and reject unreadable top-level files before lookup.
+Warm a valid artifact before checking invalid argument rejection: a miss-only
+test misses aliases caused by an unmodeled positional input in the key parser.
+
 ## Link payloads include permissions (2026-10-02)
 
 Reading a linked executable into a byte buffer drops execute bits. Retain
@@ -341,3 +350,19 @@ from a checker that recurses through local fields only. Test against the real
 consumer dependency and classify the wrapper by its resolved defining module
 and type. Include aliases, concrete wrappers and unit-valued native guards;
 only separately owned data-free operation permits may survive suspension.
+
+## Local replay failures (2026-11-02)
+
+Strip ANSI before parsing nextest status lines: colored FAIL prefixes made
+Integration's anchored grep emit an empty list despite a named test failure.
+An exit-137 receipt and OOMKilled=false on a replacement container cannot
+identify the original killer. Preserve original engine death events before
+cleanup; label before/after host samples instead of claiming kill-time load.
+
+## Queue observers must share watched-job prerequisites (2026-11-04)
+
+A workflow's wall-clock age is not hosted-runner queue age. In run 41760074116,
+the cache barrier finished after the observer's lifetime, and GitHub only then
+created the watched job. Start the observer alongside its watched jobs by
+matching their needs and condition; test that contract for every caller. Keep
+visible queued-job starvation and missing-identity failures loud.

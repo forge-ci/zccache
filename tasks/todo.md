@@ -1,3 +1,14 @@
+# PR #2019 — rustc response files
+
+- [x] Preserve the fully pushed release branch and update local main.
+- [x] Review compiler-family parsing, cached expansion and regression coverage.
+- [x] Merge current main into the contributor branch locally without conflicts.
+- [x] Run the real rustc argfile regression in isolated Bosn (compile miss and hit).
+- [x] Verify literal `@` arguments survive compiler execution without a second expansion.
+- [ ] Run the complete isolated local gate.
+- [ ] Push the validated update to #2019, observe checks and merge through the queue.
+- [ ] Return the checkout to clean, current main after merge.
+
 # #1116 container summary handoff
 
 - [x] Reproduce the real Linux campaign failure: root-owned 0644 summary,
@@ -1346,6 +1357,12 @@ Issue: https://github.com/zackees/zccache/issues/1578
 - [x] Validate committed no-cook candidate e3b4520: full gate passed in 954 s, stamped e587de8e; all 3478 tests passed. Explicit ci-tests default serialized nextest, so restore num-cpus parallelism in the final slice.
 - [x] Add RED old-lock retention/bootstrap checks; retire measured Test and Integration generations, reserve the initial 1.2 GB without double-counting, and replay the captured 7.90 GB inventory at a 9.10 GB forecast below the unchanged 9.20 GB target.
 - [ ] Review and validate the final committed planner/parallelism slice before push.
+# #1036 explicitly authorized remote Docker campaign
+
+- [x] Verify the local quiet-host check rejects competing Cargo/clang/rustc builds.
+- [x] Add a manual option to the existing benchmark workflow for all three unchanged five-sample Docker campaigns and retained evidence.
+- [ ] Validate workflow/cache guards and complete committed-tree gate before push.
+- [ ] Merge the focused PR, run on the final source ref, download raw evidence, and inspect all correctness and performance results.
 # Shared CI compiler-store snapshots (ci.yml#362)
 
 - [x] Observe an isolated RED test retaining multi-output metadata and verdicts.
@@ -1559,3 +1576,33 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+# Local replay failure diagnostics (#2058)
+
+- [x] Reconstruct Integration failure from Bosn receipts and raw nextest output.
+- [x] Correlate exit 137 with engine disappearance; document missing kill provenance.
+- [x] File zccache #2058 and Bosn #810 after duplicate searches.
+- [x] Fail tests first for colored nextest parsing, unknown failure and SIGKILL classification.
+- [x] Add scoped step logs, parsed failures and timestamped host/runner samples.
+- [ ] Complete pre-push review and validation; publish an unmerged PR.
+
+## PR #2056 honest CI summary recovery
+
+- [x] Recover agg-2056 onto current main; retain concurrency fixes and remove obsolete queue-only duplicate callers.
+- [ ] Validate summary, workflow guards, and local gate; review final diff.
+- [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.
+
+## Hosted runner observer prerequisite alignment (2026-11-04)
+
+- [x] Read CLAUDE.md and compare API timestamps for all four reported runs.
+- [x] Reproduce missing prerequisite edges with a failing CI contract test.
+- [x] Give observers the same prerequisites as watched jobs; retain starvation failures.
+- [x] Verify prerequisite/condition parity across all five observer workflows.
+- [ ] Complete local gate and pre-push review; push branch and open an unmerged PR.
+
+Evidence: macOS run 41760074116 observer ended 03:16:07Z; barrier ended
+03:20:45Z; watched job created 03:20:46Z, started 03:20:52Z, passed 03:30:51Z.
+The upstream barrier outlived the observer; the macOS queue lasted six seconds.
+The jobs API does not retain a first-visible timestamp; created_at and observer
+logs establish that the job did not exist during observation. Auto-release
+already has prerequisite/condition parity and remains unchanged.

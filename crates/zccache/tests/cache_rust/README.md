@@ -34,6 +34,7 @@ cargo nextest run --test cache_rust -E 'test(/^<file_stem>::/)'
 - `daemon_rustc_cache_path_remap_test`
 - `daemon_rustc_cache_worktree_test`
 - `daemon_rustc_issue_210_async_populate_test`
+- `daemon_rustc_response_file_test` — cargo-style `rustc @argfile` (one argument per line, spilled past 30,000 characters) compiles and hits
 - `daemon_rustc_restore_test`
 - `daemon_workspace_pin_747`
 - `reflink_worktree_e2e` — `ZCCACHE_MODE` on a real reflink volume: parent/child worktree hits per mode (needs `ZCCACHE_REFLINK_E2E_ROOT`; run by the `reflink-e2e` CI job)

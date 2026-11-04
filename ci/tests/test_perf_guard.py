@@ -945,7 +945,8 @@ def test_perf_workflow_has_dedicated_cow_materialization_gate():
         encoding="utf-8"
     )
 
-    assert "\n  pull_request:\n" in workflow
+    assert "\n  pull_request:\n" not in workflow  # deferred off the PR queue
+    assert "\n  push:\n" in workflow and "\n  workflow_dispatch:\n" in workflow
     job = workflow.split("\n  cow-materialization-budget:\n", 1)[1].split(
         "\n  build-perf-benchmark:\n", 1
     )[0]

@@ -10,14 +10,8 @@ on:
       - ".rustup/**"
       - ".github/workflows/broker-stress.yml"
       - "crates/**"
-  pull_request:
-    paths:
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - ".cargo/**"
-      - ".rustup/**"
-      - ".github/workflows/broker-stress.yml"
-      - "crates/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:

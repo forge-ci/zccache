@@ -26,3 +26,12 @@ Exceptions:
 - **test-action.yml** exercises this repository's own zccache action and must keep using that action directly.
 - **bench-action.yml** and **bench-fingerprint.yml** compare bare Cargo, sccache, and zccache behavior, so setup-soldr would invalidate the control rows.
 - **perf-rust-cluster.yml** builds pinned benchmark binaries and cross-repo perf fixtures with explicit cache topology; it remains on its purpose-built cache stack.
+
+## PR queue vs deferred lanes
+
+Pull requests (and the merge queue) run only the Linux set: `CI`
+(gated by the single required `CI summary` check), `Linux`, `Python Tests`,
+plus path-filtered cheap checks. The expensive lanes, `macOS`, `Windows`,
+`Integration`, `Wrapper end-to-end`, `Filesystem Matrix`, `Perf Guard`,
+`Broker stress` and `test-action`, run on push to `main`, a nightly
+`schedule` and `workflow_dispatch`, never on `pull_request`.

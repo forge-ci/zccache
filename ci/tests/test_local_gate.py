@@ -10,6 +10,7 @@ the isolated lane never learned about.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -104,6 +105,7 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     assert "Verify nested Dylint cache contract" in by_lane["check"].required_steps
     assert by_lane["dylint"].required_steps == (
         "Run Dylint",
+        "Rust argfile execution regressions",
         "Prove custom-lint selection for every OS",
     )
     assert "Test (full workspace)" in by_lane["tests"].required_steps
@@ -114,3 +116,126 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
         block = _job_block(workflow, check.bosn_job)
         for step in check.required_steps:
             assert f"name: {step}" in block
+
+
+def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
+    block = _job_block("ci.yml", "dylint")
+    assert "name: Rust argfile execution regressions" in block
+    assert "soldr rustup which rustc" in block
+    assert (
+        "soldr cargo test -p zccache --features test-support --test cache_rust "
+        "daemon_rustc_response_file_test:: -- --ignored --test-threads=1"
+    ) in block
+    check = next(check for check in local_gate.checks() if check.lane == "dylint")
+    assert "Rust argfile execution regressions" in check.required_steps
+
+
+def _receipt(sections: list[dict[str, object]]) -> str:
+    return json.dumps(
+        {
+            "id": "run-1",
+            "act_version": "0.2.89-act2.36",
+            "created_at": 100.0,
+            "started_at": 130.0,
+            "finished_at": 730.0,
+            "tree": {"groups": [{"jobs": [{"job_id": "dylint", "sections": sections}]}]},
+        }
+    )
+
+
+def test_bosn_timing_summary_names_queue_wait_and_slowest_steps() -> None:
+    summary = local_gate.bosn_timing_summary(
+        _receipt(
+            [
+                {
+                    "name": "Run Dylint",
+                    "started_at": "2026-11-02T21:00:00Z",
+                    "completed_at": "2026-11-02T21:03:39Z",
+                },
+                {
+                    "name": "zackees/setup-soldr@v0",
+                    "started_at": "2026-11-02T20:58:00Z",
+                    "completed_at": "2026-11-02T20:59:34Z",
+                },
+                {"name": "never started", "started_at": None, "completed_at": None},
+            ]
+        )
+    )
+    assert summary is not None
+    lines = summary.splitlines()
+    assert "queued 30s, ran 600s (act 0.2.89-act2.36)" in lines[0]
+    assert lines[1].split() == ["219s", "dylint:", "Run", "Dylint"]
+    assert "setup-soldr" in lines[2]
+    assert len(lines) == 3
+
+
+def test_bosn_timing_summary_never_fails_the_gate_on_odd_output() -> None:
+    assert local_gate.bosn_timing_summary("not json") is None
+    assert local_gate.bosn_timing_summary('{"tree": {}}') is None
+
+
+def test_failure_summary_strips_color_and_keeps_nextest_identity() -> None:
+    output = '\x1b[31;1m        FAIL\x1b[0m [ 0.372s] (1282/3702) zccache-core blocking_sync::handoff_latency_tests::contended_rwlock_writer_handoff_is_sub_millisecond'
+    summary = local_gate.bosn_failure_summary(output, 100)
+    assert 'blocking_sync::handoff_latency_tests::contended_rwlock_writer_handoff_is_sub_millisecond' in summary
+    assert '\x1b' not in summary
+
+
+def test_failure_summary_never_emits_an_empty_failure_list() -> None:
+    assert 'unknown failure (exit 100)' in local_gate.bosn_failure_summary('## Integration Test Failures\n```\n```', 100)
+
+
+def test_failure_summary_classifies_137_without_claiming_oom() -> None:
+    summary = local_gate.bosn_failure_summary('act exit 137; engine cleanup failed: act serve close failed', 1)
+    assert 'killed (SIGKILL/OOM?) under load' in summary
+    assert 'OOM confirmed' not in summary
+
+
+def test_failed_step_diagnostics_fetches_scoped_logs(monkeypatch) -> None:
+    calls = []
+    def capture(argv):
+        calls.append(argv)
+        if 'report' in argv:
+            # A valid report returns the failed run's exit status.
+            return local_gate.Captured(1, json.dumps({'first_failure': {'job': 'job-key', 'section': 'Main:9', 'step': 'Test', 'exit_code': 100}}))
+        return local_gate.Captured(0, 'FAIL [0.3s] crate test_name\n' + 'later doctest output\n' * 50)
+    monkeypatch.setattr(local_gate, '_diagnostic_command', capture)
+    summary = local_gate._bosn_failure_details(json.dumps({'id': 'run-id'}))
+    assert 'FAIL [0.3s] crate test_name' in summary
+    assert 'failing step: job-key: Test (exit 100)' in summary
+    assert calls[1] == ['bosn', 'ci', 'logs', 'run-id', '--job', 'job-key', '--step', 'Main:9']
+    assert summary.count('later doctest output') == 40
+    assert 'diagnostics unavailable' not in summary
+
+
+def test_integration_workflow_summary_handles_colored_nextest(tmp_path) -> None:
+    import os
+    import subprocess
+    block = _job_block('integration.yml', 'integration')
+    script = block.split('          if [ $status -ne 0 ]; then', 1)[1].split('          exit $status', 1)[0]
+    (tmp_path / 'test-output.txt').write_text('\x1b[31;1m        FAIL\x1b[0m [0.3s] crate test_name\n')
+    summary = tmp_path / 'summary'
+    proc = subprocess.run(['bash', '-c', 'status=100\nif [ $status -ne 0 ]; then' + script], cwd=tmp_path,
+                          env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)}, timeout=10)
+    assert proc.returncode == 0
+    assert 'FAIL [0.3s] crate test_name' in ' '.join(summary.read_text().split())
+
+
+def test_failed_report_keeps_diagnostic_error_and_unknown_status(monkeypatch) -> None:
+    monkeypatch.setattr(local_gate, '_diagnostic_command', lambda argv: local_gate.Captured(1, 'daemon unavailable'))
+    summary = local_gate._bosn_failure_details(json.dumps({'id': 'run-id'}))
+    assert 'unknown failure (exit unknown)' in summary
+    assert 'daemon unavailable' in summary
+    assert 'receipt/output tail' in summary
+
+
+def test_integration_workflow_unknown_failure_is_explicit(tmp_path) -> None:
+    import os
+    import subprocess
+    block = _job_block('integration.yml', 'integration')
+    script = block.split('          if [ $status -ne 0 ]; then', 1)[1].split('          exit $status', 1)[0]
+    (tmp_path / 'test-output.txt').write_text('runner disappeared\n')
+    summary = tmp_path / 'summary'
+    subprocess.run(['bash', '-c', 'status=137\nif [ $status -ne 0 ]; then' + script], cwd=tmp_path,
+                   env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)}, timeout=10, check=True)
+    assert 'unknown failure (exit 137)' in summary.read_text()

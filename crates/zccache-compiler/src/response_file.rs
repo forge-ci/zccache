@@ -1,21 +1,29 @@
 //! Response file (`@file`) expansion for compiler arguments.
 //!
-//! Both GCC and Clang support `@filename` syntax where the file contains
-//! additional command-line arguments. This module handles reading and
-//! expanding those files into the argument list.
+//! GCC, Clang, MSVC and rustc support `@filename` syntax where the file
+//! contains additional command-line arguments; rustc reads it one argument
+//! per line ([`parse_response_file_content_for`]). This module handles
+//! reading and expanding those files into the argument list.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use zccache_core::NormalizedPath;
 
+mod family;
+pub use family::{
+    expand_response_files_in_for, expands_nested_response_files, parse_response_file_content_for,
+    read_response_file_text_for,
+};
 mod format;
+mod temporary;
 #[cfg(test)]
 use format::gnu as format_rsp_content;
 use format::gnu_if_safe as format_rsp_content_if_safe;
 use format::{
     msvc_if_safe as format_rsp_content_msvc_if_safe, rustc_if_safe as format_rsp_content_rustc,
 };
+pub use temporary::{preserve_rustc_literal_at_args, RustcLiteralResponseFiles};
 
 /// Maximum nesting depth for response files to prevent stack overflow.
 const MAX_DEPTH: usize = 10;
@@ -130,13 +138,13 @@ pub fn expand_response_files(args: &[String]) -> Result<Vec<String>, ResponseFil
 /// Like [`expand_response_files`], but resolves relative `@file` paths against
 /// `base_dir` instead of the process's current working directory. For nested
 /// `@file` references inside a response file, paths are resolved against the
-/// parent file's directory (matching compiler behavior).
+/// parent file's directory (matching compiler behavior). Files are read with
+/// the GCC/Clang grammar; see [`expand_response_files_in_for`] for rustc.
 pub fn expand_response_files_in(
     args: &[String],
     base_dir: &Path,
 ) -> Result<Vec<String>, ResponseFileError> {
-    let mut seen = HashSet::new();
-    expand_recursive(args, base_dir, &mut seen, 0)
+    expand_response_files_in_for(args, base_dir, crate::CompilerFamily::Gcc)
 }
 
 fn expand_recursive(
@@ -144,13 +152,14 @@ fn expand_recursive(
     base_dir: &Path,
     seen: &mut HashSet<NormalizedPath>,
     depth: usize,
+    family: crate::CompilerFamily,
 ) -> Result<Vec<String>, ResponseFileError> {
     let mut result = Vec::new();
 
     for arg in args {
         if let Some(filename) = arg.strip_prefix('@') {
-            if filename.is_empty() {
-                // Bare `@` is not a response file reference
+            if filename.is_empty() && family != crate::CompilerFamily::Rustc {
+                // Keep the legacy non-Rust handling of a bare `@`.
                 result.push(arg.clone());
                 continue;
             }
@@ -176,18 +185,23 @@ fn expand_recursive(
                 return Err(ResponseFileError::TooDeep { path: resolved });
             }
 
-            let content =
-                read_response_file_text(&canonical).map_err(|e| ResponseFileError::ReadError {
+            let content = read_response_file_text_for(&canonical, family).map_err(|e| {
+                ResponseFileError::ReadError {
                     path: resolved,
                     source: e,
-                })?;
+                }
+            })?;
 
             // Nested @file references resolve against the parent file's directory
             let parent_dir = canonical.parent().unwrap_or(base_dir);
 
-            let expanded_args = parse_response_file_content(&content);
-            let nested = expand_recursive(&expanded_args, parent_dir, seen, depth + 1)?;
-            result.extend(nested);
+            let expanded_args = parse_response_file_content_for(&content, family);
+            if expands_nested_response_files(family) {
+                let nested = expand_recursive(&expanded_args, parent_dir, seen, depth + 1, family)?;
+                result.extend(nested);
+            } else {
+                result.extend(expanded_args);
+            }
 
             // Remove from seen so the same file can appear in sibling branches
             // (circular = same file in ancestor chain, not sibling)
@@ -287,9 +301,6 @@ pub fn write_response_file_if_needed(
         return Ok(None);
     }
 
-    let id = RSP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let rsp_path =
-        NormalizedPath::new(tmp_dir.join(format!("zccache_{}_{}.rsp", std::process::id(), id)));
     let content = match family_hint {
         crate::CompilerFamily::Rustc => format_rsp_content_rustc(args),
         crate::CompilerFamily::Msvc => format_rsp_content_msvc_if_safe(args),
@@ -299,9 +310,7 @@ pub fn write_response_file_if_needed(
     let Some(content) = content else {
         return Ok(None);
     };
-    kernal_api::platform::fs::write_file(&rsp_path, content)?;
-
-    Ok(Some(TempResponseFile { path: rsp_path }))
+    temporary::write_temp_response_file(&content, tmp_dir).map(Some)
 }
 
 /// RAII guard for a temporary response file. Deletes the file on drop.
