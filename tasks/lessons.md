@@ -358,3 +358,11 @@ Integration's anchored grep emit an empty list despite a named test failure.
 An exit-137 receipt and OOMKilled=false on a replacement container cannot
 identify the original killer. Preserve original engine death events before
 cleanup; label before/after host samples instead of claiming kill-time load.
+
+## Queue observers must share watched-job prerequisites (2026-11-04)
+
+A workflow's wall-clock age is not hosted-runner queue age. In run 41760074116,
+the cache barrier finished after the observer's lifetime, and GitHub only then
+created the watched job. Start the observer alongside its watched jobs by
+matching their needs and condition; test that contract for every caller. Keep
+visible queued-job starvation and missing-identity failures loud.
