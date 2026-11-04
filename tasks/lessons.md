@@ -366,3 +366,16 @@ the cache barrier finished after the observer's lifetime, and GitHub only then
 created the watched job. Start the observer alongside its watched jobs by
 matching their needs and condition; test that contract for every caller. Keep
 visible queued-job starvation and missing-identity failures loud.
+
+
+## Rustc `-o` is an output-family rule (2026-11-04)
+
+Count distinct implicit emits, excluding kind-specific destinations, before
+adapting `-o`. A single metadata emit writes exactly that filename; guessing
+`lib<crate>.rmeta` creates a nonexistent required output or captures stale data.
+Keep primary naming, required outputs and fallback capture on one rule.
+
+Repeated `--emit` flags merge distinct kinds, but the last option for each kind
+wins. A later implicit kind clears its old explicit destination. Normalize
+that policy while parsing; retaining historical paths makes stale files look
+like required compiler products.

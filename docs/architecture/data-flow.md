@@ -153,6 +153,15 @@ can yet run in a Wasm guest.
 
 ## Rustc Cache-Key Specifics (zccache#1021)
 
+Rustc output discovery honors `--emit=kind=path` before `-o`. One implicit
+emit uses the exact `-o` destination; multiple implicit emits adapt its stem
+and directory, ignoring `--out-dir`. Metadata and non-binary linked outputs
+retain their crate-derived names. Explicit kind destinations do not count as
+implicit emits. Repeated options merge distinct kinds, and the last occurrence
+of each kind wins across all flags; a later implicit kind clears its earlier
+explicit path. Required outputs, depfiles and fallback capture use that same
+family, so an unrelated conventional metadata file cannot enter the cache.
+
 The rustc lane shares the pipeline above but has four key-scope rules of
 its own:
 
