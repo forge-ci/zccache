@@ -541,7 +541,7 @@ impl CompileJournal {
     fn try_new(log_dir: NormalizedPath) -> std::io::Result<Self> {
         zccache_core::config::create_dir_all_private(&log_dir)?;
         let path = log_dir.join("compile_journal.jsonl");
-        let file = open_shared_append(&path)?;
+        let file: Box<dyn std::io::Write + Send> = Box::new(open_shared_append(&path)?);
 
         let (tx, rx) = mpsc::channel();
 

@@ -20,7 +20,6 @@
 //! ~614 / 34 s down to roughly one per batch under load.
 
 use std::collections::HashMap;
-use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::mpsc;
@@ -54,15 +53,18 @@ pub(super) enum JournalMessage {
 }
 
 /// Buffered writer over the global journal file.
-type GlobalWriter = BufWriter<std::fs::File>;
+///
+/// The sink is boxed so rotation swaps handles without this module naming a
+/// host file type; `open_shared_append` owns the open.
+type GlobalWriter = BufWriter<Box<dyn Write + Send>>;
 /// Buffered writers over each session journal file.
-type SessionWriter = BufWriter<std::fs::File>;
+type SessionWriter = BufWriter<Box<dyn Write + Send>>;
 
 /// Background thread: receives journal messages and writes to files.
 pub(super) fn journal_thread(
     rx: mpsc::Receiver<JournalMessage>,
     global_path: NormalizedPath,
-    global_file: std::fs::File,
+    global_file: Box<dyn Write + Send>,
 ) {
     let mut session_files: HashMap<NormalizedPath, SessionWriter> = HashMap::new();
     let mut current_size: u64 = global_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -108,7 +110,8 @@ pub(super) fn journal_thread(
                     let line_bytes = line.len() as u64 + 1; // +1 for newline
                     if writeln!(global_file, "{line}").is_err() {
                         if let Ok(f) = open_shared_append(&global_path) {
-                            global_file = BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, f);
+                            global_file =
+                                BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, Box::new(f));
                             let _ = writeln!(global_file, "{line}");
                         }
                     }
@@ -119,7 +122,10 @@ pub(super) fn journal_thread(
                     if let Some(path) = session_path {
                         let file = session_files.entry(path.clone()).or_insert_with(|| {
                             match open_shared_append(&path) {
-                                Ok(f) => BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, f),
+                                Ok(f) => BufWriter::with_capacity(
+                                    JOURNAL_BUF_CAPACITY,
+                                    Box::new(f) as Box<dyn Write + Send>,
+                                ),
                                 Err(e) => {
                                     tracing::debug!("session journal open error: {e}");
                                     // Return a dummy that will fail writes — we'll
@@ -128,16 +134,18 @@ pub(super) fn journal_thread(
                                         clippy::expect_used,
                                         reason = "NUL on Windows / /dev/null on Unix must exist; their absence indicates a fundamentally broken host where the daemon cannot recover"
                                     )]
-                                    let fallback = open_shared_append(&path).unwrap_or_else(|_| {
-                                        // Last resort: /dev/null equivalent. The HashMap
-                                        // entry will be cleaned up on CloseSession.
-                                        std::fs::File::open(if crate::platform::host::is_windows() {
-                                            "NUL"
-                                        } else {
-                                            "/dev/null"
-                                        })
-                                        .expect("cannot open null device")
-                                    });
+                                    let fallback: Box<dyn Write + Send> = Box::new(
+                                        open_shared_append(&path).unwrap_or_else(|_| {
+                                            // Last resort: /dev/null equivalent. The HashMap
+                                            // entry will be cleaned up on CloseSession.
+                                            kernal_api::platform::fs::create_file(if crate::platform::host::is_windows() {
+                                                "NUL"
+                                            } else {
+                                                "/dev/null"
+                                            })
+                                            .expect("cannot open null device")
+                                        }),
+                                    );
                                     BufWriter::with_capacity(JOURNAL_BUF_CAPACITY, fallback)
                                 }
                             }
@@ -177,15 +185,16 @@ pub(super) fn journal_thread(
 
 /// Rotate the global journal file: rename to timestamped backup, GC old backups.
 /// Returns the new file handle and initial size, or `None` on failure.
-pub(super) fn rotate_journal(path: &Path) -> Option<(std::fs::File, u64)> {
+pub(super) fn rotate_journal(path: &Path) -> Option<(Box<dyn Write + Send>, u64)> {
     let ts = super::log_io::format_timestamp(std::time::SystemTime::now()).replace(':', "-");
     let rotated = path.with_file_name(format!("compile_journal.jsonl.{ts}"));
     // Rename current file to rotated name.
     if kernal_api::platform::fs::rename(path, &rotated).is_err() {
         return None;
     }
-    // Open a fresh file.
-    let file = open_shared_append(path).ok()?;
+    // Open a fresh file. The sink is boxed so the caller swaps handles
+    // without naming a host file type.
+    let file: Box<dyn Write + Send> = Box::new(open_shared_append(path).ok()?);
     gc_journal_files(path);
     Some((file, 0))
 }
@@ -196,17 +205,13 @@ pub(super) fn gc_journal_files(path: &Path) {
         Some(d) => d,
         None => return,
     };
-    let mut rotated: Vec<NormalizedPath> = fs::read_dir(dir)
+    let mut rotated: Vec<NormalizedPath> = kernal_api::platform::fs::read_dir_paths(dir)
+        .unwrap_or_default()
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with("compile_journal.jsonl.") {
-                Some(e.path().into())
-            } else {
-                None
-            }
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            name.starts_with("compile_journal.jsonl.")
+                .then(|| path.into())
         })
         .collect();
 
