@@ -557,7 +557,9 @@ fn rustc_aux_output_path(
             false,
             syntax,
         ) {
-            crate::compiler::RustcOutputPlan::Explicit(path) => PathBuf::from(path),
+            crate::compiler::RustcOutputPlan::Explicit(path) => {
+                NormalizedPath::new(path).into_path_buf()
+            }
             crate::compiler::RustcOutputPlan::InDirectory {
                 directory,
                 filename,
