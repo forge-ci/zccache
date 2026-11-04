@@ -125,6 +125,9 @@ not readiness. Keep existing stats/journal/lifecycle collection from OBS #3613.
 After collecting failure evidence, stop this job's daemon through the normal
 shutdown command and wait for the observer. Its own duration expiry / interrupt
 is explicitly recorded before TERM (then KILL after a 10-second cleanup bound).
+SIGTERM/SIGHUP to the observer use the same bounded cleanup path. If a killed
+child cannot be reaped within another ten seconds, the observer writes
+`unreaped`, leaves its final status null and returns 125.
 Those induced signals must not be attributed to the original build failure.
 
 The observer fsyncs JSONL records, samples daemon/descendant RSS and identity
@@ -154,3 +157,14 @@ shared pages and are not cgroup charged memory. Records cap process details at
 Raw stderr can contain build paths/arguments; retain it with normal CI log access
 controls and sanitize before public sharing. This PR adds no workflow or OBS
 integration; the real failing job still needs to run this measurement.
+
+## Observer validation
+
+Real foreground processes in the same Docker image exercised ordinary exit 23,
+SIGKILL (observer exit 137, recorded daemon status -9) and observer deadline
+(exit 124, explicitly induced TERM). A cancellation probe against the initial
+observer revision (`8546a994`) exited 143 with no final record; the corrected
+observer exits 130 and records `observer-interrupt`, its own TERM and child
+status -15. That RED/GREEN proves a diagnostic cleanup fix, **not** the cause
+of OBS's daemon disconnects. Four Rust regressions are registered in the
+existing `daemon_lifecycle` target; they require `uv` and a local Python on Linux.

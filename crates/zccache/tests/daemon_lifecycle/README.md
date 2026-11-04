@@ -38,3 +38,5 @@ cargo nextest run --test daemon_lifecycle -E 'test(/^<file_stem>::/)'
 - `daemon_stdio_detach`
 - `daemon_tokio_console_test`
 - `embedded_service_test`
+
+`daemon_death_probe` checks the Linux CI foreground-daemon observer with real exit, signal, deadline and cancellation paths. These four tests require `uv` and a locally available Python interpreter (offline mode); other platforms compile them out.

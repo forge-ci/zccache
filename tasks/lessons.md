@@ -358,3 +358,7 @@ Integration's anchored grep emit an empty list despite a named test failure.
 An exit-137 receipt and OOMKilled=false on a replacement container cannot
 identify the original killer. Preserve original engine death events before
 cleanup; label before/after host samples instead of claiming kill-time load.
+
+## Daemon death attribution (#2064)
+
+A cgroup OOM kill count does not identify the daemon as the victim. In a 1 GiB three-PCH probe, cc1plus failed while the daemon stayed responsive. Pair a parent-owned daemon exit status with kernel victim identity and simultaneous daemon/compiler memory. Also compare fatal paths against the deployed tag: current main sync_watchdog does not exist in 1.15.5.

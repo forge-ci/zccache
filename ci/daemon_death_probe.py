@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import FrameType
 from typing import TypedDict
 
 
@@ -129,6 +130,10 @@ def positive_seconds(value: str) -> float:
     return seconds
 
 
+def interrupt_observer(_signum: int, _frame: FrameType | None) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
@@ -165,8 +170,10 @@ def main() -> int:
                 "started", pid=child.pid, identity=root, cgroups=cgroup_sample(paths)
             )
             reason = None
-            deadline = time.monotonic() + args.duration_secs
+            deadline_ns = time.monotonic_ns() + int(args.duration_secs * 1_000_000_000)
             try:
+                signal.signal(signal.SIGTERM, interrupt_observer)
+                signal.signal(signal.SIGHUP, interrupt_observer)
                 while child.poll() is None:
                     record(
                         "sample",
@@ -174,21 +181,29 @@ def main() -> int:
                         cgroups=cgroup_sample(paths),
                         meminfo=read_text(Path("/proc/meminfo")),
                     )
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
+                    remaining_ns = deadline_ns - time.monotonic_ns()
+                    if remaining_ns <= 0:
                         reason = "observer-deadline"
                         break
                     try:
-                        child.wait(timeout=min(args.interval_secs, remaining))
+                        child.wait(
+                            timeout=min(
+                                args.interval_secs, remaining_ns / 1_000_000_000
+                            )
+                        )
                     except subprocess.TimeoutExpired:
                         pass
             except KeyboardInterrupt:
                 reason = "observer-interrupt"
             finally:
+                # A second supervisor signal must not interrupt bounded reaping.
+                for stop_signal in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(stop_signal, signal.SIG_IGN)
                 if child.poll() is None:
+                    reason = reason or "observer-error"
                     record(
                         "observer-stop",
-                        reason=reason or "observer-error",
+                        reason=reason,
                         signal=signal.SIGTERM,
                     )
                     child.terminate()
@@ -201,16 +216,21 @@ def main() -> int:
                             signal=signal.SIGKILL,
                         )
                         child.kill()
-                        child.wait(timeout=10)
+                        try:
+                            child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            record("unreaped", pid=child.pid, reason="cleanup-deadline")
                 record(
                     "exited",
                     returncode=child.returncode,
                     termination_signal=-child.returncode
-                    if child.returncode < 0
+                    if child.returncode is not None and child.returncode < 0
                     else None,
                     observer_stop_reason=reason,
                     cgroups=cgroup_sample(paths),
                 )
+            if child.returncode is None:
+                return 125
             if reason:
                 return 124 if reason == "observer-deadline" else 130
             return 128 - child.returncode if child.returncode < 0 else child.returncode

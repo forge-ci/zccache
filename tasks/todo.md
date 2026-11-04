@@ -1598,5 +1598,6 @@ native kernal foreground/sync APIs are included in UI and the full gate.
 - [x] Inventory current and 1.15.5 termination mechanisms without conflating versions.
 - [x] Probe three concurrent cold PCHs in repo Docker image at 2 GiB and 1 GiB; daemon death not reproduced.
 - [x] Add opt-in external foreground-daemon observer and written unproven verdict.
-- [ ] Validate observer exit/signal/deadline regressions and repository gate; review.
+- [x] Validate observer real exit/signal/deadline probes; one subscription CLI review, cancellation evidence-loss fix with RED/GREEN.
+- [ ] Rust regressions / full repository gate: clone-wide local-gate lock is held by another agent; no passing attestation claimed.
 - [ ] Push isolated branch and open an unmerged PR; retain need for real CI attribution.
