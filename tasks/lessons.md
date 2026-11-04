@@ -350,3 +350,11 @@ from a checker that recurses through local fields only. Test against the real
 consumer dependency and classify the wrapper by its resolved defining module
 and type. Include aliases, concrete wrappers and unit-valued native guards;
 only separately owned data-free operation permits may survive suspension.
+
+## Local replay failures (2026-11-02)
+
+Strip ANSI before parsing nextest status lines: colored FAIL prefixes made
+Integration's anchored grep emit an empty list despite a named test failure.
+An exit-137 receipt and OOMKilled=false on a replacement container cannot
+identify the original killer. Preserve original engine death events before
+cleanup; label before/after host samples instead of claiming kill-time load.

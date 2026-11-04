@@ -572,6 +572,76 @@ def bosn_timing_summary(output: str, *, top: int = 8) -> str | None:
     return "\n".join(lines)
 
 
+def bosn_failure_summary(output: str, code: int | None) -> str:
+    """Parse colored nextest output without mistaking a missing list for success."""
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    failures = list(dict.fromkeys(
+        line.strip() for line in clean.splitlines()
+        if re.search(r"\b(?:FAIL|SIGSEGV|SIGABRT|TIMEOUT|ABORT|LEAK FAIL)\s+\[", line)
+    ))
+    lines = ["  parsed failures:", *(f"    {line}" for line in failures)]
+    if not failures:
+        lines.append(f"    unknown failure (exit {code if code is not None else 'unknown'})")
+    if re.search(r"\bact exit 137\b", clean) or code == 137:
+        lines.append("  killed (SIGKILL/OOM?) under load; exit 137 does not identify the killer")
+    return "\n".join(lines)
+
+
+def _bosn_failure_details(output: str) -> str:
+    """Best effort diagnostics; never changes the proof or retries a failed lane."""
+    try:
+        document = _document(json.loads(next(line for line in output.splitlines() if line.startswith("{"))))
+        run_id = _text(document["id"])
+    except (StopIteration, KeyError, ValueError, TypeError):
+        return bosn_failure_summary(output, 1)
+    report = _diagnostic_command(["bosn", "ci", "report", run_id, "--tail", "40", "--json"])
+    try:
+        failure = _document(_document(json.loads(report.output))["first_failure"])
+        job, step = _text(failure["job"]), _text(failure["section"])
+        value = failure.get("exit_code")
+        code = value if type(value) is int else None
+    except (KeyError, ValueError, TypeError):
+        value = document.get("act_exit_code")
+        code = value if type(value) is int else None
+        return (bosn_failure_summary(output, code)
+                + f"\n  failure report unavailable (exit {report.returncode}):\n{report.output[-12000:]}"
+                + "\n  receipt/output tail:\n" + "\n".join(output.splitlines()[-40:])[-12000:])
+    logs = _diagnostic_command(["bosn", "ci", "logs", run_id, "--job", job, "--step", step])
+    tail = "\n".join(logs.output.splitlines()[-40:])[-12000:]
+    return (
+        f"  failing step: {job}: {failure.get('step', step)} (exit {code})\n"
+        + bosn_failure_summary(output + "\n" + logs.output, code)
+        + f"\n  failing step log tail (last 40 lines):\n{tail}"
+    )
+
+
+def _diagnostic_command(argv: list[str]) -> Captured:
+    with tempfile.TemporaryFile() as out:
+        try:
+            proc = subprocess.run(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                  stdout=out, stderr=subprocess.STDOUT, check=False, timeout=60)
+            code = proc.returncode
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return Captured(1, f"diagnostics unavailable: {error}")
+        out.seek(0)
+        return Captured(code, out.read().decode("utf-8", errors="replace"))
+
+
+def _host_context(label: str) -> str:
+    sampled_at = time.time()
+    try:
+        load = "/".join(f"{value:.2f}" for value in os.getloadavg())
+    except (AttributeError, OSError):
+        load = "unavailable"
+    runners = _diagnostic_command(["bosn", "ci", "runners", "list", "--json"])
+    try:
+        state = _document(_document(json.loads(runners.output))["runners"])
+        concurrency = f"{state.get('running', '?')}/{state.get('limit', '?')} running/limit; queued={state.get('queued', '?')}"
+    except (KeyError, TypeError, ValueError):
+        concurrency = "unavailable"
+    return f"  host sample ({label}, epoch {sampled_at:.0f}): load1/5/15={load}; runners={concurrency}\n"
+
+
 def _run(check: Check) -> Result:
     head = None
     if check.bosn_workflow:
@@ -584,6 +654,7 @@ def _run(check: Check) -> Result:
         head = run_captured(["git", "rev-parse", "HEAD"])
         if head.returncode != 0:
             return Result(check, 1, 0.0, "cannot determine this checkout's HEAD")
+    context = _host_context("before replay") if check.bosn_workflow else ""
     result = _run_plain(check)
     if not check.bosn_workflow:
         return result
@@ -604,7 +675,9 @@ def _run(check: Check) -> Result:
         check,
         1 if error else 0,
         result.seconds,
-        result.output + (f"\nlocal gate: {error}\n" if error else ""),
+        result.output + (f"\nlocal gate: {error}\n" + context
+                         + _host_context("after failed replay")
+                         + _bosn_failure_details(result.output) + "\n" if error else ""),
     )
 
 
