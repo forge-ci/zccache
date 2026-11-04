@@ -2,6 +2,31 @@
 
 use crate::{RustcOutputPlan, RustcPathSyntax};
 
+/// Merge one `--emit` value into the effective per-kind output options.
+///
+/// Rustc merges distinct kinds across flags, but the last occurrence of each
+/// kind wins. A later implicit kind removes an earlier kind-specific path.
+/// Callers supply their existing lexical path representation.
+pub fn record_rustc_emit_options<P>(
+    kinds: &mut Vec<String>,
+    paths: &mut Vec<(String, P)>,
+    value: &str,
+    mut resolve: impl FnMut(&str) -> P,
+) {
+    for part in value.split(',') {
+        let (kind, path) = part
+            .split_once('=')
+            .map_or((part, None), |(kind, path)| (kind, Some(path)));
+        if !kinds.iter().any(|existing| existing == kind) {
+            kinds.push(kind.to_owned());
+        }
+        paths.retain(|(existing, _)| existing != kind);
+        if let Some(path) = path.filter(|path| !path.is_empty() && *path != "-") {
+            paths.push((kind.to_owned(), resolve(path)));
+        }
+    }
+}
+
 /// Resolve an implicit emit's destination when `-o` is present.
 ///
 /// Explicit `kind=path` destinations must be resolved by the caller first.

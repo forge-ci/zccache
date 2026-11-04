@@ -496,32 +496,22 @@ pub fn parse_rustc_plan_with_syntax(
         // --emit <types> or --emit=<types>
         if arg == "--emit" {
             if let Some(next) = args.get(i + 1) {
-                emit_types.extend(next.split(',').map(|s| {
-                    // Handle --emit=dep-info=path form
-                    s.split('=').next().unwrap_or(s).to_string()
-                }));
-                for part in next.split(',') {
-                    if let Some((kind, path)) = part.split_once('=') {
-                        if path != "-" && !path.is_empty() {
-                            explicit_outputs.push((kind.to_owned(), path.to_owned()));
-                        }
-                    }
-                }
+                crate::record_rustc_emit_options(
+                    &mut emit_types,
+                    &mut explicit_outputs,
+                    next,
+                    str::to_owned,
+                );
                 i += 2;
                 continue;
             }
         } else if let Some(val) = arg.strip_prefix("--emit=") {
-            emit_types.extend(
-                val.split(',')
-                    .map(|s| s.split('=').next().unwrap_or(s).to_string()),
+            crate::record_rustc_emit_options(
+                &mut emit_types,
+                &mut explicit_outputs,
+                val,
+                str::to_owned,
             );
-            for part in val.split(',') {
-                if let Some((kind, path)) = part.split_once('=') {
-                    if path != "-" && !path.is_empty() {
-                        explicit_outputs.push((kind.to_owned(), path.to_owned()));
-                    }
-                }
-            }
             i += 1;
             continue;
         }

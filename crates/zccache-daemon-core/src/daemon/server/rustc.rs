@@ -589,6 +589,7 @@ pub(super) fn rustc_expected_output_paths(
     let explicit_link = rustc_args
         .explicit_emit_paths
         .iter()
+        .rev()
         .find(|(kind, _)| kind == "link")
         .map(|(_, path)| path.clone());
     let mut paths = vec![explicit_link.unwrap_or_else(|| NormalizedPath::new(primary_output_path))];
@@ -596,9 +597,6 @@ pub(super) fn rustc_expected_output_paths(
         if let Some(path) = rustc_aux_output_path(rustc_args, kind, cwd) {
             push_unique_output_path(&mut paths, path);
         }
-    }
-    for (_, path) in &rustc_args.explicit_emit_paths {
-        push_unique_output_path(&mut paths, path.clone());
     }
 
     if let Some(sidecar) = dylint_library_sidecar_output_path(

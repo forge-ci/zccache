@@ -971,3 +971,6 @@ fn explicit_o_collection_does_not_capture_stale_conventional_metadata() {
         vec![NormalizedPath::new(primary)]
     );
 }
+
+#[path = "repeated_emit.rs"]
+mod repeated_emit;

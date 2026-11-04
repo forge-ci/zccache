@@ -1623,3 +1623,9 @@ The corrected compiler and daemon Rust output suite passes 444 tests, including
 existing PDB, packed-DWARF, import-library and Dylint output contracts. Native
 Rust 1.95.0 validation uses a private Docker target. Full gate and independent
 pre-push review remain pending; no release or consumer pin is authorized here.
+
+
+Independent review found historical repeated-emit paths still entering required
+outputs. Actual rustc probes confirmed last-per-kind semantics across flags,
+including implicit resets. The added regressions reproduce four failures and
+one existing success; both argument parsers now share effective-option merging.

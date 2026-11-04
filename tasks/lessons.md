@@ -374,3 +374,8 @@ Count distinct implicit emits, excluding kind-specific destinations, before
 adapting `-o`. A single metadata emit writes exactly that filename; guessing
 `lib<crate>.rmeta` creates a nonexistent required output or captures stale data.
 Keep primary naming, required outputs and fallback capture on one rule.
+
+Repeated `--emit` flags merge distinct kinds, but the last option for each kind
+wins. A later implicit kind clears its old explicit destination. Normalize
+that policy while parsing; retaining historical paths makes stale files look
+like required compiler products.
