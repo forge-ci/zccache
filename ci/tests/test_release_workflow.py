@@ -300,3 +300,52 @@ def test_no_job_depends_on_the_ungated_wheel_smoke() -> None:
         "a job now needs test-wheels-ungated, which restores the #1535 "
         f"deadlock -- an unschedulable runner blocks the release again: {offenders}"
     )
+
+
+@pytest.mark.parametrize("stdout,returncode,exists", [
+    ('{"message":"Not Found","status":"404"}', 1, "false"),
+    ("", 0, "false"),
+    (" \n\t", 0, "false"),
+    ("gh: Not Found (HTTP 404)", 1, "false"),
+    ("not json", 0, "false"),
+    ("[]", 0, "false"),
+    ('{"published_at":"2026-11-05T00:00:00Z"}', 0, "true"),
+    ('{"published_at":null}', 0, "false"),
+])
+def test_resolve_release_lookup(monkeypatch, tmp_path, stdout, returncode, exists):
+    monkeypatch.setattr(release_workflow, "read_workspace_version", lambda: "1.2.3")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_SHA", "selected-revision")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "forge-ci/zccache")
+    monkeypatch.delenv("RAW_TAG", raising=False)
+    monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    calls = []
+
+    def lookup(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, returncode, stdout, "")
+
+    monkeypatch.setattr(release_workflow.subprocess, "run", lookup)
+    args = release_workflow.build_parser().parse_args(["resolve-release"])
+    args.func(args)
+    assert output.read_text() == (
+        "checkout_ref=selected-revision\nrelease_tag=1.2.3\nversion=1.2.3\n"
+        f"github_release_exists={exists}\n"
+    )
+    assert calls[0] == ["gh", "api", "repos/forge-ci/zccache/releases/tags/1.2.3"]
+    assert len(calls) == (1 if exists == "true" else 2)
+
+
+def test_resolve_release_rejects_mismatched_tag(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(release_workflow, "read_workspace_version", lambda: "1.2.3")
+    monkeypatch.setenv("RAW_TAG", "v9.9.9")
+    monkeypatch.setenv("GITHUB_REF_TYPE", "branch")
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    with pytest.raises(SystemExit, match="1"):
+        args = release_workflow.build_parser().parse_args(["resolve-release"])
+        args.func(args)
+    assert "does not match workspace version 1.2.3" in capsys.readouterr().err
+    assert not output.exists()

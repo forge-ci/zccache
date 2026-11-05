@@ -1636,3 +1636,9 @@ Independent review found historical repeated-emit paths still entering required
 outputs. Actual rustc probes confirmed last-per-kind semantics across flags,
 including implicit resets. The added regressions reproduce four failures and
 one existing success; both argument parsers now share effective-option merging.
+
+## Auto-release lookup parsing
+
+- [x] Confirm gh missing-release stdout and failing run.
+- [x] Move metadata resolution into a tested release helper.
+- [ ] Run pinned local gate and submit PR to merge queue.
