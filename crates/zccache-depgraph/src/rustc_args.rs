@@ -32,7 +32,7 @@ pub struct RustcParsedArgs {
     pub edition: Option<String>,
     /// `--emit` types (dep-info, metadata, link, etc.).
     pub emit_types: Vec<String>,
-    /// Explicit `--emit=kind=path` destinations, resolved against `cwd`.
+    /// Effective last-per-kind `--emit=kind=path` destinations, resolved against `cwd`.
     pub explicit_emit_paths: Vec<(String, NormalizedPath)>,
     /// `--cfg` values (sorted for deterministic hashing).
     pub cfgs: Vec<String>,
@@ -189,20 +189,12 @@ pub fn parse_rustc_args(args: &[String], cwd: &Path) -> RustcParsedArgs {
 
         // --emit <types> or --emit=<types>
         if let Some(val) = take_option(arg, "--emit", args.get(i + 1), &mut i) {
-            for part in val.split(',') {
-                // Handle --emit=dep-info=path/to/file form
-                let emit_type = part.split('=').next().unwrap_or(part).to_string();
-                if !result.emit_types.contains(&emit_type) {
-                    result.emit_types.push(emit_type);
-                }
-                if let Some((kind, path)) = part.split_once('=') {
-                    if path != "-" && !path.is_empty() {
-                        result
-                            .explicit_emit_paths
-                            .push((kind.to_string(), resolve_path(path, cwd)));
-                    }
-                }
-            }
+            zccache_compiler::record_rustc_emit_options(
+                &mut result.emit_types,
+                &mut result.explicit_emit_paths,
+                &val,
+                |path| resolve_path(path, cwd),
+            );
             continue;
         }
 

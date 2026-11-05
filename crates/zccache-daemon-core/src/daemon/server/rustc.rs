@@ -510,21 +510,76 @@ pub(super) fn rustc_depfile_output_path(
     if !rustc_args.emit_types.iter().any(|kind| kind == "dep-info") {
         return None;
     }
-    if let Some((_, path)) = rustc_args
+    rustc_aux_output_path(rustc_args, "dep-info", cwd)
+}
+
+/// Enumerate only requested emit destinations, never neighboring stale files.
+fn rustc_aux_output_path(
+    args: &crate::depgraph::RustcParsedArgs,
+    kind: &str,
+    cwd: &Path,
+) -> Option<NormalizedPath> {
+    if let Some((_, path)) = args
         .explicit_emit_paths
         .iter()
-        .find(|(kind, _)| kind == "dep-info")
+        .rev()
+        .find(|(k, _)| k == kind)
     {
         return Some(path.clone());
     }
-    let crate_name = rustc_args.effective_crate_name();
-    let extra_filename = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let output_dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-    Some(
-        output_dir
-            .join(format!("{crate_name}{extra_filename}.d"))
-            .into(),
-    )
+    let extension = match kind {
+        "metadata" => "rmeta",
+        "dep-info" => "d",
+        "obj" => "o",
+        "asm" => "s",
+        "llvm-ir" => "ll",
+        "llvm-bc" | "bitcode" => "bc",
+        "mir" => "mir",
+        // The target-aware primary parser already owns linked output naming.
+        _ => return None,
+    };
+    let suffix = args.extra_filename.as_deref().unwrap_or("");
+    let prefix = if kind == "metadata" { "lib" } else { "" };
+    let filename = format!(
+        "{prefix}{}{suffix}.{extension}",
+        args.effective_crate_name()
+    );
+    let path = if let Some(output) = &args.output_file {
+        let count = args
+            .emit_types
+            .iter()
+            .filter(|kind| !args.explicit_emit_paths.iter().any(|(k, _)| k == *kind))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let syntax = match HostFamily::current() {
+            HostFamily::Windows => crate::compiler::RustcPathSyntax::Windows,
+            _ => crate::compiler::RustcPathSyntax::Unix,
+        };
+        match crate::compiler::rustc_explicit_output_plan(
+            &output.to_string_lossy(),
+            kind,
+            count,
+            &filename,
+            suffix,
+            false,
+            syntax,
+        ) {
+            crate::compiler::RustcOutputPlan::Explicit(path) => {
+                NormalizedPath::new(path).into_path_buf()
+            }
+            crate::compiler::RustcOutputPlan::InDirectory {
+                directory,
+                filename,
+            } => Path::new(&directory).join(filename),
+        }
+    } else {
+        args.out_dir.as_deref().unwrap_or(cwd).join(filename)
+    };
+    Some(if path.is_absolute() {
+        path.into()
+    } else {
+        cwd.join(path).into()
+    })
 }
 
 #[derive(Clone)]
@@ -543,60 +598,13 @@ pub(super) fn rustc_expected_output_paths(
     let explicit_link = rustc_args
         .explicit_emit_paths
         .iter()
+        .rev()
         .find(|(kind, _)| kind == "link")
         .map(|(_, path)| path.clone());
     let mut paths = vec![explicit_link.unwrap_or_else(|| NormalizedPath::new(primary_output_path))];
-    let crate_name = rustc_args.effective_crate_name();
-    let ext_suffix = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-
-    for emit_type in &rustc_args.emit_types {
-        if rustc_args
-            .explicit_emit_paths
-            .iter()
-            .any(|(kind, _)| kind == emit_type)
-        {
-            continue;
-        }
-        let candidate = match emit_type.as_str() {
-            "metadata" => Some(dir.join(format!("lib{crate_name}{ext_suffix}.rmeta"))),
-            // The parser's primary output is authoritative for `link`: it
-            // already accounts for bin, staticlib, proc-macro, target, and
-            // explicit `--emit=link=...` naming. Inferring an rlib here would
-            // create a false required output for those crate types.
-            "link" => None,
-            "dep-info" => Some(dir.join(format!("{crate_name}{ext_suffix}.d"))),
-            "obj" => Some(dir.join(format!("{crate_name}{ext_suffix}.o"))),
-            "asm" => Some(dir.join(format!("{crate_name}{ext_suffix}.s"))),
-            "llvm-ir" => Some(dir.join(format!("{crate_name}{ext_suffix}.ll"))),
-            "llvm-bc" | "bitcode" => Some(dir.join(format!("{crate_name}{ext_suffix}.bc"))),
-            "mir" => Some(dir.join(format!("{crate_name}{ext_suffix}.mir"))),
-            _ => None,
-        };
-        if let Some(path) = candidate {
-            push_unique_output_path(&mut paths, path.into());
-        }
-    }
-
-    for (kind, explicit_path) in &rustc_args.explicit_emit_paths {
-        let replacement = paths.iter().position(|path| match kind.as_str() {
-            "metadata" => path.extension().and_then(|ext| ext.to_str()) == Some("rmeta"),
-            "link" => matches!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("rlib" | "a" | "exe") | None
-            ),
-            "dep-info" => path.extension().and_then(|ext| ext.to_str()) == Some("d"),
-            "obj" => path.extension().and_then(|ext| ext.to_str()) == Some("o"),
-            "asm" => path.extension().and_then(|ext| ext.to_str()) == Some("s"),
-            "llvm-ir" => path.extension().and_then(|ext| ext.to_str()) == Some("ll"),
-            "llvm-bc" | "bitcode" => path.extension().and_then(|ext| ext.to_str()) == Some("bc"),
-            "mir" => path.extension().and_then(|ext| ext.to_str()) == Some("mir"),
-            _ => false,
-        });
-        if let Some(index) = replacement {
-            paths[index] = explicit_path.clone();
-        } else {
-            push_unique_output_path(&mut paths, explicit_path.clone());
+    for kind in &rustc_args.emit_types {
+        if let Some(path) = rustc_aux_output_path(rustc_args, kind, cwd) {
+            push_unique_output_path(&mut paths, path);
         }
     }
 
@@ -970,77 +978,19 @@ pub(super) fn collect_rustc_output_files(
         size: primary_size,
     }];
 
-    // Find additional outputs based on --emit types
-    let crate_name = rustc_args.effective_crate_name();
-    let ext_suffix = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-
-    for emit_type in &rustc_args.emit_types {
-        let candidate = match emit_type.as_str() {
-            "metadata" => {
-                let path = dir.join(format!("lib{crate_name}{ext_suffix}.rmeta"));
-                if path != primary_output_path && path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            }
-            "link" => {
-                // Could be rlib or staticlib
-                let rlib = dir.join(format!("lib{crate_name}{ext_suffix}.rlib"));
-                let staticlib = dir.join(format!("lib{crate_name}{ext_suffix}.a"));
-                if rlib != primary_output_path && rlib.exists() {
-                    Some(rlib)
-                } else if staticlib != primary_output_path && staticlib.exists() {
-                    Some(staticlib)
-                } else {
-                    None
-                }
-            }
-            "dep-info" => {
-                let path = dir.join(format!("{crate_name}{ext_suffix}.d"));
-                if path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if let Some(path) = candidate {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            // Avoid duplicates
-            if !outputs.iter().any(|existing| existing.name == name) {
-                if let Some(size) = regular_file_size(&path) {
-                    outputs.push(RustcOutputFile {
-                        name,
-                        path: path.into(),
-                        size,
-                    });
-                }
-            }
-        }
-    }
-
-    for (_, path) in &rustc_args.explicit_emit_paths {
-        if path != primary_output_path && path.exists() {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            if !outputs.iter().any(|existing| existing.name == name) {
-                if let Some(size) = regular_file_size(path) {
-                    outputs.push(RustcOutputFile {
-                        name,
-                        path: path.clone(),
-                        size,
-                    });
-                }
+    for path in rustc_expected_output_paths(rustc_args, primary_output_path, cwd, None) {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if !outputs.iter().any(|existing| existing.name == name) {
+            if let Some(size) = regular_file_size(&path) {
+                outputs.push(RustcOutputFile {
+                    name,
+                    path,
+                    size,
+                });
             }
         }
     }

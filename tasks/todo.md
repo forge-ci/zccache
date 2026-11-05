@@ -1,3 +1,10 @@
+# Release Rust frontdoors
+
+- [x] Reproduce bootstrap and crate package/publish bypassing soldr with focused tests.
+- [x] Route the release bootstrap and crate commands through soldr without compiler caching.
+- [ ] Run release regressions, workflow cache footprint, review and required validation.
+- [ ] Push and merge the version-unchanged repair before rehearsing a release.
+
 # PR #2019 — rustc response files
 
 - [x] Preserve the fully pushed release branch and update local main.
@@ -1606,3 +1613,32 @@ The upstream barrier outlived the observer; the macOS queue lasted six seconds.
 The jobs API does not retain a first-visible timestamp; created_at and observer
 logs establish that the job did not exist during observation. Auto-release
 already has prerequisite/condition parity and remains unchanged.
+
+
+## Rustc explicit output family
+
+- [x] Compare captured real rustc products for single/multiple emits and kind-specific destinations.
+- [x] Reproduce incorrect primary/required outputs and stale metadata capture with focused Rust tests.
+- [x] Share explicit `-o` adaptation across primary and daemon output enumeration; preserve sidecars.
+- [ ] Run focused RED/GREEN, repository validation and one independent pre-push review.
+- [ ] Push and merge the upstream correction. Report the released-version dependency for Soldr separately.
+
+
+Review evidence for the output-family correction: the original code fails all
+three focused regressions (primary precedence, required family, stale capture).
+The corrected compiler and daemon Rust output suite passes 444 tests, including
+existing PDB, packed-DWARF, import-library and Dylint output contracts. Native
+Rust 1.95.0 validation uses a private Docker target. Full gate and independent
+pre-push review remain pending; no release or consumer pin is authorized here.
+
+
+Independent review found historical repeated-emit paths still entering required
+outputs. Actual rustc probes confirmed last-per-kind semantics across flags,
+including implicit resets. The added regressions reproduce four failures and
+one existing success; both argument parsers now share effective-option merging.
+
+## Auto-release lookup parsing
+
+- [x] Confirm gh missing-release stdout and failing run.
+- [x] Move metadata resolution into a tested release helper.
+- [ ] Run pinned local gate and submit PR to merge queue.

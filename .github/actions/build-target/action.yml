@@ -229,7 +229,7 @@ runs:
     - name: Verify Rust host toolchain
       shell: bash
       run: |
-        info="$(rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV)"
+        info="$(soldr rustc -vV)"
         printf '%s\n' "$info"
         host="$(printf '%s\n' "$info" | awk '/^host: / { print $2 }')"
         if [ "${{ inputs.cross_compile }}" = "true" ] && [ "$host" != "x86_64-unknown-linux-gnu" ]; then
@@ -411,7 +411,7 @@ runs:
       env:
         PYO3_PYTHON: python
       run: |
-        HOST_TARGET=$(rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV | awk '/^host: / { print $2 }')
+        HOST_TARGET=$(soldr rustc -vV | awk '/^host: / { print $2 }')
         if [ "$HOST_TARGET" != "${{ inputs.target }}" ]; then
           export PYO3_CROSS=1
           export PYO3_CROSS_PYTHON_VERSION="${{ inputs.python_version }}"
@@ -751,7 +751,14 @@ runs:
         }
         trap cleanup EXIT
 
-        rustc_bin="$(rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc)"
+        # Keep the staged wrapper under test while soldr owns compiler dispatch.
+        # Pass an absolute shim path; putting it on PATH would recurse in soldr.
+        rustc_bin="$smoke_root/rustc"
+        cat > "$rustc_bin" <<'SH'
+        #!/usr/bin/env sh
+        exec env ZCCACHE_DISABLE=1 soldr rustc "$@"
+        SH
+        chmod +x "$rustc_bin"
         probe="$(staging/zccache${{ inputs.binary_ext }} "$rustc_bin" -vV)"
         printf '%s\n' "$probe"
         if ! printf '%s\n' "$probe" | grep -q '^host: '; then
