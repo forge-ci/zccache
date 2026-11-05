@@ -1,7 +1,7 @@
 name: Cache Pre-prune
 
-# On each main push, forecast the full lock-transition peak using converged
-# cache usage/list views, then retire old-lock cook/registry entries and the
+# On each main push, forecast the full lock-transition peak using
+# stable cache inventories, then retire old-lock cook/registry entries and the
 # four measured fallback build-cache profiles before producers start. Main
 # cache-writing workflows wait for this exact-SHA run through the read-only
 # composite action. The forecast reserves measured payload headroom but is not
@@ -229,9 +229,14 @@ jobs:
               throw new Error("current Cargo.lock hashes unavailable; refusing pre-prune");
             }
 
-            // Pre-delete: the eventually consistent usage counter and the
-            // listing must agree and hold still, so no stale or mid-flight
-            // inventory ever drives a delete.
+            // The usage API is an independently refreshed aggregate, not a
+            // snapshot of the listing. Run 41969887550 saw 5738047157 usage /
+            // 2807259435 listed and exhausted the equality wait. Stabilize
+            // both views, including entry identities, then forecast with the
+            // larger view. Never discard unexplained bytes to release writers.
+            const signatureOf = (caches) =>
+              caches.map((cache) => `${cache.id}:${cache.size_in_bytes}`).sort().join(",");
+            let unlistedReserveBytes = 0;
             const convergeInventory = async () => {
               let priorSignature = "";
               for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -239,9 +244,18 @@ jobs:
                   throw new Error("main advanced during pre-prune; refusing stale inventory");
                 }
                 const inventory = await readInventory();
-                const signature = `${inventory.usageBytes}:${inventory.listedBytes}`;
-                const closeEnough = Math.abs(inventory.usageBytes - inventory.listedBytes) <= 1_000_000;
-                if (closeEnough && signature === priorSignature) return inventory;
+                const signature = `${inventory.usageBytes}:${signatureOf(inventory.caches)}`;
+                if (signature === priorSignature) {
+                  unlistedReserveBytes = Math.max(0, inventory.usageBytes - inventory.listedBytes);
+                  core.info(
+                    `Stable pre-delete inventory after ${attempt + 1} reads: ` +
+                    `${inventory.usageBytes} usage / ${inventory.listedBytes} listed; ` +
+                    `reserving ${unlistedReserveBytes} unexplained bytes through pruning.`,
+                  );
+                  return inventory;
+                }
+                core.info(`Inventory read ${attempt + 1}: ${inventory.usageBytes} usage / ` +
+                  `${inventory.listedBytes} listed, ${inventory.caches.length} entries.`);
                 priorSignature = signature;
                 await sleep(15_000);
               }
@@ -250,14 +264,13 @@ jobs:
 
             // #1854: after our own deletes the usage counter lags the listing
             // (observed: more than 10 minutes, run 36720817402) while the
-            // listing is already correct. The agreed pre-delete inventory
+            // listing is already correct. The stable pre-delete inventory
             // plus the ids we removed is the accounting, so wait on the
             // listing only: every deleted id absent and the id/size set
-            // unchanged between two reads. Bytes come from that listing.
+            // unchanged between two reads. Preserve any pre-existing usage
+            // gap: deleting known entries cannot explain away unlisted bytes.
             // Anything still changing after 40 polls fails closed.
             const convergeAfterDeletes = async (deletedIds) => {
-              const signatureOf = (caches) =>
-                caches.map((cache) => `${cache.id}:${cache.size_in_bytes}`).sort().join(",");
               let priorSignature = "";
               for (let attempt = 0; attempt < 40; attempt += 1) {
                 if (await branchHead() !== expectedSha) {
@@ -275,7 +288,7 @@ jobs:
                     "the counter lags our own deletes and is not waited on).",
                   );
                   return {
-                    usageBytes: inventory.listedBytes,
+                    usageBytes: inventory.listedBytes + unlistedReserveBytes,
                     listedBytes: inventory.listedBytes,
                     caches: inventory.caches,
                   };
