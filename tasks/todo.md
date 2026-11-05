@@ -1,3 +1,13 @@
+# Main RED workflows — resume and land
+
+- [x] Verify failing runs 41969887550 and 42056470706 and the executed action SHA.
+- [x] Reproduce divergent inventory accounting and same-size ID churn with Rust-owned workflow tests.
+- [x] Preserve unexplained usage through pruning; remove unrelated setup-soldr pins.
+- [x] Land bootstrap backoff upstream in setup-soldr #661; immutable bootstrap unchanged.
+- [x] Reproduce RED -> GREEN workflow scenarios; pass cache footprint and focused Clippy.
+- [ ] Complete the pinned local gate on the final committed tree.
+- [ ] Land scoped PRs and report verification and rollout limitations.
+
 # Release Rust frontdoors
 
 - [x] Reproduce bootstrap and crate package/publish bypassing soldr with focused tests.
