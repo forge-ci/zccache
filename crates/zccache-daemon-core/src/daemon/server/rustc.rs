@@ -986,11 +986,7 @@ pub(super) fn collect_rustc_output_files(
             .into_owned();
         if !outputs.iter().any(|existing| existing.name == name) {
             if let Some(size) = regular_file_size(&path) {
-                outputs.push(RustcOutputFile {
-                    name,
-                    path,
-                    size,
-                });
+                outputs.push(RustcOutputFile { name, path, size });
             }
         }
     }
