@@ -529,9 +529,7 @@ fn primary_key_differs_when_scan_changes() {
 
 #[test]
 fn exact_exec_planner_rejections_have_stable_reasons() {
-    if std::env::var_os(crate::daemon::server::persist::STAGED_ARTIFACTS_ENV).is_none() {
-        return;
-    }
+    let _staged = crate::daemon::server::tests::staged_env::StagedArtifactsEnvGuard::set("all");
     let temp = tempdir().unwrap();
     assert!(matches!(
         ExecStagedPlan::build(temp.path(), &[], &[], temp.path()),
@@ -567,9 +565,7 @@ fn exact_exec_planner_rejections_have_stable_reasons() {
 
 #[test]
 fn exact_exec_disabled_lane_has_stable_reason() {
-    if std::env::var_os(crate::daemon::server::persist::STAGED_ARTIFACTS_ENV).is_some() {
-        return;
-    }
+    let _staged = crate::daemon::server::tests::staged_env::StagedArtifactsEnvGuard::set("rust");
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("result.bin").into();
     assert!(matches!(
