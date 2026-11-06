@@ -392,25 +392,52 @@ pub(super) async fn run_depfile_stdout_batch(
     if !super::types::depfile_targets_stdout(original_args) {
         return None;
     }
-    state.stats.record_non_cacheable();
-    record_session_stat(&state.sessions, sid, |stats| stats.record_non_cacheable());
-    if let Err(response) = detach_direct_batch_outputs(compilations, original_args, cwd) {
-        return Some(response);
-    }
     Some(
-        run_compiler_direct(
+        run_non_cacheable_batch(
             state,
+            sid,
             compiler,
+            compilations,
             original_args,
             cwd,
-            &state.sessions,
-            sid,
             client_env,
             stdin,
-            state.depfile_tmpdir.as_path(),
         )
         .await,
     )
+}
+
+/// Run a whole batch through the compiler, uncached. The legacy batch path
+/// cannot store or restore a user depfile (#2091), so a batch requesting one
+/// takes this path and the compiler's own depfile behaviour stays untouched.
+#[allow(clippy::too_many_arguments)] // Mirrors the multi-source dispatch surface.
+pub(super) async fn run_non_cacheable_batch(
+    state: &Arc<SharedState>,
+    sid: &SessionId,
+    compiler: &NormalizedPath,
+    compilations: &[crate::compiler::CacheableCompilation],
+    original_args: &[String],
+    cwd: &NormalizedPath,
+    client_env: &Option<Vec<(String, String)>>,
+    stdin: &[u8],
+) -> Response {
+    state.stats.record_non_cacheable();
+    record_session_stat(&state.sessions, sid, |stats| stats.record_non_cacheable());
+    if let Err(response) = detach_direct_batch_outputs(compilations, original_args, cwd) {
+        return response;
+    }
+    run_compiler_direct(
+        state,
+        compiler,
+        original_args,
+        cwd,
+        &state.sessions,
+        sid,
+        client_env,
+        stdin,
+        state.depfile_tmpdir.as_path(),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)] // Mirrors the multi-source dispatch surface.

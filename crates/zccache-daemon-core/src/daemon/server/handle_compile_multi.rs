@@ -532,6 +532,26 @@ pub(super) async fn handle_compile_multi(
         )
     };
 
+    // The staged lane models `-MD`; the legacy path below would delete the
+    // user's depfiles and serve hits without them (#2091). `-MD` means the
+    // runtime library in MSVC syntax, so only GNU-syntax batches qualify.
+    let requests_user_depfile = compilations[0].family.supports_depfile()
+        && !crate::compiler::parse_msvc::looks_like_msvc_args(&original_args)
+        && (shared_dep_flags.has_md || shared_dep_flags.mf_path.is_some());
+    if requests_user_depfile && !staged_lane_enabled(compilations[0].family) {
+        return preflight::run_non_cacheable_batch(
+            &state,
+            &sid,
+            &compiler,
+            &compilations,
+            &original_args,
+            &cwd_path,
+            &client_env,
+            &stdin,
+        )
+        .await;
+    }
+
     // C/C++ only: AUTO keeps the full chain for non-rustc outputs (#1792).
     let materialization_mode = state.non_rustc_materialization_mode(client_env.as_deref());
     // ── Phase 1: Check cache for each unit (parallel, as-completed) ──
@@ -711,6 +731,22 @@ pub(super) async fn handle_compile_multi(
     .await
     {
         return response;
+    }
+
+    // The staged lane declined this batch at plan time, so never fall through
+    // to the legacy path, which cannot keep a user depfile (#2091).
+    if requests_user_depfile {
+        return preflight::run_non_cacheable_batch(
+            &state,
+            &sid,
+            &compiler,
+            &compilations,
+            &original_args,
+            &cwd_path,
+            &client_env,
+            &stdin,
+        )
+        .await;
     }
 
     let supports_depfile = compilations[0].family.supports_depfile();

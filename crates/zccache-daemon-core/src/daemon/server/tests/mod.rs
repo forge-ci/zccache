@@ -18,6 +18,8 @@ mod cross_worktree_depfile;
 mod cross_worktree_embedded_env;
 mod deferred_cold_path;
 #[cfg(unix)]
+mod depfile_edge_2091;
+#[cfg(unix)]
 mod depfile_hit_1992;
 mod depgraph_reset_reachability;
 mod depgraph_save_failure;
