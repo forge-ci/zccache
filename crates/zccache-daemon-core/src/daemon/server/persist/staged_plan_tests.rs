@@ -877,3 +877,54 @@ fn link_plan_accepts_case_sensitive_gnu_map_option() {
     .unwrap();
     assert!(plan.is_some());
 }
+
+/// A joined `-MF<path>` must be rewritten once. The planner runs on a helper
+/// thread so a regression fails this test instead of wedging the test run.
+#[test]
+fn cc_plan_rewrites_joined_mf_flag_without_hanging() {
+    let _staged = crate::daemon::server::tests::staged_env::StagedArtifactsEnvGuard::set("c-cpp");
+    let temp = tempdir().unwrap();
+    let cwd = temp.path().to_path_buf();
+    let output: NormalizedPath = cwd.join("hello.o").into();
+    let depfile: NormalizedPath = cwd.join("deps/hello.d").into();
+    let args: Vec<String> = vec![
+        "-c".into(),
+        "hello.cpp".into(),
+        "-o".into(),
+        "hello.o".into(),
+        "-MD".into(),
+        format!("-MF{}", depfile.display()),
+        "-DAFTER_MF".into(),
+    ];
+    let dep_flags = crate::depgraph::UserDepFlags {
+        has_md: true,
+        mf_path: Some(depfile),
+        ..Default::default()
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let plan = StagedCompilePlan::cc(
+            &cwd,
+            crate::compiler::CompilerFamily::Clang,
+            &args,
+            &output,
+            &cwd,
+            &dep_flags,
+        );
+        let _ = sender.send(plan.unwrap());
+    });
+    let plan = receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("planner did not finish: joined -MF<path> loops forever")
+        .unwrap();
+    let mf_args: Vec<&String> = plan
+        .rewritten_args
+        .iter()
+        .filter(|arg| arg.starts_with("-MF"))
+        .collect();
+    assert_eq!(mf_args.len(), 1);
+    assert!(mf_args[0].contains(".compile-") && mf_args[0].ends_with("hello.d"));
+    assert_eq!(plan.rewritten_args.last().unwrap(), "-DAFTER_MF");
+    assert_eq!(plan.outputs.len(), 2);
+    plan.cleanup().unwrap();
+}

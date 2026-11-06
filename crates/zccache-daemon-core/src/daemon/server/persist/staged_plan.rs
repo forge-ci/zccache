@@ -493,6 +493,7 @@ impl StagedCompilePlan {
                                     missing_filename(StagedPlanReason::OutputMissingFilename)
                                 })?);
                             rewritten_args[i] = format!("-MF{}", staged_depfile.display());
+                            i += 1;
                             continue;
                         }
                     }
