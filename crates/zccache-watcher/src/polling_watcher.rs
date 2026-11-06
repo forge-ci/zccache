@@ -583,7 +583,7 @@ fn scan_snapshot(
         // drop. Normalize at collection time so step 2's parallel metadata
         // fetch already operates on the watcher's canonical key type.
         let mut candidates: Vec<NormalizedPath> = Vec::new();
-        for entry in walker.walk() {
+        for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
             let entry = entry?;
             if !entry.is_file() {
                 continue;
@@ -597,31 +597,41 @@ fn scan_snapshot(
         }
 
         // Step 2: fetch metadata in parallel. Each `metadata()` is an
-        // independent syscall — on Windows this is the dominant cost
-        // (Defender intercepts every stat). Skip files whose metadata
-        // can't be read (deleted between walk and stat).
-        let pairs: Vec<(NormalizedPath, FileState)> = candidates
+        // independent syscall -- on Windows this is the dominant cost
+        // (Defender intercepts every stat). Only a file that really vanished
+        // between walk and stat is skipped: any other failure says nothing
+        // about the file, and reporting it as removed would be a false delete.
+        let pairs = candidates
             .par_iter()
             .filter_map(|path| {
-                let metadata = path.metadata().ok()?;
-                Some((
-                    path.clone(),
-                    FileState {
-                        mtime_ns: metadata
-                            .modified()
-                            .ok()
-                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map_or(0, |duration| duration.as_nanos()),
-                        size: metadata.len(),
-                    },
-                ))
+                let metadata = zccache_core::scan_entry::listed_entry(path, Path::metadata);
+                match metadata {
+                    Ok(metadata) => {
+                        metadata.map(|metadata| Ok((path.clone(), file_state(&metadata))))
+                    }
+                    Err(error) => Some(Err(std::io::Error::new(
+                        error.kind(),
+                        format!("cannot stat {}: {error}", path.display()),
+                    ))),
+                }
             })
-            .collect();
+            .collect::<std::io::Result<Vec<(NormalizedPath, FileState)>>>()?;
 
         result.extend(pairs);
     }
 
     Ok(result)
+}
+
+fn file_state(metadata: &std::fs::Metadata) -> FileState {
+    FileState {
+        mtime_ns: metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_nanos()),
+        size: metadata.len(),
+    }
 }
 
 fn diff_snapshots(
@@ -795,5 +805,64 @@ mod tests {
                 root.join("watch.cpp").canonicalize().unwrap()
             )]
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod partial_scan_tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    fn scan(root: &Path) -> std::io::Result<HashMap<NormalizedPath, FileState>> {
+        let config = build_config(root, &[], &["**/*.cpp".to_string()], &[])?;
+        scan_snapshot(
+            &config,
+            DirectoryWalkParallelism::DedicatedPool { threads: 0 },
+        )
+    }
+
+    /// Applies `mode` to `dir`, scans, restores it. `None` when this user
+    /// ignores permissions (root), which cannot produce the failure.
+    fn scan_with_mode(
+        root: &Path,
+        dir: &Path,
+        mode: u32,
+    ) -> Option<std::io::Result<HashMap<NormalizedPath, FileState>>> {
+        let probe = dir.join("watch.cpp");
+        fs::set_permissions(dir, fs::Permissions::from_mode(mode)).unwrap();
+        let bypassed = fs::read_dir(dir).is_ok() && fs::metadata(&probe).is_ok();
+        let result = (!bypassed).then(|| scan(root));
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        result
+    }
+
+    #[test]
+    fn a_stat_denied_file_fails_the_scan_instead_of_reading_as_deleted() {
+        let dir = tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("watch.cpp"), "a\n").unwrap();
+        // Listable but not searchable: the name is readable, its stat is not.
+        let Some(result) = scan_with_mode(dir.path(), &sub, 0o400) else {
+            return;
+        };
+        let message = result.expect_err("EACCES is not a deletion").to_string();
+        assert!(message.contains("watch.cpp"), "names the path: {message}");
+    }
+
+    #[test]
+    fn an_unreadable_directory_fails_the_scan_instead_of_reading_as_empty() {
+        let dir = tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("watch.cpp"), "a\n").unwrap();
+        let Some(result) = scan_with_mode(dir.path(), &sub, 0o000) else {
+            return;
+        };
+        let message = result.expect_err("a blind directory").to_string();
+        assert!(message.contains("sub"), "names the path: {message}");
     }
 }

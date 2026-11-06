@@ -74,3 +74,98 @@ pub fn listed_entry_with<T>(
         }
     }
 }
+
+/// Runs a walk that also reports directories it could not read.
+///
+/// The kernal-api walk (through at least 0.1.40) drops jwalk's
+/// `read_children_error`, so a directory it cannot open arrives as `Ok` with no
+/// children, indistinguishable from an empty one (#2092). Traversal is
+/// depth-first, so a directory with no children is one whose next entry is not
+/// deeper, and only those are reopened: a tree of non-empty directories pays no
+/// extra syscalls. A pruned directory is never yielded, so it is never probed.
+///
+/// A failure is an extra `Err` item naming the directory, after its entry.
+/// Remove this once the facade reports the error itself.
+pub fn walk_reporting_unreadable(
+    walk: kernal_api::platform::fs::DirectoryWalk,
+) -> impl Iterator<Item = io::Result<kernal_api::platform::fs::DirectoryEntry>> {
+    let mut entries = walk.walk().peekable();
+    let mut unreadable: Option<io::Error> = None;
+    std::iter::from_fn(move || {
+        if let Some(error) = unreadable.take() {
+            return Some(Err(error));
+        }
+        let item = entries.next()?;
+        if let Ok(entry) = &item {
+            let childless = match entries.peek() {
+                Some(Ok(next)) => next.depth() <= entry.depth(),
+                Some(Err(_)) | None => true,
+            };
+            if entry.is_directory() && childless {
+                unreadable = probe_directory(entry.path()).err();
+            }
+        }
+        Some(item)
+    })
+}
+
+fn probe_directory(path: &Path) -> io::Result<()> {
+    listed_entry(path, |directory| std::fs::read_dir(directory))
+        .map(drop)
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("unreadable directory: {}: {error}", path.display()),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernal_api::platform::fs::DirectoryWalk;
+
+    #[test]
+    fn empty_directories_and_nested_files_walk_cleanly() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("a/empty")).unwrap();
+        std::fs::create_dir_all(root.path().join("b/c")).unwrap();
+        std::fs::write(root.path().join("b/c/file"), b"x").unwrap();
+        let walk = DirectoryWalk::new(root.path().to_path_buf());
+        let entries: Vec<_> = walk_reporting_unreadable(walk)
+            .collect::<io::Result<_>>()
+            .unwrap();
+        // Root, a, a/empty, b, b/c, b/c/file.
+        assert_eq!(entries.len(), 6);
+    }
+
+    #[test]
+    fn a_directory_removed_before_its_probe_is_not_a_failure() {
+        let root = tempfile::tempdir().unwrap();
+        probe_directory(&root.path().join("gone")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_is_reported_and_its_siblings_still_walk() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let denied = root.path().join("denied");
+        std::fs::create_dir(&denied).unwrap();
+        std::fs::write(root.path().join("sibling"), b"x").unwrap();
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let bypassed = std::fs::read_dir(&denied).is_ok();
+        let walk = DirectoryWalk::new(root.path().to_path_buf());
+        let items: Vec<_> = walk_reporting_unreadable(walk).collect();
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if bypassed {
+            eprintln!("skipping: this user bypasses directory permissions");
+            return;
+        }
+        let errors: Vec<_> = items.iter().filter_map(|i| i.as_ref().err()).collect();
+        assert_eq!(errors.len(), 1, "{items:?}");
+        assert_eq!(errors[0].kind(), io::ErrorKind::PermissionDenied);
+        assert!(errors[0].to_string().contains("denied"));
+        assert_eq!(items.len(), 4, "root, denied, its error, sibling");
+    }
+}

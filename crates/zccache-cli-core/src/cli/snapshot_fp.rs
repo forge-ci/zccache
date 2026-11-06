@@ -125,9 +125,8 @@ pub fn record(
     let manifest_dirs = discover_workspace_crates(&workspace_root)?;
 
     // Phase 1: scan each `<fp_dir>/` for processable units.
-    let fp_dirs: Vec<PathBuf> = std::fs::read_dir(&fp_root)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
+    let fp_dirs: Vec<PathBuf> = read_dir_paths(&fp_root)?
+        .into_iter()
         .filter(|p| p.is_dir())
         .collect();
 
@@ -148,7 +147,7 @@ pub fn record(
                 profile,
             )
         })
-        .collect();
+        .collect::<io::Result<_>>()?;
     let mut entries = Vec::new();
     let mut unresolved_dep_info = Vec::new();
     for scan in scans {
@@ -219,9 +218,9 @@ fn process_fingerprint_dir(
     workspace_root: &Path,
     manifest_dirs: &HashMap<String, PathBuf>,
     profile: &str,
-) -> FingerprintScan {
+) -> io::Result<FingerprintScan> {
     let Some(dir_name) = fp_dir.file_name().and_then(|n| n.to_str()) else {
-        return FingerprintScan::default();
+        return Ok(FingerprintScan::default());
     };
     let mut entries = Vec::new();
     let mut unresolved_dep_info = Vec::new();
@@ -230,16 +229,15 @@ fn process_fingerprint_dir(
     let mut depinfo_units: Vec<(String, PathBuf)> = Vec::new();
     let mut has_run_build_script = false;
 
-    let Ok(read_dir) = std::fs::read_dir(fp_dir) else {
-        return FingerprintScan::default();
-    };
-    for entry in read_dir.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().into_owned();
+    for path in read_dir_paths(fp_dir)? {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
         if name == "run-build-script-build-script-build.json" {
             has_run_build_script = true;
         } else if name == "dep-build-script-build-script-build" {
             // Build-script compilation. .d file lives in build/<dir>/.
-            if let Some(d_file) = first_buildscript_d_file(build_root, dir_name) {
+            if let Some(d_file) = first_buildscript_d_file(build_root, dir_name)? {
                 depinfo_units.push((name, d_file));
             } else {
                 unresolved_dep_info.push(format!("{dir_name}/{name}"));
@@ -264,7 +262,7 @@ fn process_fingerprint_dir(
         // All depinfo units in the same fp_dir reference the same .d file
         // by definition. Use the first.
         let d_file = depinfo_units[0].1.clone();
-        if let Some(sources) = hash_d_file_sources(&d_file, workspace_root) {
+        if let Some(sources) = hash_d_file_sources(&d_file, workspace_root)? {
             let stamp_targets: Vec<String> = depinfo_units
                 .iter()
                 .map(|(name, _)| {
@@ -282,16 +280,32 @@ fn process_fingerprint_dir(
 
     if has_run_build_script {
         if let Some(entry) =
-            process_run_build_script(fp_dir, dir_name, workspace_root, manifest_dirs)
+            process_run_build_script(fp_dir, dir_name, workspace_root, manifest_dirs)?
         {
             entries.push(entry);
         }
     }
 
-    FingerprintScan {
+    Ok(FingerprintScan {
         entries,
         unresolved_dep_info,
-    }
+    })
+}
+
+/// Names the path in an I/O error that would otherwise reach the user bare.
+fn with_path(path: &Path, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+}
+
+/// Every entry of `dir`, failing on anything short of the complete listing.
+fn read_dir_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    std::fs::read_dir(dir)
+        .and_then(|entries| {
+            entries
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect()
+        })
+        .map_err(|error| with_path(dir, error))
 }
 
 fn target_dir_from_fp_root<'a>(fp_root: &'a Path, _profile: &str) -> &'a Path {
@@ -317,43 +331,64 @@ fn relativize_to_target(abs: &Path, target_dir: &Path) -> String {
 /// `<build_root>/<dir_name>/`. Cargo emits `build_script_<scriptname>-<hash>.d`
 /// — we don't care about the exact name, only that it lists the script's
 /// source inputs.
-fn first_buildscript_d_file(build_root: &Path, dir_name: &str) -> Option<PathBuf> {
-    let bs_dir = build_root.join(dir_name);
-    let read_dir = std::fs::read_dir(&bs_dir).ok()?;
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("d") {
-            return Some(path);
-        }
-    }
-    None
+fn first_buildscript_d_file(build_root: &Path, dir_name: &str) -> io::Result<Option<PathBuf>> {
+    let listing =
+        zccache_core::scan_entry::entry_if_present(read_dir_paths(&build_root.join(dir_name)))?;
+    Ok(listing.and_then(|paths| {
+        paths
+            .into_iter()
+            .find(|path| path.extension().and_then(|e| e.to_str()) == Some("d"))
+    }))
 }
 
 /// Parse a `.d` Makefile, hash each tracked workspace-local source, and
-/// return the (workspace-relative path → blake3 hex) map. Returns `None`
+/// return the (workspace-relative path -> blake3 hex) map. Returns `None`
 /// if no workspace-local source was found (so the crate is omitted from
-/// the manifest — cargo's normal mtime check applies).
-fn hash_d_file_sources(d_file: &Path, workspace_root: &Path) -> Option<BTreeMap<String, String>> {
-    let content = std::fs::read_to_string(d_file).ok()?;
+/// the manifest -- cargo's normal mtime check applies).
+///
+/// Relative paths are resolved against `workspace_root`, the directory cargo
+/// runs rustc from, never the process cwd. A listed source that no longer
+/// exists is skipped, since cargo rebuilds that unit anyway; a source that
+/// exists but cannot be read fails the whole record, naming the path.
+fn hash_d_file_sources(
+    d_file: &Path,
+    workspace_root: &Path,
+) -> io::Result<Option<BTreeMap<String, String>>> {
+    let content = std::fs::read_to_string(d_file).map_err(|e| with_path(d_file, e))?;
     let sources = parse_d_file(&content);
     let hashed: BTreeMap<String, String> = sources
         .par_iter()
-        .filter_map(|src| {
-            let canon = src.canonicalize().ok()?;
-            let rel = canon.strip_prefix(workspace_root).ok()?;
-            if is_vendored_dep(rel) {
-                return None;
-            }
-            let bytes = std::fs::read(&canon).ok()?;
-            let hash = kernal_api::hash::blake3_bytes(&bytes).to_hex().to_string();
-            Some((path_to_unix(rel), hash))
-        })
-        .collect();
-    if hashed.is_empty() {
-        None
-    } else {
-        Some(hashed)
-    }
+        .filter_map(|src| hash_workspace_source(&workspace_root.join(src), workspace_root))
+        .collect::<io::Result<_>>()?;
+    Ok((!hashed.is_empty()).then_some(hashed))
+}
+
+/// Hash one source, yielding `None` when it is gone or not workspace-local.
+fn hash_workspace_source(
+    path: &Path,
+    workspace_root: &Path,
+) -> Option<io::Result<(String, String)>> {
+    let hash = || -> io::Result<Option<(String, String)>> {
+        let Some(canon) = zccache_core::scan_entry::entry_if_present(path.canonicalize())
+            .map_err(|e| with_path(path, e))?
+        else {
+            return Ok(None);
+        };
+        let Ok(rel) = canon.strip_prefix(workspace_root) else {
+            return Ok(None);
+        };
+        if is_vendored_dep(rel) {
+            return Ok(None);
+        }
+        let Some(bytes) = zccache_core::scan_entry::entry_if_present(std::fs::read(&canon))
+            .map_err(|e| with_path(&canon, e))?
+        else {
+            return Ok(None);
+        };
+        let hash = kernal_api::hash::blake3_bytes(&bytes).to_hex().to_string();
+        Ok(Some((path_to_unix(rel), hash)))
+    };
+    hash().transpose()
 }
 
 /// Read the `run-build-script-build-script-build.json` file in `fp_dir`
@@ -363,16 +398,22 @@ fn process_run_build_script(
     dir_name: &str,
     workspace_root: &Path,
     manifest_dirs: &HashMap<String, PathBuf>,
-) -> Option<CrateEntry> {
+) -> io::Result<Option<CrateEntry>> {
     let json_path = fp_dir.join("run-build-script-build-script-build.json");
-    let content = std::fs::read_to_string(&json_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let local = value.get("local")?.as_array()?;
+    let content = std::fs::read_to_string(&json_path).map_err(|e| with_path(&json_path, e))?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Ok(None);
+    };
+    let Some(local) = value.get("local").and_then(|local| local.as_array()) else {
+        return Ok(None);
+    };
 
     // Find the package's manifest dir from the fingerprint dir name. The
     // dir name is `<package>-<16-hex-hash>`.
-    let pkg_name = strip_hash_suffix(dir_name)?;
-    let manifest_dir = manifest_dirs.get(pkg_name)?;
+    let Some(manifest_dir) = strip_hash_suffix(dir_name).and_then(|pkg| manifest_dirs.get(pkg))
+    else {
+        return Ok(None);
+    };
 
     let mut sources = BTreeMap::new();
     let mut stamp_targets: Vec<String> = Vec::new();
@@ -392,32 +433,21 @@ fn process_run_build_script(
         };
         for p in paths {
             let Some(rel) = p.as_str() else { continue };
-            let abs = manifest_dir.join(rel);
-            let Ok(canon) = abs.canonicalize() else {
-                continue;
-            };
-            let Ok(ws_rel) = canon.strip_prefix(workspace_root) else {
-                continue;
-            };
-            if is_vendored_dep(ws_rel) {
-                continue;
+            if let Some(hashed) = hash_workspace_source(&manifest_dir.join(rel), workspace_root) {
+                let (rel, hash) = hashed?;
+                sources.insert(rel, hash);
             }
-            let Ok(bytes) = std::fs::read(&canon) else {
-                continue;
-            };
-            let hash = kernal_api::hash::blake3_bytes(&bytes).to_hex().to_string();
-            sources.insert(path_to_unix(ws_rel), hash);
         }
     }
 
     if sources.is_empty() || stamp_targets.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(CrateEntry {
+    Ok(Some(CrateEntry {
         fingerprint_dir: dir_name.to_string(),
         stamp_targets,
         sources,
-    })
+    }))
 }
 
 /// `<crate>-<hex16>` → `Some("<crate>")`. Returns `None` if the suffix
@@ -461,7 +491,7 @@ fn discover_workspace_crates(workspace_root: &Path) -> io::Result<HashMap<String
                     )
                 })
         });
-    for entry in walker.walk() {
+    for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
         let entry = entry?;
         let path = entry.path().to_path_buf();
         if path.file_name() != Some(std::ffi::OsStr::new("Cargo.toml")) {

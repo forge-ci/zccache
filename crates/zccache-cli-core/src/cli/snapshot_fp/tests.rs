@@ -352,3 +352,91 @@ fn record_fails_when_workspace_walk_reports_an_error() {
     assert!(result.is_err(), "partial walk produced {result:?}");
     assert!(!manifest.exists(), "no manifest may be written");
 }
+
+/// #2092: rustc writes workspace members' `.d` paths relative to the workspace
+/// root. This test process runs from the crate dir, never from `workspace`.
+#[test]
+fn record_resolves_relative_dep_info_paths_against_the_workspace_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (workspace, target) = make_synthetic_lib(tmp.path(), "fn main() {}\n");
+    write(
+        &target.join("debug/deps/foo-abcdef0123456789.d"),
+        "foo.rmeta: crates/foo/src/lib.rs\n",
+    );
+    let stats = record(
+        &target,
+        &workspace,
+        &target.join(MANIFEST_FILENAME),
+        "debug",
+    )
+    .unwrap();
+    assert_eq!(stats.crates_recorded, 1);
+    assert_eq!(stats.sources_hashed, 1);
+}
+
+#[test]
+fn record_skips_a_dep_info_source_that_no_longer_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (workspace, target) = make_synthetic_lib(tmp.path(), "fn main() {}\n");
+    write(
+        &target.join("debug/deps/foo-abcdef0123456789.d"),
+        "foo.rmeta: crates/foo/src/lib.rs crates/foo/src/gone.rs\n",
+    );
+    let stats = record(
+        &target,
+        &workspace,
+        &target.join(MANIFEST_FILENAME),
+        "debug",
+    )
+    .unwrap();
+    assert_eq!(stats.sources_hashed, 1);
+}
+
+/// A source that exists but cannot be read must not shrink the manifest.
+#[cfg(unix)]
+#[test]
+fn record_fails_naming_an_unreadable_dep_info_source() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (workspace, target) = make_synthetic_lib(tmp.path(), "fn main() {}\n");
+    let source = workspace.join("crates/foo/src/lib.rs");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&source).is_ok() {
+        eprintln!("skipping: this user bypasses file permissions");
+        return;
+    }
+    let result = record(
+        &target,
+        &workspace,
+        &target.join(MANIFEST_FILENAME),
+        "debug",
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("lib.rs"), "must name the path: {message}");
+}
+
+/// A package hidden in an unreadable directory would silently lose its build
+/// script coverage, so manifest discovery must fail instead.
+#[cfg(unix)]
+#[test]
+fn record_fails_naming_an_unreadable_workspace_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (workspace, target) = make_synthetic_lib(tmp.path(), "fn main() {}\n");
+    let denied = workspace.join("crates/denied");
+    std::fs::create_dir(&denied).unwrap();
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&denied).is_ok() {
+        eprintln!("skipping: this user bypasses directory permissions");
+        return;
+    }
+    let result = record(
+        &target,
+        &workspace,
+        &target.join(MANIFEST_FILENAME),
+        "debug",
+    );
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("denied"), "must name the path: {message}");
+}

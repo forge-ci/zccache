@@ -190,7 +190,7 @@ fn walk_candidates(
         });
 
     let mut candidates = Vec::new();
-    for entry in walker.walk() {
+    for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
         let entry = entry.map_err(|err| FingerprintError::Scan {
             path: NormalizedPath::new(root),
             message: format!("directory walk error: {err}"),
