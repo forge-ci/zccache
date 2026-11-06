@@ -15,8 +15,9 @@ Custom Rust lints used by this workspace.
 - `ban_registered_env_read`: confines environment access to registered, auditable call sites.
 
 - `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
+- `ban_swallowed_child_stdio`: bans null sinks for child stdout and stderr; stdin closure stays valid (#1970).
 
-All twelve libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
+All thirteen libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

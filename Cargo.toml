@@ -38,6 +38,7 @@ exclude = [
     "dylints/enforce_platform_boundary",
     "dylints/ban_registered_env_read",
     "dylints/ban_unbounded_sync",
+    "dylints/ban_swallowed_child_stdio",
 ]
 
 [workspace.package]
