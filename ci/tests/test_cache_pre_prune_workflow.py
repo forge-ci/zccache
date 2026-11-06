@@ -758,6 +758,7 @@ def _row(cache_id: int, key: str, size: int) -> dict[str, object]:
 def test_cook_key_parser_accepts_sub_action_soldr_token_without_v() -> None:
     parts = _node_json("m.parseCookBaseKey(d.key)", {"key": _COOK_NO_V})
     assert parts == {
+        "format": 2,
         "os": "linux",
         "arch": "x64",
         "libc": "glibc",
