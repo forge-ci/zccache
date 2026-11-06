@@ -12,10 +12,10 @@ use std::path::Path;
 use crate::core::config::MaterializationMode;
 
 mod maintenance;
-pub(in crate::daemon::server) use maintenance::clear_staged_artifacts;
 #[cfg(test)]
 pub(crate) use maintenance::evict_staged_artifact_keys;
 use maintenance::remove_staged_tree;
+pub(in crate::daemon::server) use maintenance::{clear_staged_artifacts, entry_if_present};
 pub(crate) use maintenance::{
     evict_staged_artifact_keys_if_unchanged, scan_staged_disk_artifacts, StagedDiskArtifact,
 };
@@ -55,7 +55,9 @@ pub(in crate::daemon::server) use fault::{
 #[cfg(test)]
 mod hook;
 #[cfg(test)]
-pub(in crate::daemon::server) use hook::{StagedHookGuard, StagedHookPoint};
+pub(in crate::daemon::server) use hook::{
+    pause as staged_hook_pause, StagedHookGuard, StagedHookPoint,
+};
 
 pub(in crate::daemon::server) const STAGED_ARTIFACTS_ENV: &str = "ZCCACHE_STAGED_ARTIFACTS";
 
