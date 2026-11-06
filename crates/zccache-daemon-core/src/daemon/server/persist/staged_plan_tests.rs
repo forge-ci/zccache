@@ -1,5 +1,6 @@
 //! Adversarial planner and reverse-map tests for immutable staged outputs.
 use super::*;
+use crate::daemon::server::tests::staged_env::StagedArtifactsEnvGuard;
 use tempfile::tempdir;
 
 impl<T> StagedPlanOutcome<T> {
@@ -12,15 +13,18 @@ impl<T> StagedPlanOutcome<T> {
     }
 }
 
-fn staged_tests_enabled() -> bool {
-    std::env::var_os(super::super::staged_store::STAGED_ARTIFACTS_ENV).is_some()
+fn enable_staged_tests() -> StagedArtifactsEnvGuard {
+    // A presence check can observe a sibling test's Rust-only or disabled lane.
+    // Hold the shared env lock and enable every lane these planner tests assert.
+    let guard = StagedArtifactsEnvGuard::set("all");
+    assert!(staged_lane_enabled(crate::compiler::CompilerFamily::Rustc));
+    assert!(staged_lane_enabled(crate::compiler::CompilerFamily::Clang));
+    guard
 }
 
 #[test]
 fn rust_plan_rewrites_output_before_spawn() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("target/libx.rlib").into();
     let plan = StagedCompilePlan::rustc(
@@ -48,6 +52,7 @@ fn rust_staging_paths_do_not_change_published_output_bytes() {
     let Some(rustc) = crate::test_support::find_rustc() else {
         return;
     };
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let source = temp.path().join("fixture.rs");
     std::fs::write(&source, "pub fn answer() -> u32 { 42 }\n").unwrap();
@@ -146,9 +151,7 @@ fn rust_staging_paths_do_not_change_published_output_bytes() {
 
 #[test]
 fn explicit_emit_destination_is_staged_and_mapped() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("x.rlib").into();
     let plan = StagedCompilePlan::rustc(
@@ -268,9 +271,7 @@ fn observed_output_name_updates_tracked_requested_destination() {
 
 #[test]
 fn cc_custom_mf_destination_is_classified_as_a_depfile() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.o").into();
     let depfile: NormalizedPath = temp.path().join("deps.mk").into();
@@ -305,9 +306,7 @@ fn cc_custom_mf_destination_is_classified_as_a_depfile() {
 
 #[test]
 fn cc_plan_rewrites_concatenated_output_flag() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.o").into();
     let plan = StagedCompilePlan::cc(
@@ -329,9 +328,7 @@ fn cc_plan_rewrites_concatenated_output_flag() {
 
 #[test]
 fn cc_plan_stages_user_depfile_without_leaking_private_path() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.o").into();
     let depfile: NormalizedPath = temp.path().join("deps/hello.d").into();
@@ -379,9 +376,7 @@ fn cc_plan_stages_user_depfile_without_leaking_private_path() {
 
 #[test]
 fn cc_plan_stages_single_precompiled_header_output() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("header.pch").into();
     let plan = StagedCompilePlan::cc(
@@ -415,9 +410,7 @@ fn cc_plan_stages_single_precompiled_header_output() {
 
 #[test]
 fn msvc_plan_rewrites_fo_without_inventing_gcc_flags() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.obj").into();
     let plan = StagedCompilePlan::cc(
@@ -440,9 +433,7 @@ fn msvc_plan_rewrites_fo_without_inventing_gcc_flags() {
 
 #[test]
 fn archive_plan_rewrites_exact_output_token() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("libhello.a").into();
     let plan = StagedCompilePlan::archive(
@@ -462,9 +453,7 @@ fn archive_plan_rewrites_exact_output_token() {
 
 #[test]
 fn link_plan_rewrites_primary_and_declared_secondary_outputs() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let import: NormalizedPath = temp.path().join("app.lib").into();
@@ -501,9 +490,7 @@ fn link_plan_rewrites_primary_and_declared_secondary_outputs() {
 
 #[test]
 fn link_plan_rewrites_absolute_output_once_and_ignores_substrings() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let absolute = primary.to_string_lossy().into_owned();
@@ -530,9 +517,7 @@ fn link_plan_rewrites_absolute_output_once_and_ignores_substrings() {
 
 #[test]
 fn link_plan_rejects_ambiguous_output_token() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let plan = StagedCompilePlan::link(
@@ -550,9 +535,7 @@ fn link_plan_rejects_ambiguous_output_token() {
 
 #[test]
 fn link_plan_stages_explicit_msvc_debug_output_set() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let pdb: NormalizedPath = temp.path().join("app.pdb").into();
@@ -574,9 +557,7 @@ fn link_plan_stages_explicit_msvc_debug_output_set() {
 
 #[test]
 fn link_plan_redirects_implicit_msvc_side_output_before_spawn() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let implicit_pdb: NormalizedPath = temp.path().join("app.pdb").into();
@@ -599,9 +580,7 @@ fn link_plan_redirects_implicit_msvc_side_output_before_spawn() {
 
 #[test]
 fn link_plan_rejects_semantic_gnu_map_destination() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app").into();
     let semantic_map: NormalizedPath = temp.path().join("%.map").into();
@@ -624,9 +603,7 @@ fn link_plan_rejects_semantic_gnu_map_destination() {
 
 #[test]
 fn link_plan_rejects_unmodeled_output_option_before_spawn() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app.exe").into();
     let plan = StagedCompilePlan::link(
@@ -691,9 +668,7 @@ fn planner_reason_ids_are_bounded_and_non_sensitive() {
 
 #[test]
 fn compile_and_archive_rejections_keep_precise_reasons() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.o").into();
     assert!(matches!(
@@ -787,9 +762,7 @@ fn compile_and_archive_rejections_keep_precise_reasons() {
 
 #[test]
 fn planner_errors_keep_precise_reasons() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let output: NormalizedPath = temp.path().join("hello.rlib").into();
     let blocked_root = temp.path().join("not-a-directory");
@@ -826,9 +799,7 @@ fn planner_errors_keep_precise_reasons() {
 
 #[test]
 fn output_fault_stops_partial_salvage_before_completion() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let archive: NormalizedPath = temp.path().join("target/libx.rlib").into();
     let metadata: NormalizedPath = temp.path().join("target/libx.rmeta").into();
@@ -856,9 +827,7 @@ fn output_fault_stops_partial_salvage_before_completion() {
 
 #[test]
 fn link_plan_accepts_case_sensitive_gnu_map_option() {
-    if !staged_tests_enabled() {
-        return;
-    }
+    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let primary: NormalizedPath = temp.path().join("app").into();
     let map: NormalizedPath = temp.path().join("app.map").into();
