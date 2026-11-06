@@ -146,6 +146,21 @@ mod tests {
         path.into()
     }
 
+    /// Observe the worker clearing `pending`, which it does only after the
+    /// rescan finished. A fixed sleep proves nothing about completion on a
+    /// loaded host (#2059); this deadline only detects a worker that hangs.
+    async fn wait_for_rescan_completion(recovery: &OverflowRecovery) {
+        const RESCAN_HANG_DETECTOR: Duration = Duration::from_secs(30);
+        let deadline = tokio::time::Instant::now() + RESCAN_HANG_DETECTOR;
+        while recovery.is_pending() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "overflow recovery rescan did not complete within {RESCAN_HANG_DETECTOR:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test]
     async fn recovery_rescans_after_delay() {
         let dir = TempDir::new().unwrap();
@@ -166,7 +181,7 @@ mod tests {
         let handle = tokio::spawn(async move { r.run(&c).await });
 
         recovery.on_overflow();
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        wait_for_rescan_completion(&recovery).await;
 
         assert_eq!(
             cache.metadata().get(&path).unwrap().confidence,
@@ -268,9 +283,7 @@ mod tests {
         recovery.on_overflow();
         assert!(recovery.is_pending());
 
-        // Wait for rescan to complete.
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        assert!(!recovery.is_pending());
+        wait_for_rescan_completion(&recovery).await;
 
         handle.abort();
     }
