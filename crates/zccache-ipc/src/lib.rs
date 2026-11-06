@@ -30,8 +30,8 @@ pub use ownership::{
     backend_identity_path, backend_identity_path_for, daemon_identity_matches,
     daemon_identity_matches_for, force_kill_verified_daemon, force_kill_verified_daemon_for,
     probe_backend_handle, read_backend_identity, read_backend_identity_for,
-    remove_backend_identity_for, verify_daemon_pid, verify_daemon_pid_for, write_backend_identity,
-    write_backend_identity_for,
+    remove_backend_identity_for, verified_daemon_instance_for, verify_daemon_pid,
+    verify_daemon_pid_for, write_backend_identity, write_backend_identity_for,
 };
 pub use transport::IpcClientConnection;
 pub use transport::{

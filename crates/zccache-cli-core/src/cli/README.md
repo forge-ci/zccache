@@ -22,6 +22,9 @@ path that actually runs per compile.
   doubling, capped at 10 min) fail immediately with the *original* reason, and
   any success clears it. Without it a 1000-TU build against a dead daemon paid
   the full ladder 1000 times.
+- **`runtime/unreachable.rs`** — a live PID whose endpoint is gone (#1976): the
+  bounded poll, single-flight replacement of a proven instance, and what one
+  client's failure means for the breaker the others read.
 
 When recovery is exhausted the wrapper hard-errors — see
 `commands/wrap/unavailable.rs` for the exit code and event contract. There is

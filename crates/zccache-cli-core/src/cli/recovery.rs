@@ -121,6 +121,14 @@ fn read_marker(path: &std::path::Path) -> Option<BreakerMarker> {
 pub(crate) fn open_breaker(endpoint: &str, reason: &str) {
     let path = breaker_marker_path(endpoint);
     let previous = read_marker(&path);
+    // #1976: every client racing one outage reaches this. Inside the cool-down
+    // it is the same failure: doubling per client took a `-j16` build straight
+    // to the ten-minute ceiling and replaced the original reason.
+    if previous.as_ref().is_some_and(|marker| {
+        now_unix_ms().saturating_sub(marker.opened_at_unix_ms) < marker.cooldown_ms
+    }) {
+        return;
+    }
     let consecutive_failures = previous
         .as_ref()
         .map_or(1, |marker| marker.consecutive_failures.saturating_add(1));
@@ -281,6 +289,39 @@ mod tests {
 
     /// A corrupt or truncated marker must read as "no breaker". Failing
     /// closed here would make an unparseable file permanently unbuildable.
+    #[test]
+    fn racing_clients_do_not_double_the_cool_down_of_one_outage() {
+        let endpoint = crate::ipc::unique_test_endpoint();
+        open_breaker(&endpoint, "first");
+        for _ in 0..16 {
+            open_breaker(&endpoint, "a racer's own failure");
+        }
+
+        let marker = read_marker(&breaker_marker_path(&endpoint)).unwrap();
+        assert_eq!(marker.consecutive_failures, 1);
+        assert_eq!(
+            marker.cooldown_ms,
+            BREAKER_INITIAL_COOLDOWN.as_millis() as u64
+        );
+        assert_eq!(marker.reason, "first", "the original cause is the report");
+
+        // Past the cool-down the same call is a new failure, and it doubles.
+        let expired = BreakerMarker {
+            opened_at_unix_ms: 0,
+            ..marker
+        };
+        std::fs::write(
+            breaker_marker_path(&endpoint),
+            serde_json::to_vec(&expired).unwrap(),
+        )
+        .unwrap();
+        open_breaker(&endpoint, "second");
+        let marker = read_marker(&breaker_marker_path(&endpoint)).unwrap();
+        assert_eq!(marker.consecutive_failures, 2);
+        assert_eq!(marker.cooldown_ms, 120_000);
+        clear_breaker(&endpoint);
+    }
+
     #[test]
     fn a_corrupt_marker_is_ignored_rather_than_fatal() {
         let dir = tempfile::tempdir().unwrap();

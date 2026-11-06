@@ -252,15 +252,26 @@ pub fn verify_daemon_pid(pid: u32) -> bool {
 /// Endpoint-scoped counterpart of [`verify_daemon_pid`] (#1904).
 #[must_use]
 pub fn verify_daemon_pid_for(endpoint: &str, pid: u32) -> bool {
-    let Some(identity) = read_backend_identity_for(endpoint) else {
-        return false;
-    };
+    verified_daemon_instance_for(endpoint, pid).is_some()
+}
+
+/// The recorded identity of `endpoint`'s daemon, if live `pid` provably is that
+/// daemon (#1976). This is the positive proof a replacement needs before it may
+/// stop an instance whose endpoint has gone: a missing record, a record naming
+/// another PID and a changed binary all return `None`.
+#[must_use]
+pub fn verified_daemon_instance_for(
+    endpoint: &str,
+    pid: u32,
+) -> Option<kernal_api::daemon_identity::DaemonIdentity> {
+    let identity = read_backend_identity_for(endpoint)?;
     if identity.pid() != pid || recorded_in_another_pid_namespace(endpoint) {
-        return false;
+        return None;
     }
     identity
         .verify_live()
         .is_ok_and(|verified| verified.is_alive())
+        .then_some(identity)
 }
 
 /// Force-kill the persisted daemon instance through one retained verified

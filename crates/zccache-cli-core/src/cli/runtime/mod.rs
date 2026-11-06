@@ -114,6 +114,25 @@ async fn spawn_and_wait(
     // one client wins the slot and spawns; the rest park directly on
     // the ready-wait below.
     let spawn_slot = acquire_spawn_slot(endpoint);
+    spawn_with_slot(
+        endpoint,
+        reason,
+        outbound_pid,
+        spawn_slot,
+        AdaptiveWaitConfig::default(),
+    )
+    .await
+}
+
+/// The body of [`spawn_and_wait`] for a caller that already holds the outcome
+/// of the slot race, so that it can do work under the slot first (#1976).
+async fn spawn_with_slot(
+    endpoint: &str,
+    reason: &str,
+    outbound_pid: Option<u32>,
+    spawn_slot: Option<SpawnSlotGuard>,
+    wait: AdaptiveWaitConfig,
+) -> Result<(), String> {
     let meta = crate::core::lifecycle::client_meta(crate::core::VERSION);
     if spawn_slot.is_some() {
         // Record *why* the CLI is about to spawn a daemon. Pairs with the
@@ -153,7 +172,19 @@ async fn spawn_and_wait(
     // The slot guard must survive until the daemon is READY: releasing
     // right after spawn would let a late-arriving client win a second
     // slot before the daemon binds its lockfile.
-    let wait_result = wait_for_daemon_ready(endpoint).await;
+    let wait_result = if spawn_slot.is_some() {
+        wait_for_daemon_ready_with(endpoint, crate::ipc::check_running_daemon_for, wait).await
+    } else {
+        // #1976: a parked client has no spawn of its own to declare failed. It
+        // waits for as long as the winner is working, bounded by the slot's age.
+        wait_for_daemon_ready_while(
+            endpoint,
+            crate::ipc::check_running_daemon_for,
+            || spawn_slot_in_flight(endpoint),
+            wait,
+        )
+        .await
+    };
     drop(spawn_slot);
     wait_result?;
 
@@ -194,6 +225,29 @@ impl Drop for SpawnSlotGuard {
 /// ready-wait grace is 10s, so one stale window later a new winner
 /// spawns.
 const SPAWN_SLOT_STALE: std::time::Duration = std::time::Duration::from_secs(20);
+
+impl SpawnSlotGuard {
+    /// Put the slot file back after `clear_stale_daemon_state` removed it, so
+    /// the slot stays held between stopping a daemon and spawning its successor.
+    fn reassert(&self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::write(&self.path, format!("{}\n", std::process::id()));
+        }
+    }
+}
+
+/// Is a client other than this one still inside its spawn slot (#1976)? Only
+/// ask once this client's own guard has dropped. An abandoned slot does not
+/// count, so a crashed winner cannot extend anyone's wait.
+pub(crate) fn spawn_slot_in_flight(endpoint: &str) -> bool {
+    let lock_path = crate::ipc::lock_file_path_for(endpoint);
+    let slot_path = std::path::PathBuf::from(format!("{}.spawn", lock_path.display()));
+    std::fs::metadata(slot_path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age <= SPAWN_SLOT_STALE)
+}
 
 /// Issue #952: try to become the one client that spawns the daemon.
 ///
@@ -352,6 +406,17 @@ pub(crate) async fn wait_for_daemon_ready_with(
     daemon_alive_check: impl Fn(&str) -> Option<u32>,
     cfg: AdaptiveWaitConfig,
 ) -> Result<(), String> {
+    wait_for_daemon_ready_while(endpoint, daemon_alive_check, || false, cfg).await
+}
+
+/// [`wait_for_daemon_ready_with`] for a client parked behind another client's
+/// spawn: the no-daemon grace does not expire while `spawn_in_flight` holds.
+pub(crate) async fn wait_for_daemon_ready_while(
+    endpoint: &str,
+    daemon_alive_check: impl Fn(&str) -> Option<u32>,
+    spawn_in_flight: impl Fn() -> bool,
+    cfg: AdaptiveWaitConfig,
+) -> Result<(), String> {
     let start = std::time::Instant::now();
     let mut last_observed_pid: Option<u32> = None;
     loop {
@@ -380,6 +445,7 @@ pub(crate) async fn wait_for_daemon_ready_with(
                     cfg.hard_ceiling.as_secs()
                 ));
             }
+            WaitTick::NoDaemonGracePassed if spawn_in_flight() => continue,
             WaitTick::NoDaemonGracePassed => {
                 return Err(format!(
                     "no daemon lockfile observed within {}s of spawn (spawn likely failed)",
@@ -665,7 +731,7 @@ async fn stop_daemon_instance(
 /// 1000 times. Now the first exhaustion writes a marker and the rest fail in
 /// microseconds, reporting the *original* cause rather than "breaker open".
 pub async fn ensure_daemon(endpoint: &str) -> Result<(), String> {
-    if let Some(reason) = super::recovery::breaker_reason_if_open(endpoint) {
+    if let Some(reason) = unreachable::breaker_refusal(endpoint).await {
         return Err(format!(
             "daemon recovery already failed on this cache root and is in its cool-down: {reason}"
         ));
@@ -681,14 +747,16 @@ pub async fn ensure_daemon(endpoint: &str) -> Result<(), String> {
         },
         None => ensure_daemon_ladder(endpoint).await,
     };
-    match &outcome {
+    match outcome {
         // A working daemon is proof the outage is over. Clearing on every
         // success — not only after a recovery — is what stops a stale marker
         // from fast-failing a healthy build.
-        Ok(()) => super::recovery::clear_breaker(endpoint),
-        Err(reason) => super::recovery::open_breaker(endpoint, reason),
+        Ok(()) => {
+            super::recovery::clear_breaker(endpoint);
+            Ok(())
+        }
+        Err(reason) => unreachable::settle_failed_recovery(endpoint, reason).await,
     }
-    outcome
 }
 
 async fn ensure_daemon_ladder(endpoint: &str) -> Result<(), String> {
@@ -752,58 +820,14 @@ async fn ensure_daemon_ladder(endpoint: &str) -> Result<(), String> {
     }
 
     if let Some(pid) = crate::ipc::check_running_daemon_for(endpoint) {
-        let mut backoff = std::time::Duration::from_millis(100);
-        for _ in 0..20 {
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(std::time::Duration::from_millis(500));
-            // Re-read every iteration: a daemon replaced legitimately between
-            // attempts is a different instance, and the kill must follow.
-            let attempt_instance = crate::ipc::read_backend_identity_for(endpoint);
-            match check_daemon_version(endpoint).await {
-                VersionCheck::Ok | VersionCheck::DaemonNewer => return Ok(()),
-                VersionCheck::DaemonOlder { daemon_ver } => {
-                    tracing::info!(
-                        daemon_ver,
-                        client_ver = crate::core::VERSION,
-                        "daemon is older than client during startup, auto-recovering"
-                    );
-                    let killed_pid = stop_stale_daemon(endpoint, attempt_instance.as_ref()).await;
-                    return spawn_and_wait(
-                        endpoint,
-                        crate::core::lifecycle::REASON_REPLACED_STALE_VERSION,
-                        killed_pid,
-                    )
-                    .await;
-                }
-                VersionCheck::CommError => {
-                    // Same reasoning as the arm above, and this one matters
-                    // more: this loop runs while a daemon is still starting
-                    // up, which is precisely when it is too busy to answer a
-                    // 2 s Status ping.
-                    if probe_says_daemon_is_merely_busy(endpoint).await {
-                        continue;
-                    }
-                    let killed_pid = stop_stale_daemon(endpoint, attempt_instance.as_ref()).await;
-                    return spawn_and_wait(
-                        endpoint,
-                        crate::core::lifecycle::REASON_REPLACED_COMM_ERROR,
-                        killed_pid,
-                    )
-                    .await;
-                }
-                VersionCheck::ClientConfigError(message) => return Err(message),
-                VersionCheck::Unreachable => continue,
-            }
-        }
-        return Err(format!(
-            "daemon process {pid} exists but not accepting connections after retrying"
-        ));
+        return unreachable::recover_unreachable_daemon(endpoint, pid).await;
     }
 
     spawn_and_wait(endpoint, crate::core::lifecycle::REASON_INITIAL_START, None).await
 }
 
 mod deploy;
+mod unreachable;
 #[allow(deprecated)]
 pub use deploy::gc_daemon_spawn_logs;
 pub use deploy::{

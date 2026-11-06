@@ -85,6 +85,23 @@ fn verify_daemon_pid_refuses_a_record_from_another_pid_namespace() {
     assert!(!verify_daemon_pid_for(&endpoint, pid));
 }
 
+/// #1976: the proof a replacement needs before it may stop an instance.
+#[test]
+fn only_a_verifying_record_names_a_verified_instance() {
+    let cache = tempfile::tempdir().unwrap();
+    let _env = EnvGuard::set_cache_dir(cache.path());
+    let endpoint = endpoint_in(cache.path());
+    assert!(crate::verified_daemon_instance_for(&endpoint, std::process::id()).is_none());
+
+    let pid = seed_own_record(&endpoint);
+    let instance = crate::verified_daemon_instance_for(&endpoint, pid).expect("own record");
+    assert_eq!(instance.pid(), pid);
+    assert!(crate::verified_daemon_instance_for(&endpoint, pid + 1).is_none());
+
+    seed_edited_record(&endpoint, |record| record.blake3_digest = [7; 32]);
+    assert!(crate::verified_daemon_instance_for(&endpoint, pid).is_none());
+}
+
 #[test]
 fn a_record_from_this_pid_namespace_stays_live() {
     let cache = tempfile::tempdir().unwrap();
