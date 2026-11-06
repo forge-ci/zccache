@@ -672,6 +672,8 @@ For operators with no such supervisor, `ZCCACHE_LOG_FILE=<path>` adds a **size-c
 
 **Lock file:** Contains the daemon PID. The CLI checks whether the PID is alive (`kill(pid, 0)` on Unix, `OpenProcess` on Windows). If the process is dead, the lock file is stale and is removed.
 
+**Stop result (#1984):** `zccache stop` exits 0 only after the endpoint disappears and no shutdown shortfall is recorded. It fails if the daemon is still serving after `ZCCACHE_STOP_TIMEOUT_SECS` (default 120), or if a bounded drain or save wrote `daemon-state/<ns>/shutdown-incomplete.txt`. The file carries that result without an IPC exchange; the next daemon clears it. The accept loop reads the latched `shutdown_requested` flag because `notify_waiters` is not buffered.
+
 **Lock-file ownership (#1905):** A daemon removes the lock file only if it wrote it. Startup binds the endpoint first and writes `daemon-<ns>-<v>.lock` only after the bind wins, so every failure path in `daemon::entry` (cache-root writer-lock contention reported as `WouldBlock`, a bind-worker join failure, a server error) runs before this daemon owns the file. `daemon::lock_file_guard::LockFileGuard` records ownership, so those paths leave a lock file belonging to the daemon that won alone — the wedge where a live daemon became undiscoverable to `check_running_daemon` and `zccache stop`.
 
 ### Metadata Cache Recovery

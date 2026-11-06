@@ -69,6 +69,7 @@ impl DaemonServer {
     pub async fn run(&mut self, idle_timeout_secs: u64) -> Result<(), crate::ipc::IpcError> {
         let maintenance_policy =
             MaintenancePolicy::from_env().map_err(crate::ipc::IpcError::Endpoint)?;
+        clear_shutdown_shortfall(&self.state);
         tracing::info!(
             persist_workers = self.state.persist_semaphore.available_permits(),
             "daemon server running"
@@ -205,12 +206,22 @@ impl DaemonServer {
             // ERROR_NO_DATA / ERROR_BROKEN_PIPE even though the daemon itself
             // remains healthy. The watchdog is observational only: it must not
             // cancel and recreate the accept operation.
-            let winner = wait_for_accept_or_shutdown(
-                self.listener.accept(),
-                self.shutdown.notified(),
-                ACCEPT_STALL_WATCHDOG_INTERVAL,
-            )
-            .await;
+            // #1984: `notify_waiters` is not buffered, so a Shutdown handler
+            // signalling between two iterations wakes nobody. Create the
+            // waiter first, then read the flag every signaller stores before
+            // notifying: a signal before this point is seen by the load, and
+            // one after it wakes the waiter.
+            let shutdown_wait = self.shutdown.notified();
+            let winner = if self.state.shutdown_requested.load(Ordering::Acquire) {
+                AcceptWait::Shutdown
+            } else {
+                wait_for_accept_or_shutdown(
+                    self.listener.accept(),
+                    shutdown_wait,
+                    ACCEPT_STALL_WATCHDOG_INTERVAL,
+                )
+                .await
+            };
             match winner {
                 AcceptWait::Accepted(result) => {
                     let conn = match result {
@@ -316,8 +327,20 @@ impl DaemonServer {
                                     "depgraph saved"
                                 );
                             }
-                            Ok((Err(e), _, _, _, _)) => tracing::warn!("depgraph save failed: {e}"),
-                            Err(e) => tracing::warn!("depgraph save task join error: {e}"),
+                            Ok((Err(e), _, _, _, _)) => {
+                                tracing::warn!("depgraph save failed: {e}");
+                                record_shutdown_shortfall(
+                                    &self.state,
+                                    &format!("depgraph save failed: {e}"),
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("depgraph save task join error: {e}");
+                                record_shutdown_shortfall(
+                                    &self.state,
+                                    &format!("depgraph save task failed: {e}"),
+                                );
+                            }
                         }
                     } else {
                         tracing::debug!(

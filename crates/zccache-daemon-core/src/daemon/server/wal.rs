@@ -106,25 +106,7 @@ pub(super) async fn drain_durable_state_for_shutdown(
     // after a ~1 GB build) has no timing signal short of the timeout warning
     // below. Log the elapsed time unconditionally so a slow-but-successful
     // drain is diagnosable from the daemon log alone.
-    let pending_drain_start = std::time::Instant::now();
-    let pending_drained = pending_writes::await_all(
-        &state.pending_cache_writes,
-        PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT,
-    )
-    .await;
-    let pending_drain_elapsed_ns = pending_drain_start.elapsed().as_nanos() as u64;
-    if pending_drained {
-        tracing::info!(
-            elapsed_ns = pending_drain_elapsed_ns,
-            "pending artifact writes drained before WAL drain"
-        );
-    } else {
-        tracing::warn!(
-            pending = state.pending_cache_writes.len(),
-            elapsed_ns = pending_drain_elapsed_ns,
-            "timed out waiting for pending artifact writes before WAL drain"
-        );
-    }
+    drain_pending_writes(state, PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT).await;
 
     // 2. Block all publishers for the remainder of shutdown.
     let publication_guard = state
@@ -150,6 +132,7 @@ pub(super) async fn drain_durable_state_for_shutdown(
             "index-writer WAL drain did not acknowledge within its \
              shutdown budget; queued durable-index rows may be lost"
         );
+        record_shutdown_shortfall(state, "index_writer_drain: WAL flush was not acknowledged");
         crate::core::lifecycle::write_event_in_cache_root(
             state.cache_dir.as_path(),
             crate::core::lifecycle::EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT,
@@ -219,7 +202,10 @@ pub(super) async fn drain_durable_state_for_shutdown(
                 elapsed_ms = flush_start.elapsed().as_millis() as u64,
                 "artifact store final flush complete"
             ),
-            Err(e) => tracing::warn!(entries, "artifact store final flush failed: {e}"),
+            Err(e) => {
+                tracing::warn!(entries, "artifact store final flush failed: {e}");
+                record_shutdown_shortfall(state, &format!("artifact store flush failed: {e}"));
+            }
         }
     } else {
         tracing::debug!(
@@ -229,6 +215,58 @@ pub(super) async fn drain_durable_state_for_shutdown(
     }
 
     publication_guard
+}
+
+/// Remove a record left by an earlier daemon on this cache root.
+pub(super) fn clear_shutdown_shortfall(state: &SharedState) {
+    let path = crate::core::config::shutdown_shortfall_path_from_cache_dir(&state.cache_dir);
+    let _ = std::fs::remove_file(path.as_path());
+}
+
+/// Append what this shutdown failed to persist (#1984). The Shutdown response
+/// has already been sent, so this file is how `zccache stop` learns of it
+/// without another IPC exchange.
+pub(super) fn record_shutdown_shortfall(state: &SharedState, reason: &str) {
+    use std::io::Write as _;
+    let path = crate::core::config::shutdown_shortfall_path_from_cache_dir(&state.cache_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_path())
+        .and_then(|mut file| writeln!(file, "{reason}"));
+    if let Err(error) = written {
+        tracing::warn!(%error, reason, "could not record shutdown shortfall");
+    }
+}
+
+/// Wait up to `timeout` for deferred persist tasks to finish.
+pub(super) async fn drain_pending_writes(state: &SharedState, timeout: std::time::Duration) {
+    let start = std::time::Instant::now();
+    let drained = pending_writes::await_all(&state.pending_cache_writes, timeout).await;
+    let elapsed_ns = start.elapsed().as_nanos() as u64;
+    if drained {
+        tracing::info!(
+            elapsed_ns,
+            "pending artifact writes drained before WAL drain"
+        );
+    } else {
+        tracing::warn!(
+            pending = state.pending_cache_writes.len(),
+            elapsed_ns,
+            "timed out waiting for pending artifact writes before WAL drain"
+        );
+        record_shutdown_shortfall(
+            state,
+            &format!(
+                "pending_writes: {} artifact writes unfinished after {}s",
+                state.pending_cache_writes.len(),
+                timeout.as_secs_f32()
+            ),
+        );
+    }
 }
 
 /// Background index-writer task.

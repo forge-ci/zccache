@@ -92,9 +92,9 @@ pub use paths::{
     cargo_registry_cache_dir_from_cache_dir, compiler_hash_cache_path_from_cache_dir,
     crash_dump_dir, create_dir_all_private, depfile_dir, depfile_dir_from_cache_dir, depgraph_dir,
     depgraph_dir_from_cache_dir, ensure_dir_private, index_path, index_path_from_cache_dir,
-    log_dir, log_dir_from_cache_dir, metadata_path_from_cache_dir, symbols_cache_dir,
-    symbols_cache_dir_from_cache_dir, system_includes_cache_path_from_cache_dir, tmp_dir,
-    tmp_dir_from_cache_dir,
+    log_dir, log_dir_from_cache_dir, metadata_path_from_cache_dir,
+    shutdown_shortfall_path_from_cache_dir, symbols_cache_dir, symbols_cache_dir_from_cache_dir,
+    system_includes_cache_path_from_cache_dir, tmp_dir, tmp_dir_from_cache_dir,
 };
 pub use resolve::{
     cache_dir_override, daemon_state_dir, daemon_state_dir_from_cache_dir,

@@ -204,3 +204,25 @@ async fn shutdown_persists_every_cache_when_dirty() {
         "a dirty system-includes cache must still be persisted at shutdown"
     );
 }
+
+/// #1984: `notify_waiters` is not buffered. A Shutdown handler that signals
+/// between two accept-loop iterations has no waiter to wake, and the daemon
+/// then served forever while `zccache stop` reported success with no
+/// `depgraph.bin` on disk. The latched flag alone must end the loop.
+#[tokio::test]
+async fn shutdown_signalled_while_no_accept_waiter_exists_still_stops_the_daemon() {
+    let cache_root = tempfile::tempdir().unwrap();
+    let cache_dir: crate::core::NormalizedPath = cache_root.path().join("cache").into();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    let state = server.test_state_arc();
+
+    state.shutdown_requested.store(true, Ordering::Release);
+    state.shutdown.notify_waiters();
+
+    let stopped = tokio::time::timeout(Duration::from_secs(30), server.run(0)).await;
+    assert!(
+        matches!(stopped, Ok(Ok(()))),
+        "a latched shutdown must end the accept loop"
+    );
+}

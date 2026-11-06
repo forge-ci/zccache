@@ -136,6 +136,13 @@ pub fn cargo_registry_cache_dir_from_cache_dir(cache_dir: &NormalizedPath) -> No
     cache_dir.join("cargo-registry")
 }
 
+/// Durable record of what a graceful shutdown failed to persist (#1984). The
+/// daemon appends to it; `zccache stop` reports and removes it.
+#[must_use]
+pub fn shutdown_shortfall_path_from_cache_dir(cache_dir: &NormalizedPath) -> NormalizedPath {
+    daemon_state_dir_from_cache_dir(cache_dir).join("shutdown-incomplete.txt")
+}
+
 /// Returns the path to the artifact index database.
 #[must_use]
 pub fn index_path() -> NormalizedPath {
