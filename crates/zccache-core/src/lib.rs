@@ -16,6 +16,7 @@ pub mod lifecycle;
 pub mod mtime;
 pub mod path;
 pub mod scan_entry;
+pub mod small_tool;
 pub mod sync;
 mod sync_barrier;
 mod sync_watchdog;

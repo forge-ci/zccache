@@ -68,6 +68,7 @@
 //! | `in_flight_exec_wait_timeout` | daemon | an exec-cache waiter stopped coalescing and ran its own copy | `key`, `budget_ms`, `reason` |
 //! | `rustc_identity_probe_timeout` | daemon | the rustc identity probe timed out and hashing fell back to file bytes | `compiler`, `timeout_ms`, `reason` |
 //! | `compiler_identity_fallback_flavor` | daemon | a rustc identity probe fell back to file bytes for one request; the fallback is not persisted | `compiler`, `compiler_family`, `reason` |
+//! | `small_tool_diagnostic` | daemon, CLI | a helper zccache ran itself failed or wrote stderr; the excerpt is bounded and redacted | `tool`, `exit_code`, `duration_ns`, `stderr_excerpt`, `stderr_bytes`, `error` |
 //! | `staged_publication_failed` | daemon | a successful compile could not publish its staged generation | `reason`, `error`, `artifact_key` |
 //! | `persist_failed` | daemon | an asynchronous artifact persist failed, so no index entry was published | `artifact_key`, `paths`, `errno`, `error`, `gap_ms` |
 //! | `cow_unregistered_blob_evicted` | daemon | an unregistered COW blob was rejected and removed | `blob_path`, `link_count` |
@@ -264,6 +265,7 @@ pub const EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT: &str = "embedded_flush_step_timeout
 pub const EVENT_IN_FLIGHT_EXEC_WAIT_TIMEOUT: &str = "in_flight_exec_wait_timeout";
 pub const EVENT_RUSTC_IDENTITY_PROBE_TIMEOUT: &str = "rustc_identity_probe_timeout";
 pub const EVENT_COMPILER_IDENTITY_FALLBACK_FLAVOR: &str = "compiler_identity_fallback_flavor";
+pub const EVENT_SMALL_TOOL_DIAGNOSTIC: &str = "small_tool_diagnostic";
 pub const EVENT_COW_UNREGISTERED_BLOB_EVICTED: &str = "cow_unregistered_blob_evicted";
 pub const EVENT_COW_BLOB_CORRUPTION_DETECTED: &str = "cow_blob_corruption_detected";
 pub const EVENT_NATIVE_FLAG_HOST_SALTED: &str = "native_flag_host_salted";
@@ -355,6 +357,7 @@ pub const EVENT_ALL: &[&str] = &[
     EVENT_IN_FLIGHT_EXEC_WAIT_TIMEOUT,
     EVENT_RUSTC_IDENTITY_PROBE_TIMEOUT,
     EVENT_COMPILER_IDENTITY_FALLBACK_FLAVOR,
+    EVENT_SMALL_TOOL_DIAGNOSTIC,
     EVENT_COW_UNREGISTERED_BLOB_EVICTED,
     EVENT_COW_BLOB_CORRUPTION_DETECTED,
     EVENT_NATIVE_FLAG_HOST_SALTED,

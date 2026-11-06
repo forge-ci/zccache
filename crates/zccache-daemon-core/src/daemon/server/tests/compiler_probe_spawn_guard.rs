@@ -28,9 +28,17 @@ fn check_probe_releases_admission(async_probe: bool) {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(output_within_async(spec, Duration::from_secs(20)))
+                .block_on(output_within_async(
+                    std::path::Path::new("probe-test"),
+                    spec,
+                    Duration::from_secs(20),
+                ))
         } else {
-            output_within(spec, Duration::from_secs(20))
+            output_within(
+                std::path::Path::new("probe-test"),
+                spec,
+                Duration::from_secs(20),
+            )
         }
     });
     let started = Instant::now();

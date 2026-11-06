@@ -115,19 +115,7 @@ fn digest_args(args: &[String]) -> String {
 pub(in crate::daemon::server) fn redacted_args_preview(args: &[String]) -> Vec<String> {
     const MAX_ARGS: usize = 8;
     const MAX_ARG_CHARS: usize = 256;
-    const SENSITIVE_NAMES: &[&str] = &[
-        "token",
-        "password",
-        "passwd",
-        "secret",
-        "api_key",
-        "apikey",
-        "authorization",
-        "credential",
-        "private_key",
-        "access_key",
-        "bearer",
-    ];
+    use zccache_core::small_tool::SENSITIVE_NAMES;
     let mut redact_next = false;
     args.iter()
         .take(MAX_ARGS)

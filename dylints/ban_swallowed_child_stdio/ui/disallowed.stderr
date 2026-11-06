@@ -1,0 +1,58 @@
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:22:20
+   |
+LL |     command.stdout(Stdio::null());
+   |                    ^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_swallowed_child_stdio)]` on by default
+
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:23:20
+   |
+LL |     command.stderr(std::process::Stdio::null());
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:24:20
+   |
+LL |     command.stderr(Alias::null());
+   |                    ^^^^^^^^^^^
+
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:25:35
+   |
+LL |     Command::stderr(&mut command, Stdio::null());
+   |                                   ^^^^^^^^^^^
+
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:26:25
+   |
+LL |     let function_item = Stdio::null;
+   |                         ^^^^^^^^^^^
+
+error: `std::process::Stdio::null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:28:17
+   |
+LL |     let later = Stdio::null();
+   |                 ^^^^^^^^^^^
+
+error: `StreamMode::Null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:30:10
+   |
+LL |     sink(StreamMode::Null);
+   |          ^^^^^^^^^^^^^^^^
+
+error: `StreamMode::Null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:31:10
+   |
+LL |     sink(ModeAlias::Null);
+   |          ^^^^^^^^^^^^^^^
+
+error: `StreamMode::Null` discards a child's output stream; capture it with `zccache_core::small_tool`, or allow it with a stated reason for a detached or existence-only child (#1970)
+  --> $DIR/disallowed.rs:33:17
+   |
+LL |         stderr: StreamMode::Null,
+   |                 ^^^^^^^^^^^^^^^^
+
+error: aborting due to 9 previous errors
+
