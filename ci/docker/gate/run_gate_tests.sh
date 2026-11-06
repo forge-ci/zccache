@@ -55,4 +55,8 @@ ZCCACHE_DISABLE=1 soldr cargo test -p zccache-daemon-core --test legacy_path_val
 step "nested Dylint cache contract"
 soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ignored
 
+# ci.yml msrv "Verify source edit after a test build fails check (#2002)".
+step "false-green check guard"
+soldr cargo test -p zccache --features zccache-bin --test cache_rust false_green_check:: -- --ignored
+
 step "gate tests passed"

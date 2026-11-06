@@ -215,7 +215,11 @@ def checks() -> list[Check]:
             bosn_workflow=".github/workflows/ci.yml",
             bosn_job="msrv",
             selected_job="msrv",
-            required_steps=("Check MSRV", "Verify nested Dylint cache contract"),
+            required_steps=(
+                "Check MSRV",
+                "Verify nested Dylint cache contract",
+                "Verify source edit after a test build fails check (#2002)",
+            ),
         ),
         # The Dylint job is the longest on a zccache PR (~9m of a ~9.2m
         # critical path), and until it had a lane here an attested head could
