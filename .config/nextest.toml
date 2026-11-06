@@ -1,6 +1,13 @@
 experimental = ["wrapper-scripts"]
 
 # cargo-nextest configuration (Integration CI runs the workspace under nextest).
+
+# #2098: suite-wide backstop for a wedged test: terminate after 10 minutes. The
+# slowest test is a fixed 120 s timer bounded at 125 s, and the next slowest take
+# about 15 s, so this cannot kill a healthy test. The 60 s period keeps nextest's
+# default SLOW reporting. 10 minutes also fits the 35 minute Integration job.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 10 }
 #
 # nextest runs tests in parallel, one process each. Tests that assert
 # wall-clock budgets or compare timings (startup budgets, perf_* rows,

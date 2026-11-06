@@ -22,6 +22,11 @@ fn enable_staged_tests() -> StagedArtifactsEnvGuard {
     guard
 }
 
+/// Limit for one trivial fixture compile (#2098). It normally takes 0.3-5.5 s
+/// under load; the slowest ever seen ran past 25 s, so this is over ten times
+/// that outlier and only a wedged compiler or soldr shim should reach it.
+const FIXTURE_RUSTC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 #[test]
 fn rust_plan_rewrites_output_before_spawn() {
     let _staged = enable_staged_tests();
@@ -91,13 +96,19 @@ fn rust_staging_paths_do_not_change_published_output_bytes() {
         )
         .unwrap()
         .unwrap();
-        let output = std::process::Command::new(rustc.as_path())
-            .args(&plan.rewritten_args)
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
+        let output = zccache_core::wait::output_for(
+            crate::daemon::server::compiler_spawn::user_compile_spawn(
+                rustc.as_path(),
+                temp.path(),
+                &plan.rewritten_args,
+                None,
+            ),
+            FIXTURE_RUSTC_TIMEOUT,
+        )
+        .expect("fixture rustc compile must finish within FIXTURE_RUSTC_TIMEOUT");
+        assert_eq!(
+            output.exit.raw_code(),
+            0,
             "rustc failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
