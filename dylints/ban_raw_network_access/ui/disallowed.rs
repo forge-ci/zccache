@@ -4,7 +4,7 @@ mod reqwest {
     pub struct Client;
 
     impl Client {
-        pub fn builder() -> Client {
+        pub fn new() -> Client {
             unimplemented!()
         }
 
@@ -23,10 +23,10 @@ mod reqwest {
 use reqwest::Client as Alias;
 
 fn main() {
-    let client = reqwest::Client::builder();
+    let client = reqwest::Client::new();
     client.head();
     reqwest::Client::head(&client);
-    let item = Alias::builder;
+    let item = Alias::new;
     let _ = item();
     reqwest::get();
     let _ = Alias::default();

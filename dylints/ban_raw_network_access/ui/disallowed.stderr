@@ -1,8 +1,8 @@
 error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
   --> $DIR/disallowed.rs:26:18
    |
-LL |     let client = reqwest::Client::builder();
-   |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     let client = reqwest::Client::new();
+   |                  ^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(ban_raw_network_access)]` on by default
 
@@ -21,8 +21,8 @@ LL |     reqwest::Client::head(&client);
 error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
   --> $DIR/disallowed.rs:29:16
    |
-LL |     let item = Alias::builder;
-   |                ^^^^^^^^^^^^^^
+LL |     let item = Alias::new;
+   |                ^^^^^^^^^^
 
 error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
   --> $DIR/disallowed.rs:31:5
