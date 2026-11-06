@@ -421,11 +421,8 @@ impl StagedCompilePlan {
                 .file_name()
                 .ok_or_else(|| missing_filename(StagedPlanReason::OutputMissingFilename))?;
             let staged: NormalizedPath = root.join(file_name);
-            let requested_depfile = dep_flags.mf_path.clone().or_else(|| {
-                dep_flags
-                    .has_md
-                    .then(|| requested.as_path().with_extension("d").into())
-            });
+            let requested_depfile =
+                crate::depgraph::depfile::user_depfile_destination(dep_flags, requested.as_path());
             let mut rewritten_args = args.to_vec();
             let mut replaced = false;
             let mut i = 0;

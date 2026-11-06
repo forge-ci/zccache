@@ -540,6 +540,22 @@ fn user_depfile_destination_none_when_user_has_no_dep_flags() {
 }
 
 #[test]
+fn mf_without_md_requests_no_depfile_and_injects_nothing() {
+    let dep_flags = UserDepFlags {
+        mf_path: Some(NormalizedPath::from("/build/ignored.d")),
+        ..Default::default()
+    };
+    assert_eq!(
+        user_depfile_destination(&dep_flags, Path::new("/out/foo.o")),
+        None
+    );
+    let (args, strategy) =
+        prepare_depfile(true, &dep_flags, Path::new("/out/foo.o"), Path::new("/tmp"));
+    assert!(args.is_empty());
+    assert_eq!(strategy, DepfileStrategy::Unsupported);
+}
+
+#[test]
 fn depfile_stdout_is_not_treated_as_a_materialized_file() {
     let dep_flags = UserDepFlags {
         has_md: true,

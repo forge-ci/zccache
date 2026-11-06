@@ -57,6 +57,8 @@ fn parse_forwarded_stream(options: &[&str], cwd: &Path, result: &mut UserDepFlag
                 index += 1;
             }
         } else if option == "-MF" || option == "-dependency-file" {
+            // The cc1 option writes a depfile by itself, unlike `-MF`.
+            result.has_md |= option == "-dependency-file";
             if let Some(path) = next {
                 record_depfile_path(path, cwd, result);
                 index += 2;

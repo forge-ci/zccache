@@ -57,16 +57,16 @@ pub fn user_depfile_destination(
     dep_flags: &UserDepFlags,
     output_file: &Path,
 ) -> Option<NormalizedPath> {
-    if dep_flags.depfile_to_stdout {
+    // `-MF` alone requests nothing: gcc rejects it and clang ignores it (#2091).
+    if dep_flags.depfile_to_stdout || !dep_flags.has_md {
         return None;
     }
-    if let Some(ref mf_path) = dep_flags.mf_path {
-        return Some(mf_path.clone());
-    }
-    if dep_flags.has_md {
-        return Some(output_file.with_extension("d").into());
-    }
-    None
+    Some(
+        dep_flags
+            .mf_path
+            .clone()
+            .unwrap_or_else(|| output_file.with_extension("d").into()),
+    )
 }
 
 /// Determine depfile strategy and return extra args to append to the compiler.
@@ -104,7 +104,9 @@ pub fn prepare_depfile_with_mmd(
     if !supports_depfile {
         return (Vec::new(), DepfileStrategy::Unsupported);
     }
-    if dep_flags.depfile_to_stdout {
+    // Injecting `-MD` next to a lone `-MF` would turn gcc's error into success
+    // and make clang write a file nobody requested (#2091).
+    if dep_flags.depfile_to_stdout || (dep_flags.mf_path.is_some() && !dep_flags.has_md) {
         return (Vec::new(), DepfileStrategy::Unsupported);
     }
 
