@@ -688,7 +688,7 @@ pub(super) fn materialize_cached_compile_hit(
 }
 
 /// Whether a C/C++ artifact carries a non-empty depfile payload.
-fn cached_depfile_payload_present(
+pub(in crate::daemon::server) fn cached_depfile_payload_present(
     names: &[String],
     sizes: &[u64],
     output: &NormalizedPath,

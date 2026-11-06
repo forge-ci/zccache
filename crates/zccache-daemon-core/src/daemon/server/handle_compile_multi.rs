@@ -23,6 +23,28 @@ use types::{
     MissOutcome, PersistTaskParams, UnitCacheCheck, UnitCacheResult,
 };
 
+/// Whether a hit must restore a depfile. `-MD` selects the runtime library in
+/// MSVC syntax, and a stdout depfile batch never reaches the cache.
+fn requires_cached_depfile(
+    compilation: &crate::compiler::CacheableCompilation,
+    dep_flags: &UserDepFlags,
+    output_path: &NormalizedPath,
+) -> bool {
+    compilation.family.supports_depfile()
+        && !crate::compiler::parse_msvc::looks_like_msvc_args(&compilation.original_args)
+        && crate::depgraph::depfile::user_depfile_destination(dep_flags, output_path).is_some()
+}
+
+/// Where the compiler writes a batch unit's `-MD` depfile: gcc and clang both
+/// use `<cwd>/<source stem>.d`, wherever the source lives.
+fn batch_depfile_path(source: &Path, cwd: &Path) -> NormalizedPath {
+    let name = source
+        .with_extension("d")
+        .file_name()
+        .map_or_else(|| "deps.d".into(), std::ffi::OsStr::to_os_string);
+    cwd.join(name).into()
+}
+
 fn check_unit_cache(
     state: &SharedState,
     compilation: &crate::compiler::CacheableCompilation,
@@ -112,12 +134,25 @@ fn check_unit_cache(
         worktree_salt,
     );
     let t_register = t0.elapsed();
+    // A version before #2099 stored `-MD` batches without their depfile. Such
+    // an entry cannot satisfy this request, so it is a miss (#2103).
+    let depfile_missing = |artifact_key_hex: &str| {
+        requires_cached_depfile(compilation, &dep_flags, &output_path)
+            && lookup_artifact_with_disk_fallback(state, artifact_key_hex).is_some_and(|cached| {
+                !cached_depfile_payload_present(
+                    &cached.meta.output_names,
+                    &cached.meta.output_sizes,
+                    &output_path,
+                )
+            })
+    };
 
     // ── Ultra-fast path: per-file freshness skip ────────────────────
     if state.watcher_active.load(Ordering::Acquire) {
         let entry = owned_fast_hit_entry(&state.fast_hit_cache, &context_key);
         if let Some(entry) = entry {
             if cache_entry_fresh_at(cache_now, entry.cached_at, FAST_HIT_MAX_AGE)
+                && !depfile_missing(&entry.artifact_key_hex)
                 && context_artifact_is_fresh_with(
                     state,
                     &context_key,
@@ -316,7 +351,9 @@ fn check_unit_cache(
     | crate::depgraph::CacheVerdict::SourceChanged { artifact_key } = verdict
     {
         let artifact_key_hex = artifact_key.hash().to_hex();
-        if let Some(cached) = lookup_artifact_with_disk_fallback(state, &artifact_key_hex) {
+        if depfile_missing(&artifact_key_hex) {
+            miss_attribution = miss_reason::NO_ARTIFACT_FOR_KEY;
+        } else if let Some(cached) = lookup_artifact_with_disk_fallback(state, &artifact_key_hex) {
             let t_lookup = t0.elapsed();
             match ensure_payloads_for_materialization_for_state(state, &cached, &artifact_key_hex) {
                 Ok(payloads) => {
@@ -749,7 +786,19 @@ pub(super) async fn handle_compile_multi(
         .await;
     }
 
-    let supports_depfile = compilations[0].family.supports_depfile();
+    // Injecting `-MD` would overwrite a file the compiler does not own at the
+    // path it picks, and the parse below would delete it, so the units fall
+    // back to the static scan (#2103).
+    let depfile_path_is_free = unit_results.iter().all(|unit| match unit {
+        UnitCacheResult::Miss { source_path, .. } => {
+            !batch_depfile_path(source_path, &cwd_path).exists()
+        }
+        UnitCacheResult::Hit { .. } => true,
+    });
+    let depfile_policy = legacy_depfile_policy(&original_args, dependency_mode);
+    let supports_depfile = compilations[0].family.supports_depfile()
+        && depfile_policy.injected_flag.is_some()
+        && depfile_path_is_free;
     let hit_indices: HashSet<usize> = {
         let miss_set: HashSet<&NormalizedPath> = miss_sources.iter().copied().collect();
         source_indices
@@ -777,7 +826,6 @@ pub(super) async fn handle_compile_multi(
         .collect();
     let mut compiler_args =
         filter_multi_source_args(&original_args, &source_indices, &retained_source_indices);
-    let depfile_policy = legacy_depfile_policy(&original_args, dependency_mode);
     if supports_depfile {
         if let Some(flag) = depfile_policy.injected_flag {
             compiler_args.push(flag.to_string());
@@ -937,22 +985,7 @@ pub(super) async fn handle_compile_multi(
 
             let mut used_static_fallback = !supports_depfile;
             let mut scan_result = if supports_depfile {
-                let d_path = source_path.with_extension("d");
-                let cwd_d_path = cwd_path_task.join(
-                    d_path
-                        .file_name()
-                        .unwrap_or_else(|| std::ffi::OsStr::new("deps.d")),
-                );
-                let depfile_path: NormalizedPath = if d_path.exists() {
-                    d_path.into()
-                } else if cwd_d_path.exists() {
-                    cwd_d_path
-                } else {
-                    let stem = source_path
-                        .file_stem()
-                        .unwrap_or_else(|| std::ffi::OsStr::new("out"));
-                    cwd_path_task.join(stem).with_extension("d").into()
-                };
+                let depfile_path = batch_depfile_path(&source_path, &cwd_path_task);
                 match crate::depgraph::depfile::parse_depfile_path(
                     &depfile_path,
                     &source_path,
