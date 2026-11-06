@@ -39,7 +39,7 @@ def test_zccache_publish_manifest_keeps_gha_feature_dependencies(
     )
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["features"]["gha"] == ["dep:reqwest", "dep:sha2"]
+    assert manifest["features"]["gha"] == ["download", "dep:sha2"]
     assert manifest["features"]["formatter"] == []
     assert manifest["dependencies"]["sha2"] == {
         "workspace": True,
@@ -176,7 +176,7 @@ tokio = { workspace = true }
     assert "formatter = []" in text
     assert 'download = ["dep:futures", "dep:reqwest"]' in text
     assert 'download-protocol = ["download"]' in text
-    assert 'gha = ["dep:reqwest", "dep:sha2"]' in text
+    assert 'gha = ["download", "dep:sha2"]' in text
     assert "symbols = []" in text
     assert 'zccache = { path = "."' not in text
     assert "prost-build = { workspace = true }" in text
