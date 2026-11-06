@@ -9,8 +9,8 @@
 //!
 //! Two regression-protecting assertions:
 //!
-//! 1. **`perf_metadata_save_load_roundtrip_under_50ms`** — loading
-//!    a 200-entry snapshot stays under 50ms. If a future refactor
+//! 1. **`perf_metadata_save_load_roundtrip_under_50ms`** — the median
+//!    load of a 200-entry snapshot stays under 50ms. If a future refactor
 //!    accidentally introduces O(n^2) decode or per-entry syscalls,
 //!    this fails loudly long before it shows up in a cluster run.
 //!
@@ -35,6 +35,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tempfile::TempDir;
 use zccache::core::NormalizedPath;
 use zccache::fscache::{Confidence, FileMetadata, MetadataCache};
+use zccache_test_support::median;
 
 /// Roughly the order of magnitude of headers a `medium` perf fixture
 /// touches; large enough to surface algorithmic regressions, small
@@ -45,6 +46,9 @@ const ENTRY_COUNT: usize = 200;
 /// the low single-digit milliseconds on a developer laptop; 50ms gives
 /// CI runners headroom while still catching pathological regressions.
 const LOAD_BUDGET: Duration = Duration::from_millis(50);
+
+/// Loads measured per run; the median must be within `LOAD_BUDGET`.
+const LOAD_ROUNDS: usize = 31;
 
 fn populate(cache: &MetadataCache, count: usize) {
     for i in 0..count {
@@ -81,21 +85,30 @@ fn perf_metadata_save_load_roundtrip_under_50ms() {
     cache.save_to_disk(&path).expect("save_to_disk");
     drop(cache);
 
-    let start = Instant::now();
-    let loaded = MetadataCache::load_from_disk(&path).expect("load_from_disk");
-    let elapsed = start.elapsed();
+    // One wall-clock load fails whenever the host preempts it (#2081). The
+    // median of many ignores those stalls and leaves the budget untouched,
+    // while a cost paid by every load still moves the median past it.
+    let mut samples = Vec::with_capacity(LOAD_ROUNDS);
+    for _ in 0..LOAD_ROUNDS {
+        let start = Instant::now();
+        let loaded = MetadataCache::load_from_disk(&path).expect("load_from_disk");
+        samples.push(start.elapsed());
+        assert_eq!(loaded.len(), ENTRY_COUNT);
+    }
+    let elapsed = median(&mut samples);
 
     eprintln!(
-        "perf_metadata_save_load_roundtrip_under_50ms: load of {} entries took {:?}",
-        ENTRY_COUNT, elapsed
+        "perf_metadata_save_load_roundtrip_under_50ms: median load of {ENTRY_COUNT} entries \
+         took {} ns over {LOAD_ROUNDS} rounds",
+        elapsed.as_nanos()
     );
 
-    assert_eq!(loaded.len(), ENTRY_COUNT);
     assert!(
         elapsed < LOAD_BUDGET,
-        "metadata snapshot load took {:?} (budget {:?}); regression vs. the warm-restart fast path",
-        elapsed,
-        LOAD_BUDGET
+        "median metadata snapshot load took {} ns (budget {} ns); regression vs. the \
+         warm-restart fast path",
+        elapsed.as_nanos(),
+        LOAD_BUDGET.as_nanos()
     );
 }
 

@@ -1,10 +1,24 @@
 //! Disposable real-filesystem fixtures with loud skip accounting (#1039).
 
 use std::path::Path;
+use std::time::Duration;
 use zccache_core::wait::{BoundedCommand, CommandSpec as Command, ProcessOutput as Output};
 use zccache_core::NormalizedPath;
 
 pub use zccache_audit::{CacheRootAuditGuard, RuleId};
+
+/// Median of `samples`, the load-robust statistic for perf guards: scheduler
+/// stalls move individual samples, while a real per-call cost moves the median.
+///
+/// # Panics
+///
+/// Panics when `samples` is empty, since a guard that measured nothing must not pass.
+#[must_use]
+pub fn median(samples: &mut [Duration]) -> Duration {
+    assert!(!samples.is_empty(), "median of no samples");
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
 
 /// Build an absolute fixture path from a root-relative spec, gated on the
 /// host platform's spelling: `from_root("work/tree")` is `/work/tree` on
