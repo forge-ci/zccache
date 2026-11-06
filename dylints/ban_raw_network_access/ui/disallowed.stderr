@@ -1,0 +1,40 @@
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:26:18
+   |
+LL |     let client = reqwest::Client::builder();
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_raw_network_access)]` on by default
+
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:27:5
+   |
+LL |     client.head();
+   |     ^^^^^^^^^^^^^
+
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:28:5
+   |
+LL |     reqwest::Client::head(&client);
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:29:16
+   |
+LL |     let item = Alias::builder;
+   |                ^^^^^^^^^^^^^^
+
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:31:5
+   |
+LL |     reqwest::get();
+   |     ^^^^^^^^^^^^
+
+error: raw HTTP transport use has no mandatory deadline; go through `zccache_download::http` (#1968)
+  --> $DIR/disallowed.rs:32:13
+   |
+LL |     let _ = Alias::default();
+   |             ^^^^^^^^^^^^^^
+
+error: aborting due to 6 previous errors
+

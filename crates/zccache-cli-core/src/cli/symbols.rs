@@ -78,7 +78,7 @@ pub enum SymbolsError {
     Fetch {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: zccache_download::http::HttpError,
     },
     #[error("release asset returned HTTP {status} for {url}")]
     HttpStatus { url: String, status: u16 },
@@ -299,47 +299,45 @@ async fn fetch_archive(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("zccache/", env!("CARGO_PKG_VERSION")))
-        // #1172: these archives are unpacked next to the running executable,
-        // and the fetch carries no checksum, so the transport is the only
-        // integrity guarantee there is. `RELEASE_BASE_URL` is already https;
-        // this makes a redirect to http fail rather than silently downgrade.
-        .https_only(true)
-        .build()
-        .map_err(|e| SymbolsError::Fetch {
-            url: url.to_string(),
-            source: e,
-        })?;
+    use zccache_download::http::{self, HttpClient};
+
+    let fetch_error = |source| SymbolsError::Fetch {
+        url: url.to_string(),
+        source,
+    };
+    // #1172: these archives are unpacked next to the running executable, and
+    // the fetch carries no checksum, so the transport is the only integrity
+    // guarantee there is. `RELEASE_BASE_URL` is already https; https-only makes
+    // a redirect to http fail rather than silently downgrade.
+    let client = HttpClient::new(
+        concat!("zccache/", env!("CARGO_PKG_VERSION")),
+        true,
+        http::CONNECT_BUDGET,
+    )
+    .map_err(fetch_error)?;
     let response = client
-        .get(url)
-        .send()
+        .get(url, http::TRANSFER)
+        .send(&http::uncancelled())
         .await
-        .map_err(|e| SymbolsError::Fetch {
-            url: url.to_string(),
-            source: e,
-        })?;
+        .map_err(fetch_error)?;
     if !response.status().is_success() {
         return Err(SymbolsError::HttpStatus {
             url: url.to_string(),
             status: response.status().as_u16(),
         });
     }
-    let bytes = response.bytes().await.map_err(|e| SymbolsError::Fetch {
-        url: url.to_string(),
-        source: e,
-    })?;
+    let bytes = response.read_to_end().await.map_err(fetch_error)?;
 
     // Best-effort cache write: a permission or disk-full error here should
     // not fail the install — the bytes are already in memory and the caller
     // can extract them.
     if let Some(parent) = cache_path.parent() {
         if fs::create_dir_all(parent).is_ok() {
-            let _ = write_atomically(&cache_path, &mut io::Cursor::new(bytes.as_ref()));
+            let _ = write_atomically(&cache_path, &mut io::Cursor::new(&bytes));
         }
     }
 
-    Ok((bytes.to_vec(), false))
+    Ok((bytes, false))
 }
 
 fn archive_cache_path(version: &str, target: &str, kind: ArchiveKind) -> PathBuf {

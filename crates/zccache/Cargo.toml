@@ -37,7 +37,7 @@ cli = [
     "dep:zccache-cli-core",
     "zccache-cli-core/cli",
 ]
-download = ["dep:zccache-download", "dep:reqwest"]
+download = ["dep:zccache-download"]
 download-client = [
     "download",
     "download-protocol",
@@ -110,7 +110,6 @@ serde_json = { workspace = true }
 # hash
 
 # gha
-reqwest = { workspace = true, features = ["json"], optional = true }
 sha2 = { workspace = true, optional = true }
 
 # protocol

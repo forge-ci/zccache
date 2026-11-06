@@ -7,12 +7,19 @@ use std::time::Duration;
 #[cfg(test)]
 use kernal_api::async_engine::CancellationSource;
 use kernal_api::async_engine::CancellationToken;
-use reqwest::header::{
-    ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_LENGTH, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
-};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use zccache_core::NormalizedPath;
+
+use http::header::{
+    ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_LENGTH, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
+};
+use http::{HttpClient, HttpError, HttpPolicy, StatusCode};
+
+pub mod http;
+
+#[cfg(test)]
+mod stall_tests;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadOptions {
@@ -110,11 +117,29 @@ pub enum DownloadError {
     RangeUnsupported,
 }
 
+impl From<HttpError> for DownloadError {
+    fn from(error: HttpError) -> Self {
+        match error {
+            HttpError::Cancelled => Self::Cancelled,
+            other => Self::Http(other.to_string()),
+        }
+    }
+}
+
+/// The budgets one download runs under; see [`http`] for the chosen values.
+#[derive(Debug, Clone, Copy)]
+struct Budgets {
+    connect: Duration,
+    probe: HttpPolicy,
+    body: HttpPolicy,
+}
+
 pub type ProgressCallback = Arc<dyn Fn(u64, Option<u64>, DownloadPhase) + Send + Sync>;
 
 struct SegmentedDownload<'a> {
-    client: &'a reqwest::Client,
+    client: &'a HttpClient,
     url: &'a str,
+    policy: HttpPolicy,
     temp_path: &'a Path,
     metadata_dir: &'a Path,
     total: u64,
@@ -126,8 +151,9 @@ struct SegmentedDownload<'a> {
 }
 
 struct SegmentDownload<'a> {
-    client: &'a reqwest::Client,
+    client: &'a HttpClient,
     url: &'a str,
+    policy: HttpPolicy,
     segment_path: &'a Path,
     start: u64,
     end: u64,
@@ -144,16 +170,41 @@ pub async fn download_to_path(
     progress: ProgressCallback,
     cancel_token: CancellationToken,
 ) -> Result<Option<u64>, DownloadError> {
-    let client = reqwest::Client::builder()
-        .user_agent(format!("zccache-download/{}", zccache_core::VERSION))
-        // #1172: https-only unless the caller explicitly opted out. This also
-        // rejects an https→http redirect, which a URL check at the call site
-        // would not catch.
-        .https_only(!options.allow_insecure_http)
-        .build()
-        .map_err(|e| DownloadError::Http(e.to_string()))?;
+    download_with_budgets(
+        url,
+        destination,
+        metadata_dir,
+        options,
+        progress,
+        cancel_token,
+        Budgets {
+            connect: http::CONNECT_BUDGET,
+            probe: http::CONTROL,
+            body: http::TRANSFER,
+        },
+    )
+    .await
+}
 
-    let probe = probe_remote(&client, url).await?;
+async fn download_with_budgets(
+    url: &str,
+    destination: &Path,
+    metadata_dir: &Path,
+    options: &DownloadOptions,
+    progress: ProgressCallback,
+    cancel_token: CancellationToken,
+    budgets: Budgets,
+) -> Result<Option<u64>, DownloadError> {
+    // #1172: https-only unless the caller explicitly opted out. This also
+    // rejects an https→http redirect, which a URL check at the call site would
+    // not catch.
+    let client = HttpClient::new(
+        &format!("zccache-download/{}", zccache_core::VERSION),
+        !options.allow_insecure_http,
+        budgets.connect,
+    )?;
+
+    let probe = probe_remote(&client, url, budgets.probe, &cancel_token).await?;
     let total = probe.total_bytes;
     let engine = EngineConfig::default();
     let max_connections = options
@@ -198,6 +249,7 @@ pub async fn download_to_path(
         download_segmented(SegmentedDownload {
             client: &client,
             url,
+            policy: budgets.body,
             temp_path: &temp_path,
             metadata_dir,
             total: total_bytes,
@@ -212,6 +264,7 @@ pub async fn download_to_path(
         download_single(
             &client,
             url,
+            budgets.body,
             &temp_path,
             total,
             progress.clone(),
@@ -260,30 +313,28 @@ fn should_use_segments(
     }
 }
 
-async fn probe_remote(client: &reqwest::Client, url: &str) -> Result<Probe, DownloadError> {
+async fn probe_remote(
+    client: &HttpClient,
+    url: &str,
+    policy: HttpPolicy,
+    cancel_token: &CancellationToken,
+) -> Result<Probe, DownloadError> {
     let head = client
-        .head(url)
+        .head(url, policy)
         .header(ACCEPT_ENCODING, "identity")
-        .send()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?;
+        .send(cancel_token)
+        .await?;
     if head.status().is_success() {
         let total_bytes = head
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
+            .header(CONTENT_LENGTH)
             .and_then(|v| v.parse::<u64>().ok());
         let accept_ranges = head
-            .headers()
-            .get(ACCEPT_RANGES)
-            .and_then(|v| v.to_str().ok())
+            .header(ACCEPT_RANGES)
             .map(|v| v.eq_ignore_ascii_case("bytes"))
             .unwrap_or(false);
         let validator = head
-            .headers()
-            .get(ETAG)
-            .or_else(|| head.headers().get(LAST_MODIFIED))
-            .and_then(|v| v.to_str().ok())
+            .header(ETAG)
+            .or_else(|| head.header(LAST_MODIFIED))
             .map(ToOwned::to_owned);
         return Ok(Probe {
             total_bytes,
@@ -293,19 +344,16 @@ async fn probe_remote(client: &reqwest::Client, url: &str) -> Result<Probe, Down
     }
 
     let get = client
-        .get(url)
+        .get(url, policy)
         .header(ACCEPT_ENCODING, "identity")
         .header(RANGE, "bytes=0-0")
-        .send()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?;
+        .send(cancel_token)
+        .await?;
     let total_bytes = get.content_length().map(|len| len.max(1));
-    let accept_ranges = get.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let accept_ranges = get.status() == StatusCode::PARTIAL_CONTENT;
     let validator = get
-        .headers()
-        .get(ETAG)
-        .or_else(|| get.headers().get(LAST_MODIFIED))
-        .and_then(|v| v.to_str().ok())
+        .header(ETAG)
+        .or_else(|| get.header(LAST_MODIFIED))
         .map(ToOwned::to_owned);
     Ok(Probe {
         total_bytes,
@@ -315,37 +363,32 @@ async fn probe_remote(client: &reqwest::Client, url: &str) -> Result<Probe, Down
 }
 
 async fn download_single(
-    client: &reqwest::Client,
+    client: &HttpClient,
     url: &str,
+    policy: HttpPolicy,
     temp_path: &Path,
     total: Option<u64>,
     progress: ProgressCallback,
     cancel_token: CancellationToken,
 ) -> Result<u64, DownloadError> {
     let mut response = client
-        .get(url)
+        .get(url, policy)
         .header(ACCEPT_ENCODING, "identity")
-        .send()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?;
+        .send(&cancel_token)
+        .await?;
     if !response.status().is_success() {
         return Err(DownloadError::Http(format!(
-            "unexpected status {} for {url}",
-            response.status()
+            "unexpected status {} for {}",
+            response.status(),
+            http::redact_url(url)
         )));
     }
 
     let mut file = tokio::fs::File::create(temp_path).await?;
     let mut downloaded = 0u64;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?
-    {
-        if cancel_token.is_cancelled() {
-            return Err(DownloadError::Cancelled);
-        }
-        file.write_all(&chunk).await?;
+    while let Some(chunk) = response.next_chunk().await? {
+        let chunk = chunk.as_ref();
+        file.write_all(chunk).await?;
         downloaded += chunk.len() as u64;
         progress(downloaded, total, DownloadPhase::Downloading);
     }
@@ -357,6 +400,7 @@ async fn download_segmented(request: SegmentedDownload<'_>) -> Result<u64, Downl
     let SegmentedDownload {
         client,
         url,
+        policy,
         temp_path,
         metadata_dir,
         total,
@@ -383,6 +427,7 @@ async fn download_segmented(request: SegmentedDownload<'_>) -> Result<u64, Downl
             let downloaded = download_segment(SegmentDownload {
                 client: &client,
                 url: &url,
+                policy,
                 segment_path: &segment_path,
                 start,
                 end,
@@ -452,6 +497,7 @@ async fn download_segment(request: SegmentDownload<'_>) -> Result<u64, DownloadE
     let SegmentDownload {
         client,
         url,
+        policy,
         segment_path,
         start,
         end,
@@ -461,32 +507,23 @@ async fn download_segment(request: SegmentDownload<'_>) -> Result<u64, DownloadE
     } = request;
 
     let mut request = client
-        .get(url)
+        .get(url, policy)
         .header(ACCEPT_ENCODING, "identity")
-        .header(RANGE, format!("bytes={start}-{end}"));
+        .header(RANGE, &format!("bytes={start}-{end}"));
     if let Some(value) = validator.as_deref() {
         request = request.header(IF_RANGE, value);
     }
 
-    let mut response = request
-        .send()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?;
-    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+    let mut response = request.send(&cancel_token).await?;
+    if response.status() != StatusCode::PARTIAL_CONTENT {
         return Err(DownloadError::RangeUnsupported);
     }
 
     let mut file = tokio::fs::File::create(segment_path).await?;
     let mut downloaded = 0u64;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| DownloadError::Http(e.to_string()))?
-    {
-        if cancel_token.is_cancelled() {
-            return Err(DownloadError::Cancelled);
-        }
-        file.write_all(&chunk).await?;
+    while let Some(chunk) = response.next_chunk().await? {
+        let chunk = chunk.as_ref();
+        file.write_all(chunk).await?;
         downloaded += chunk.len() as u64;
         progress(chunk.len() as u64);
     }

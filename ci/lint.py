@@ -312,6 +312,7 @@ def lint_workspace():
             "dylints/ban_unbounded_sync/Cargo.toml",
             "dylints/ban_swallowed_child_stdio/Cargo.toml",
             "dylints/ban_raw_env_flag/Cargo.toml",
+            "dylints/ban_raw_network_access/Cargo.toml",
         ):
             result = run_cmd(cargo_command(
                 "fmt",

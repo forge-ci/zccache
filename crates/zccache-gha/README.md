@@ -9,3 +9,8 @@ crate can re-export it behind the `gha` feature.
 `version` are appended as query parameters, never interpolated), so keys
 containing `#`, `&`, or spaces address the entry the caller asked for instead of
 a truncated or hijacked query.
+
+All requests go through `zccache_download::http` (#1968): reserve, commit and
+restore lookups use the finite `CONTROL` budgets, blob transfers the
+progress-based `TRANSFER` budgets. The runtime token never appears in `Debug`
+output.
