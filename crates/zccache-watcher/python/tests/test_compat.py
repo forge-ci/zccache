@@ -34,6 +34,22 @@ class WatcherTests(unittest.TestCase):
                 return changes
         return []
 
+    def _collect_until_seen(
+        self,
+        watcher: DebouncedFileWatcherProcess,
+        expected: set[str],
+        timeout: float = 15.0,
+    ) -> list[list[str]]:
+        batches: list[list[str]] = []
+        seen: set[str] = set()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not expected <= seen:
+            batch = watcher.get_all_changes(timeout=0.1)
+            if batch:
+                batches.append(batch)
+                seen.update(batch)
+        return batches
+
     def test_file_watcher_process_detects_modification(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             watched = Path(temp_dir) / "src"
@@ -43,7 +59,7 @@ class WatcherTests(unittest.TestCase):
 
             watcher = FileWatcherProcess(watched, excluded_patterns=[], poll_interval=0.05)
             try:
-                test_file.write_text("int x = 2;\n")
+                test_file.write_text("int x = 22;\n")
                 observed = self._wait_for_changes(watcher)
                 self.assertIn(str(test_file.resolve()), observed)
             finally:
@@ -149,7 +165,7 @@ class WatcherTests(unittest.TestCase):
                 callback=events.append,
             )
             try:
-                file_path.write_text("b\n")
+                file_path.write_text("bb\n")
                 self.assertTrue(wait_for(lambda: bool(events)))
                 self.assertIn(str(file_path.resolve()), events[0].paths)
             finally:
@@ -208,7 +224,7 @@ class WatcherTests(unittest.TestCase):
 
             with watcher:
                 self.assertTrue(watcher.is_running)
-                file_path.write_text("b\n")
+                file_path.write_text("bb\n")
                 event = watcher.poll(1.0)
                 self.assertIsNotNone(event)
                 assert event is not None
@@ -236,26 +252,46 @@ class WatcherTests(unittest.TestCase):
             watched.mkdir()
             first = watched / "a.cpp"
             second = watched / "b.cpp"
-            first.write_text("a1\n")
-            second.write_text("b1\n")
+            first.write_text("a")
+            second.write_text("b")
+            expected = {str(first.resolve()), str(second.resolve())}
 
             debounced = DebouncedFileWatcherProcess(
                 FileWatcherProcess(
                     watched,
                     excluded_patterns=[],
                     poll_interval=0.05,
-                    debounce_seconds=0.2,
+                    debounce_seconds=1.0,
                 ),
-                debounce_seconds=0.2,
+                debounce_seconds=1.0,
             )
             try:
-                first.write_text("a2\n")
-                first.write_text("a3\n")
-                second.write_text("b2\n")
-                batch = self._wait_for_changes(debounced, timeout=3.0)
-                self.assertEqual(batch, sorted(set(batch)))
-                self.assertIn(str(first.resolve()), batch)
-                self.assertIn(str(second.resolve()), batch)
+                # A stalled writer legitimately splits a burst: the window is
+                # wall-clock, so only a batch holding both paths proves batching.
+                # A window that never holds a burst splits every attempt.
+                attempts: list[list[list[str]]] = []
+                for _ in range(3):
+                    # Growing the files keeps each write visible to the
+                    # (mtime, size) diff even within one timestamp tick.
+                    with first.open("a") as handle:
+                        handle.write("a")
+                    # Long enough to span scans, so `first` is seen changed
+                    # twice inside one window and has to be de-duplicated.
+                    time.sleep(0.15)
+                    with first.open("a") as handle:
+                        handle.write("a")
+                    with second.open("a") as handle:
+                        handle.write("b")
+                    batches = self._collect_until_seen(debounced, expected)
+                    for batch in batches:
+                        self.assertEqual(batch, sorted(set(batch)))
+                    self.assertEqual(
+                        expected - {path for batch in batches for path in batch}, set()
+                    )
+                    attempts.append(batches)
+                    if any(expected <= set(batch) for batch in batches):
+                        return
+                self.fail(f"burst was never delivered as one batch: {attempts}")
             finally:
                 debounced.stop()
 
