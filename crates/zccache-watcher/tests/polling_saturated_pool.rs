@@ -3,6 +3,8 @@
 //! test in its own binary: saturating the process-wide pool would disturb any
 //! test sharing this process.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::time::{Duration, Instant};
 use zccache_core::NormalizedPath;
 use zccache_watcher::{PollWatchBatch, PollingWatcher, PollingWatcherConfig};
