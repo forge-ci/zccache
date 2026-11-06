@@ -13,13 +13,12 @@ use crate::core::config::MaterializationMode;
 
 mod maintenance;
 #[cfg(test)]
-pub(crate) use maintenance::evict_staged_artifact_keys;
+pub(in crate::daemon::server) use crate::core::scan_entry::listed_entry_with;
+pub(in crate::daemon::server) use crate::core::scan_entry::{entry_if_present, listed_entry};
+pub(in crate::daemon::server) use maintenance::clear_staged_artifacts;
 #[cfg(test)]
-pub(in crate::daemon::server) use maintenance::listed_entry_with;
+pub(crate) use maintenance::evict_staged_artifact_keys;
 use maintenance::remove_staged_tree;
-pub(in crate::daemon::server) use maintenance::{
-    clear_staged_artifacts, entry_if_present, listed_entry,
-};
 pub(crate) use maintenance::{
     evict_staged_artifact_keys_if_unchanged, scan_staged_disk_artifacts, StagedDiskArtifact,
 };

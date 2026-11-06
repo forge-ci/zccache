@@ -1015,7 +1015,7 @@ pub(crate) fn snapshot_bytes_walk(
         });
 
     let mut total: u64 = 0;
-    for entry in walker.walk() {
+    for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
         let entry = match entry {
             Ok(e) => e,
             Err(err) => {

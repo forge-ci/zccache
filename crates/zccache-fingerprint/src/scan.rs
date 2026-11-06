@@ -52,7 +52,7 @@ pub fn walk_files(
                 .is_none_or(|name| !exclude_set.contains(name))
         });
 
-    for entry in walker.walk() {
+    for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
         let entry = entry.map_err(|e| FingerprintError::Scan {
             path: root.clone().into(),
             message: format!("directory walk error: {e}"),
@@ -254,7 +254,7 @@ pub fn walk_files_glob(
             true
         });
 
-    for entry in walker.walk() {
+    for entry in zccache_core::scan_entry::walk_reporting_unreadable(walker) {
         let entry = entry.map_err(|e| FingerprintError::Scan {
             path: root.clone().into(),
             message: format!("directory walk error: {e}"),
@@ -834,3 +834,6 @@ mod tests {
         assert_eq!(walk_rels, glob_rels);
     }
 }
+
+#[cfg(test)]
+mod unreadable_tests;
