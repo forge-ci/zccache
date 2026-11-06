@@ -100,7 +100,13 @@ pub(crate) mod ipc {
         /// while it serves, and only a connect can see it. This runs at bind
         /// and only when a socket file is present, never on a compile request.
         pub(super) fn refuse_unlocked_live_listener(endpoint: &Endpoint) -> io::Result<()> {
-            if std::fs::symlink_metadata(endpoint.as_str()).is_err() {
+            use std::os::unix::fs::FileTypeExt as _;
+            // Only a socket can have a listener. Hosts differ on what a connect
+            // to anything else reports (Linux refuses it, macOS does not), and
+            // the retire that follows refuses a non-socket on every host.
+            let is_socket = std::fs::symlink_metadata(endpoint.as_str())
+                .is_ok_and(|metadata| metadata.file_type().is_socket());
+            if !is_socket {
                 return Ok(());
             }
             match crate::probe::probe_local_socket_with_deadline(endpoint.as_str(), PROBE_BUDGET) {

@@ -1,6 +1,8 @@
 //! A Unix bind must never take a path from a live listener (#2106), while a
 //! socket file left behind by a dead one stays reclaimable.
 
+#![cfg(unix)]
+
 use std::io::ErrorKind;
 use std::os::unix::net::UnixListener as RawListener;
 use std::path::Path;

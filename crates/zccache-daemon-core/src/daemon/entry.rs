@@ -380,7 +380,11 @@ fn run_server(args: Args) {
             .detach_on_drop()
             .await;
             let lost_to = match &result {
-                Ok(Err(crate::ipc::IpcError::Io(error))) if cfg!(unix) => error.kind(),
+                Ok(Err(crate::ipc::IpcError::Io(error)))
+                    if !kernal_api::platform::host::target_is_windows() =>
+                {
+                    error.kind()
+                }
                 _ => break result,
             };
             let may_be_exit_window = matches!(
