@@ -249,7 +249,7 @@ use depfile_root::*;
 use directory_link::*;
 pub(crate) use disk_maintenance::*;
 use handle_clear::*;
-use handle_compile::handle_compile;
+use handle_compile::{cached_depfile_payload_present, handle_compile};
 use handle_compile_ephemeral::*;
 use handle_compile_multi::handle_compile_multi;
 use handle_exec::handle_generic_tool_exec;

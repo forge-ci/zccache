@@ -484,8 +484,32 @@ fn has_file_valued_msvc_output(args: &[String]) -> bool {
     })
 }
 
+/// A preprocessor-forwarded depfile names one path that every unit would write
+/// at once if the batch were split (#2103).
+fn forwards_depfile_request(args: &[String]) -> bool {
+    const FLAGS: [&str; 4] = ["-MD", "-MMD", "-MF", "-dependency-file"];
+    args.iter().enumerate().any(|(index, arg)| {
+        if let Some(options) = arg.strip_prefix("-Wp,") {
+            return options.split(',').any(|option| {
+                FLAGS.contains(&option) || (option.starts_with("-MF") && option.len() > 3)
+            });
+        }
+        let forwarded = match arg.strip_prefix("-Xpreprocessor=") {
+            Some(option) => Some(option),
+            None if arg == "-Xpreprocessor" => args.get(index + 1).map(String::as_str),
+            None => None,
+        };
+        forwarded.is_some_and(|option| {
+            FLAGS.contains(&option) || (option.starts_with("-MF") && option.len() > 3)
+        })
+    })
+}
+
 fn has_unmodeled_multi_output(args: &[String], msvc_syntax: bool) -> bool {
     if crate::compiler::unmodeled_side_output_flag(args, msvc_syntax).is_some() {
+        return true;
+    }
+    if !msvc_syntax && forwards_depfile_request(args) {
         return true;
     }
     // Multi-source PCH/module shapes have compiler-owned output maps.  They
@@ -792,6 +816,29 @@ mod tests {
                 ),
                 StagedPlanOutcome::Unsupported(StagedPlanReason::UnmodeledSideOutput)
             ));
+        }
+    }
+
+    #[test]
+    fn forwarded_depfile_requests_are_unmodeled() {
+        for forwarded in [
+            &["-Wp,-MD,all.d"][..],
+            &["-Wp,-MMD,all.d"][..],
+            &["-Wp,-MFall.d"][..],
+            &["-Wp,-dependency-file,all.d,-MT,out"][..],
+            &["-Xpreprocessor", "-MD"][..],
+            &["-Xpreprocessor=-MF", "-Xpreprocessor=all.d"][..],
+        ] {
+            let args: Vec<String> = forwarded.iter().map(ToString::to_string).collect();
+            assert!(has_unmodeled_multi_output(&args, false), "{forwarded:?}");
+        }
+        for unrelated in [
+            &["-Wp,-DVALUE"][..],
+            &["-Xpreprocessor", "-P"][..],
+            &["-MD"][..],
+        ] {
+            let args: Vec<String> = unrelated.iter().map(ToString::to_string).collect();
+            assert!(!has_unmodeled_multi_output(&args, false), "{unrelated:?}");
         }
     }
 

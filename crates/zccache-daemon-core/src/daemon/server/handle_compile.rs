@@ -5,6 +5,7 @@
 //! execution without editing one giant handler.
 
 mod cached_hit;
+pub(super) use cached_hit::cached_depfile_payload_present;
 mod error_cache;
 mod hit_branches;
 mod miss_profile;
