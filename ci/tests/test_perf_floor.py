@@ -1,8 +1,11 @@
 """#1445: fixed-overhead cold floors must not depend on the runner's speed."""
 
+import json
+from pathlib import Path
+
 import pytest
 
-from ci import benchmark_stats, perf_floor, perf_guard
+from ci import benchmark_stats, perf_floor, perf_guard, perf_precision
 
 C_REF = perf_floor.REFERENCE_BARE_SECONDS[("c-inline", "Single-file, Cold", "bare")]
 RUST_REF = perf_floor.REFERENCE_BARE_SECONDS[("rust", "Check, Cold", "bare")]
@@ -210,3 +213,79 @@ def test_dev_profile_level_warm_ratio_now_fails_the_ratchet() -> None:
     floor = perf_floor.warm_ratio_floor("c-inline", "Single-file, Warm", "bare")
     dev_profile_ratio = 2.2 / 0.104
     assert dev_profile_ratio < floor
+
+
+@pytest.mark.parametrize("baseline_seconds", [4.6, 10.2])
+@pytest.mark.parametrize(
+    "hit_seconds, expected", [(0.009149641, True), (0.015413, True), (0.020, False)]
+)
+def test_cpp_batched_warm_budget_is_independent_of_compiler_speed(
+    baseline_seconds: float, hit_seconds: float, expected: bool
+) -> None:
+    row = {
+        "benchmark": "cpp-inline",
+        "benchmark_label": "C++ inline args",
+        "language": "c++",
+        "mode": "warm",
+        "scenario": "Multi-file, Warm",
+        "bare_label": "Bare clang",
+        "bare_seconds": baseline_seconds,
+        "sccache_seconds": baseline_seconds,
+        "zccache_seconds": hit_seconds,
+        "zccache_vs_bare_ratio": baseline_seconds / hit_seconds,
+        "zccache_vs_sccache_ratio": baseline_seconds / hit_seconds,
+    }
+    report = perf_guard.evaluate_attempts(
+        [[row]],
+        languages=("c++",),
+        require_coverage=False,
+        apply_warm_ratchet=True,
+    )
+    assert len(report.statuses) == 2
+    assert report.passed is expected
+
+
+def test_cpp_batched_warm_uses_nanosecond_record_at_budget_boundary() -> None:
+    row = {
+        "benchmark": "cpp-inline",
+        "mode": "warm",
+        "scenario": "Multi-file, Warm",
+        "zccache_seconds": 0.018,
+        "bare_seconds": 5.0,
+        "sccache_seconds": 5.0,
+    }
+    record = dict(
+        row,
+        zccache_duration_ns=18_500_001,
+        bare_duration_ns=5_000_000_000,
+        sccache_duration_ns=5_000_000_000,
+    )
+    (precise,) = perf_precision.apply_metric_precision(
+        [row], "ZCCACHE_BENCH_METRIC_V1 " + json.dumps(record)
+    )
+    budget = perf_floor.warm_hit_budget_seconds("cpp-inline", "Multi-file, Warm")
+    assert budget is not None
+    assert precise["zccache_seconds"] > budget
+
+
+def test_cpp_batched_warm_budget_matches_retained_attempts() -> None:
+    history_path = (
+        Path(__file__).resolve().parents[2] / "ci/perf_threshold_history.json"
+    )
+    history = json.loads(history_path.read_text("utf-8"))
+    (record,) = [
+        entry
+        for entry in history
+        if entry.get("kind") == "warm-floor-provenance"
+        and entry.get("benchmark") == "cpp-inline"
+    ]
+    samples = record["samples"]
+    assert len(samples) == record["n_attempts"] == 17
+    assert len({sample["run_id"] for sample in samples}) == record["n_runs"] == 11
+    # Integer arithmetic: max * 1.2, rounded UP to the next 100,000 ns.
+    largest_ns = max(sample["zccache_duration_ns"] for sample in samples)
+    budget_ns = ((largest_ns * 12 + 999_999) // 1_000_000) * 100_000
+    assert budget_ns == record["budget_ns"]
+    assert budget_ns / 1e9 == perf_floor.warm_hit_budget_seconds(
+        "cpp-inline", "Multi-file, Warm"
+    )

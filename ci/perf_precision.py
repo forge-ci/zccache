@@ -1,4 +1,4 @@
-"""Nanosecond timings for the rows the guard gates on an absolute hit budget (#1807)."""
+"""Nanosecond timings for rows gated on an absolute warm-hit budget."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ def apply_metric_precision(
     The benchmark table prints durations as `{:.3}s`, i.e. whole milliseconds,
     so a 0.33 ms hit reads `0.000s` and a 0.6 ms hit reads `0.001s`; the table
     parser then reconstructs the hit from an integer-rounded ratio. That is
-    fine for a ratio floor but not for a sub-millisecond absolute budget, so
+    not accurate enough for an absolute budget near a rounding boundary, so
     for rows in `WARM_HIT_BUDGET_SECONDS` take the nanosecond durations from
     the `ZCCACHE_BENCH_METRIC_V1` record the same run already emitted and
     recompute the ratios from them. Rows without a usable record keep their
-    table values (the table can only over-report a sub-ms hit, never hide it).
+    table values for compatibility with older benchmark binaries.
     """
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for line in text.splitlines():

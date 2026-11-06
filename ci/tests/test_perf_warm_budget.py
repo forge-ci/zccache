@@ -359,7 +359,10 @@ def test_rsp_multi_file_floor_is_min_per_run_best_over_1_2(baseline: str, field:
 
 def test_provenance_record_matches_the_samples() -> None:
     history = json.loads((ROOT / "ci" / "perf_threshold_history.json").read_text("utf-8"))
-    (record,) = [e for e in history if e.get("kind") == "warm-floor-provenance"]
+    (record,) = [
+        e for e in history
+        if e.get("kind") == "warm-floor-provenance" and e.get("issue") == 1807
+    ]
     assert record["issue"] == 1807
     by_row = {(r["benchmark"], r["scenario"]): r for r in record["rows"]}
     for cfg in KINDS.values():

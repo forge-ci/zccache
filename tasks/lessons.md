@@ -384,3 +384,11 @@ Repeated `--emit` flags merge distinct kinds, but the last option for each kind
 wins. A later implicit kind clears its old explicit destination. Normalize
 that policy while parsing; retaining historical paths makes stale files look
 like required compiler products.
+
+
+## Warm-hit ratios can measure compiler hardware instead of cache latency
+
+Compare absolute hit times across passing and failing runs before loosening a
+ratio floor. A faster compiler baseline can fail a faster cache hit. Calibrate
+fixed-overhead warm rows from retained nanosecond attempt medians, including
+failed runs, and verify an injected latency regression on both runner classes.
