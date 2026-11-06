@@ -368,3 +368,35 @@ async fn stop_ignores_a_live_default_endpoint_daemon() {
          serving a different endpoint"
     );
 }
+
+// ── Stop must not report success early (issue #1984) ──────────────────
+
+/// A daemon still serving its endpoint when the bound expires has not flushed,
+/// so the wait has to say so instead of letting `stop` report success.
+#[tokio::test]
+async fn wait_for_daemon_teardown_reports_a_daemon_that_never_left() {
+    std::env::set_var("ZCCACHE_STOP_TIMEOUT_SECS", "1");
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let accept = tokio::spawn(async move {
+        loop {
+            // Like the daemon's accept loop: keep serving past a failed accept.
+            let _ = listener.accept().await;
+        }
+    });
+    let torn_down = wait_for_daemon_teardown(&endpoint).await;
+    accept.abort();
+    std::env::remove_var("ZCCACHE_STOP_TIMEOUT_SECS");
+    assert!(!torn_down, "an endpoint still serving is not a clean stop");
+}
+
+/// A bounded daemon drain that gave up records why; `stop` surfaces it once.
+#[test]
+fn shutdown_shortfall_marker_is_reported_once() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let marker = tmp.path().join("shutdown-incomplete.txt");
+    std::fs::write(&marker, "pending_writes: 3 unflushed\n").unwrap();
+    let first = super::super::daemon::take_shutdown_shortfall(&marker);
+    assert_eq!(first.as_deref(), Some("pending_writes: 3 unflushed"));
+    assert_eq!(super::super::daemon::take_shutdown_shortfall(&marker), None);
+}

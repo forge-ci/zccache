@@ -186,8 +186,11 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
                 // No daemon — but the index file might still be there from a
                 // crashed prior run. Probe once so callers (CI tar) can rely
                 // on the lock being gone after `zccache stop` returns.
-                wait_for_daemon_teardown(endpoint).await;
-                return ExitCode::SUCCESS;
+                return if wait_for_daemon_teardown(endpoint).await {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                };
             };
 
             match crate::ipc::force_kill_verified_daemon_for(endpoint, pid) {
@@ -203,8 +206,11 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
                                 eprintln!(
                                     "daemon process {pid} terminated after IPC connection failed"
                                 );
-                                wait_for_daemon_teardown(endpoint).await;
-                                return ExitCode::SUCCESS;
+                                return if wait_for_daemon_teardown(endpoint).await {
+                                    ExitCode::SUCCESS
+                                } else {
+                                    ExitCode::FAILURE
+                                };
                             }
                             Ok(false) => {}
                             Err(error) => {
@@ -255,7 +261,16 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
             // for the IPC endpoint to drop and for `index.redb` to be
             // openable (i.e. no exclusive share lock) so callers like the CI
             // post-step tar do not race the daemon. See issue #182.
-            wait_for_daemon_teardown(endpoint).await;
+            if !wait_for_daemon_teardown(endpoint).await {
+                return ExitCode::FAILURE;
+            }
+            let marker = crate::core::config::shutdown_shortfall_path_from_cache_dir(
+                &crate::core::config::default_cache_dir(),
+            );
+            if let Some(shortfall) = take_shutdown_shortfall(marker.as_path()) {
+                eprintln!("zccache[err][D]: daemon stopped, cache state incomplete: {shortfall}");
+                return ExitCode::FAILURE;
+            }
             eprintln!("daemon stopped");
             ExitCode::SUCCESS
         }
@@ -270,10 +285,13 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
     }
 }
 
+/// Must exceed the daemon's own drain budgets (#1984: 30 s + 30 s + 5 s, plus
+/// the snapshot saves), or `stop` gives up on a daemon that is still flushing.
+///
 /// Default cap on how long `zccache stop` will wait after the daemon ACKs
 /// `Shutdown` for the IPC endpoint to disappear and `index.redb` to become
 /// openable. Overridable with `ZCCACHE_STOP_TIMEOUT_SECS`.
-const STOP_WAIT_DEFAULT_SECS: u64 = 10;
+const STOP_WAIT_DEFAULT_SECS: u64 = 120;
 /// Poll cadence inside the bounded wait loop.
 const STOP_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -287,30 +305,37 @@ fn stop_wait_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-/// Poll until the IPC endpoint is unreachable. Emits a warning on timeout
-/// but never fails the caller — the worst case is that the caller (e.g. CI
-/// cache tar) sees the same error it would have seen without this wait.
+/// Poll until the IPC endpoint is unreachable. Returns false if the daemon is
+/// still serving at the deadline: its state may not be on disk, so callers
+/// that copy the cache next must not be told the stop succeeded (#1984).
 ///
 /// The legacy redb-era version of this routine also waited for the index
 /// file's exclusive share lock to drop on Windows. With the bincode blob
 /// there is no file lock — `flush()` writes via temp+rename, holding the
 /// file handle only briefly during the rename — so endpoint reachability
 /// is the only signal we need.
-pub(crate) async fn wait_for_daemon_teardown(endpoint: &str) {
+pub(crate) async fn wait_for_daemon_teardown(endpoint: &str) -> bool {
     let deadline = std::time::Instant::now() + stop_wait_timeout();
     loop {
         if !is_ipc_endpoint_reachable(endpoint).await {
-            return;
+            return true;
         }
         if std::time::Instant::now() >= deadline {
             eprintln!(
-                "zccache: timed out waiting for daemon endpoint to disappear after stop; \
-                 continuing anyway. set ZCCACHE_STOP_TIMEOUT_SECS to override."
+                "zccache[err][D]: daemon at {endpoint} still running after stop's wait; its \
+                 cache state may not be on disk. set ZCCACHE_STOP_TIMEOUT_SECS to wait longer."
             );
-            return;
+            return false;
         }
         tokio::time::sleep(STOP_WAIT_POLL_INTERVAL).await;
     }
+}
+
+/// Read and remove the record of what the daemon failed to persist.
+pub(crate) fn take_shutdown_shortfall(marker: &std::path::Path) -> Option<String> {
+    let recorded = std::fs::read_to_string(marker).ok()?;
+    let _ = std::fs::remove_file(marker);
+    Some(recorded.trim().replace('\n', "; "))
 }
 
 /// True if a fresh `connect()` to the daemon IPC endpoint succeeds.

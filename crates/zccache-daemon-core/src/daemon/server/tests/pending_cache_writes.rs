@@ -139,3 +139,21 @@ async fn pending_registry_warm_lookup_pays_no_wait() {
          {WAIT_BUDGET:?} budget instead of falling through"
     );
 }
+
+/// #1984: a pending write that outlives the drain budget must leave a durable
+/// record for `zccache stop`, not only a daemon log line.
+#[tokio::test]
+async fn pending_write_drain_timeout_records_a_shutdown_shortfall() {
+    let cache_root = tempfile::tempdir().unwrap();
+    let cache_dir: crate::core::NormalizedPath = cache_root.path().join("cache").into();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let server = super::super::DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    let state = server.test_state_arc();
+    let _notify = pending_writes::register(&state.pending_cache_writes, "stuck");
+
+    super::super::wal::drain_pending_writes(&state, Duration::from_millis(20)).await;
+
+    let marker = crate::core::config::shutdown_shortfall_path_from_cache_dir(&cache_dir);
+    let recorded = std::fs::read_to_string(marker.as_path()).unwrap();
+    assert!(recorded.contains("pending_writes"), "{recorded}");
+}
