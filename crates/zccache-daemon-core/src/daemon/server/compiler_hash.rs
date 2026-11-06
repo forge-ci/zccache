@@ -86,12 +86,16 @@ struct ProbeOutput {
 /// Spawn `cmd` and wait up to `timeout`, killing the child on timeout. Used to
 /// bound the sync `-vV` probe. Capture, descendant containment, reader
 /// cancellation, and the aggregate byte limit all belong to kernal-api.
-fn output_within(cmd: kernal_api::SpawnSpec, timeout: std::time::Duration) -> ProbeOutcome {
+fn output_within(
+    tool: &Path,
+    cmd: kernal_api::SpawnSpec,
+    timeout: std::time::Duration,
+) -> ProbeOutcome {
     // Never hold spawn admission while waiting for a child (soldr#3836).
     // A queued materializer blocks the actor's later read acquisition, which
     // prevents it from answering this probe. await_publishable covers foreign
     // spawners' inherited writable descriptors after publication.
-    match zccache_core::wait::output_for(cmd, timeout) {
+    match zccache_core::small_tool::output_for_recorded(&tool.display().to_string(), cmd, timeout) {
         Ok(output) => ProbeOutcome::Completed(ProbeOutput {
             success: output.exit.raw_code() == 0,
             stdout: output.stdout,
@@ -102,6 +106,7 @@ fn output_within(cmd: kernal_api::SpawnSpec, timeout: std::time::Duration) -> Pr
 }
 
 async fn output_within_async(
+    tool: &Path,
     cmd: kernal_api::SpawnSpec,
     timeout: std::time::Duration,
 ) -> ProbeOutcome {
@@ -119,7 +124,24 @@ async fn output_within_async(
             crate::daemon::process::ProcessLiveness::configured(),
         ),
     );
-    match probe.await {
+    let started = std::time::Instant::now();
+    let result = probe.await;
+    let tool = tool.display().to_string();
+    let diagnostic = match &result {
+        Ok(output) => zccache_core::small_tool::SmallToolDiagnostic::completed(
+            &tool,
+            output.status.code(),
+            started.elapsed(),
+            &output.stderr,
+        ),
+        Err(error) => zccache_core::small_tool::SmallToolDiagnostic::failed_to_run(
+            &tool,
+            started.elapsed(),
+            &error.to_string(),
+        ),
+    };
+    diagnostic.record();
+    match result {
         Ok(output) => ProbeOutcome::Completed(ProbeOutput {
             success: output.status.success(),
             stdout: output.stdout,
@@ -598,7 +620,7 @@ fn warn_rustc_identity_fallback(path: &Path, reason: &'static str) {
 fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     let timeout = rustc_probe_timeout();
-    match output_within(cmd, timeout) {
+    match output_within(path, cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
             RustcIdentity::VerifiedVv(crate::hash::hash_bytes(&output.stdout)),
         ),
@@ -627,7 +649,7 @@ fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
 async fn rustc_identity_async(path: std::path::PathBuf) -> Option<RustcIdentity> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
-    match output_within_async(cmd, timeout).await {
+    match output_within_async(&path, cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
             RustcIdentity::VerifiedVv(crate::hash::hash_bytes(&output.stdout)),
         ),
@@ -668,7 +690,7 @@ pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     // The running-process boundary makes this cold-path probe consoleless.
     let timeout = rustc_probe_timeout();
-    match output_within(cmd, timeout) {
+    match output_within(path, cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
             Some(crate::hash::hash_bytes(&output.stdout))
         }
@@ -701,7 +723,7 @@ pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
 pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "--version");
     let timeout = rustc_probe_timeout();
-    match output_within(cmd, timeout) {
+    match output_within(path, cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
             Some(crate::hash::hash_bytes(&output.stdout))
         }
@@ -728,7 +750,7 @@ pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
 pub(super) async fn hash_cc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "--version");
     let timeout = rustc_probe_timeout();
-    match output_within_async(cmd, timeout).await {
+    match output_within_async(&path, cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
             Some(crate::hash::hash_bytes(&output.stdout))
         }
@@ -759,7 +781,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
         |spec, (key, value)| spec.env(key, value),
     );
     let timeout = rustc_probe_timeout();
-    match output_within_async(cmd, timeout).await {
+    match output_within_async(&path, cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
             Some(crate::hash::hash_bytes(&output.stdout))
         }
@@ -775,7 +797,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
 pub(super) async fn hash_rustc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
     let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
-    match output_within_async(cmd, timeout).await {
+    match output_within_async(&path, cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
             Some(crate::hash::hash_bytes(&output.stdout))
         }
@@ -799,6 +821,7 @@ mod probe_timeout_tests {
     //! Issue #972: the `<compiler> -vV` identity probe must be bounded so a
     //! hung wrapper compiler cannot block cache-key computation.
     use super::{output_within, ProbeOutcome};
+    use std::path::Path;
     use std::time::Duration;
 
     fn slow_cmd() -> kernal_api::SpawnSpec {
@@ -824,7 +847,11 @@ mod probe_timeout_tests {
     fn times_out_on_hung_compiler() {
         // A probe that would run ~30 s is abandoned in ~200 ms.
         let start = std::time::Instant::now();
-        let outcome = output_within(slow_cmd(), Duration::from_millis(200));
+        let outcome = output_within(
+            Path::new("probe-test"),
+            slow_cmd(),
+            Duration::from_millis(200),
+        );
         assert!(
             matches!(outcome, ProbeOutcome::TimedOut),
             "a slow probe must time out"
@@ -838,7 +865,7 @@ mod probe_timeout_tests {
 
     #[test]
     fn completes_fast_command() {
-        match output_within(fast_cmd(), Duration::from_secs(30)) {
+        match output_within(Path::new("probe-test"), fast_cmd(), Duration::from_secs(30)) {
             ProbeOutcome::Completed(output) => assert!(output.success),
             other => panic!(
                 "expected Completed, got {:?}",
@@ -851,7 +878,7 @@ mod probe_timeout_tests {
     fn spawn_failed_for_missing_binary() {
         let cmd = kernal_api::SpawnSpec::new("zzz-nonexistent-compiler-xyz-972");
         assert!(matches!(
-            output_within(cmd, Duration::from_secs(5)),
+            output_within(Path::new("probe-test"), cmd, Duration::from_secs(5)),
             ProbeOutcome::SpawnFailed
         ));
     }
@@ -866,7 +893,7 @@ mod probe_timeout_tests {
             .arg("setsid sh -c 'sleep 3' & sleep 30");
 
         let start = std::time::Instant::now();
-        let outcome = output_within(cmd, Duration::from_millis(100));
+        let outcome = output_within(Path::new("probe-test"), cmd, Duration::from_millis(100));
 
         assert!(
             matches!(outcome, ProbeOutcome::TimedOut),

@@ -264,6 +264,7 @@ pub const EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT: &str = "embedded_flush_step_timeout
 pub const EVENT_IN_FLIGHT_EXEC_WAIT_TIMEOUT: &str = "in_flight_exec_wait_timeout";
 pub const EVENT_RUSTC_IDENTITY_PROBE_TIMEOUT: &str = "rustc_identity_probe_timeout";
 pub const EVENT_COMPILER_IDENTITY_FALLBACK_FLAVOR: &str = "compiler_identity_fallback_flavor";
+pub const EVENT_SMALL_TOOL_DIAGNOSTIC: &str = "small_tool_diagnostic";
 pub const EVENT_COW_UNREGISTERED_BLOB_EVICTED: &str = "cow_unregistered_blob_evicted";
 pub const EVENT_COW_BLOB_CORRUPTION_DETECTED: &str = "cow_blob_corruption_detected";
 pub const EVENT_NATIVE_FLAG_HOST_SALTED: &str = "native_flag_host_salted";

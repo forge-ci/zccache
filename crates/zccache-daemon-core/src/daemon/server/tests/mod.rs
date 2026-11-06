@@ -10,6 +10,7 @@ mod cache_trim;
 mod clear_handler;
 mod client_env;
 mod compiler_hash;
+mod compiler_probe_diagnostics;
 mod connection_disconnect;
 mod connection_self_profile;
 #[cfg(target_os = "linux")]
