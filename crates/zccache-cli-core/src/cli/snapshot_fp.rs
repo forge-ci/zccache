@@ -34,7 +34,8 @@
 //! 1. **Library / bin / test compilation** (cargo's `CheckDepInfo`
 //!    LocalFingerprint). The dep file lives at
 //!    `<fp_dir>/dep-{lib,bin,test}-<...>`; the matching `.d` Makefile is
-//!    at `target/<profile>/deps/<fp_dir>.d`.
+//!    at `target/<profile>/deps/<crate>-<hash>.d`, where `<crate>` is the
+//!    target name with `-` mapped to `_` (see [`rustc_dep_info_name`]).
 //! 2. **Build script compilation** (also `CheckDepInfo`). The dep file
 //!    is `<fp_dir>/dep-build-script-build-script-build`; the `.d` file
 //!    lives at `target/<profile>/build/<fp_dir>/build_script_build-<hash>.d`.
@@ -134,9 +135,9 @@ pub fn record(
     // can produce *multiple* manifest entries — e.g. one for the build
     // script's compilation (`dep-build-script-build-script-build`) and
     // one for its execution (`run-build-script-build-script-build.json`).
-    let entries: Vec<CrateEntry> = fp_dirs
+    let scans: Vec<FingerprintScan> = fp_dirs
         .par_iter()
-        .flat_map(|fp_dir| {
+        .map(|fp_dir| {
             process_fingerprint_dir(
                 fp_dir,
                 &fp_root,
@@ -148,10 +149,18 @@ pub fn record(
             )
         })
         .collect();
+    let mut entries = Vec::new();
+    let mut unresolved_dep_info = Vec::new();
+    for scan in scans {
+        entries.extend(scan.entries);
+        unresolved_dep_info.extend(scan.unresolved_dep_info);
+    }
+    unresolved_dep_info.sort();
 
     let stats = RecordStats {
         crates_recorded: entries.len(),
         sources_hashed: entries.iter().map(|c| c.sources.len()).sum(),
+        unresolved_dep_info,
     };
 
     let manifest = Manifest {
@@ -175,10 +184,33 @@ pub fn record(
 pub struct RecordStats {
     pub crates_recorded: usize,
     pub sources_hashed: usize,
+    /// Fingerprint dep files whose rustc `.d` file could not be located, as
+    /// `<fingerprint_dir>/<dep_file>`. Those units have no source coverage.
+    pub unresolved_dep_info: Vec<String>,
 }
 
-/// Inspect a single `<fp_root>/<fp_dir>` and return zero or more entries
-/// for the manifest.
+#[derive(Default)]
+struct FingerprintScan {
+    entries: Vec<CrateEntry>,
+    unresolved_dep_info: Vec<String>,
+}
+
+/// Map a fingerprint dep file to the name of rustc's `.d` file in `deps/`.
+///
+/// Cargo names the fingerprint dir after the package and the dep file
+/// `dep-[test-]<kind>-<target>`, while rustc names the `.d` file after the
+/// crate: `<target with - mapped to _>-<hash>`.
+fn rustc_dep_info_name(dep_file: &str, dir_name: &str) -> Option<String> {
+    let hash = &dir_name[strip_hash_suffix(dir_name)?.len() + 1..];
+    let unit = dep_file.strip_prefix("dep-")?;
+    let unit = unit.strip_prefix("test-").unwrap_or(unit);
+    let target = ["lib-", "bin-", "integration-test-", "example-", "bench-"]
+        .iter()
+        .find_map(|kind| unit.strip_prefix(kind))?;
+    Some(format!("{}-{hash}.d", target.replace('-', "_")))
+}
+
+/// Inspect a single `<fp_root>/<fp_dir>` for manifest entries and unresolved units.
 fn process_fingerprint_dir(
     fp_dir: &Path,
     fp_root: &Path,
@@ -187,18 +219,19 @@ fn process_fingerprint_dir(
     workspace_root: &Path,
     manifest_dirs: &HashMap<String, PathBuf>,
     profile: &str,
-) -> Vec<CrateEntry> {
+) -> FingerprintScan {
     let Some(dir_name) = fp_dir.file_name().and_then(|n| n.to_str()) else {
-        return vec![];
+        return FingerprintScan::default();
     };
     let mut entries = Vec::new();
+    let mut unresolved_dep_info = Vec::new();
 
     // List of (dep_file_basename, .d_path) for CheckDepInfo-style units.
     let mut depinfo_units: Vec<(String, PathBuf)> = Vec::new();
     let mut has_run_build_script = false;
 
     let Ok(read_dir) = std::fs::read_dir(fp_dir) else {
-        return vec![];
+        return FingerprintScan::default();
     };
     for entry in read_dir.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -208,12 +241,18 @@ fn process_fingerprint_dir(
             // Build-script compilation. .d file lives in build/<dir>/.
             if let Some(d_file) = first_buildscript_d_file(build_root, dir_name) {
                 depinfo_units.push((name, d_file));
+            } else {
+                unresolved_dep_info.push(format!("{dir_name}/{name}"));
             }
-        } else if name.starts_with("dep-") {
-            // Lib/bin/test compilation. .d file lives in deps/<dir>.d.
-            let d_file = deps_root.join(format!("{dir_name}.d"));
-            if d_file.is_file() {
-                depinfo_units.push((name, d_file));
+        } else if name.starts_with("dep-") && !name.starts_with("dep-doc-") {
+            // Lib/bin/test compilation. .d file lives in deps/. Rustdoc units
+            // have no rustc `.d` file and are not source-tracked here.
+            let d_file = rustc_dep_info_name(&name, dir_name)
+                .map(|d_name| deps_root.join(d_name))
+                .filter(|d_file| d_file.is_file());
+            match d_file {
+                Some(d_file) => depinfo_units.push((name, d_file)),
+                None => unresolved_dep_info.push(format!("{dir_name}/{name}")),
             }
         }
     }
@@ -249,7 +288,10 @@ fn process_fingerprint_dir(
         }
     }
 
-    entries
+    FingerprintScan {
+        entries,
+        unresolved_dep_info,
+    }
 }
 
 fn target_dir_from_fp_root<'a>(fp_root: &'a Path, _profile: &str) -> &'a Path {
@@ -855,5 +897,103 @@ mod tests {
         let p = tmp.path().join("Cargo.toml");
         write(&p, "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n");
         assert_eq!(parse_package_name(&p), Some("my-crate".to_string()));
+    }
+
+    /// Add one cargo unit to a fixture workspace, in real cargo's layout.
+    fn add_unit(workspace: &Path, pkg: &str, hash: &str, dep_file: &str, d_stem: &str) {
+        let debug = workspace.join("target/debug");
+        let fp_dir = debug.join(format!(".fingerprint/{pkg}-{hash}"));
+        write(&fp_dir.join(dep_file), "anchor");
+        let src_dir = workspace.join(pkg).join("src");
+        write(&src_dir.join("lib.rs"), "mod nested;\n");
+        write(&src_dir.join("nested.rs"), "\n");
+        let src_dir = src_dir.canonicalize().unwrap();
+        let d_content = format!(
+            "out: {} {}\n",
+            src_dir.join("lib.rs").display(),
+            src_dir.join("nested.rs").display()
+        );
+        write(&debug.join(format!("deps/{d_stem}-{hash}.d")), &d_content);
+    }
+
+    /// Record, check stamp targets and sources exist, key by fingerprint dir.
+    fn record_units(workspace: &Path) -> BTreeMap<String, CrateEntry> {
+        let target = workspace.join("target");
+        let manifest = target.join(MANIFEST_FILENAME);
+        record(&target, workspace, &manifest, "debug").unwrap();
+        let m: Manifest = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+        for entry in &m.crates {
+            assert!(target.join(&entry.stamp_targets[0]).is_file());
+            assert!(entry.sources.keys().all(|s| workspace.join(s).is_file()));
+        }
+        m.crates
+            .into_iter()
+            .map(|e| (e.fingerprint_dir.clone(), e))
+            .collect()
+    }
+
+    const HASH_A: &str = "0123456789abcdef";
+    const HASH_B: &str = "fedcba9876543210";
+
+    #[test]
+    fn record_covers_hyphenated_package_lib_and_unit_test() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        add_unit(ws, "hy-pkg", HASH_A, "dep-lib-hy_pkg", "hy_pkg");
+        add_unit(ws, "hy-pkg", HASH_B, "dep-test-lib-hy_pkg", "hy_pkg");
+
+        let units = record_units(ws);
+        assert_eq!(units.len(), 2);
+        for (hash, dep_file) in [(HASH_A, "dep-lib-hy_pkg"), (HASH_B, "dep-test-lib-hy_pkg")] {
+            let dir = format!("hy-pkg-{hash}");
+            let entry = &units[&dir];
+            assert!(entry.sources.contains_key("hy-pkg/src/nested.rs"));
+            assert_eq!(
+                entry.stamp_targets,
+                [format!("debug/.fingerprint/{dir}/{dep_file}")]
+            );
+        }
+    }
+
+    #[test]
+    fn record_preserves_underscore_package_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        add_unit(tmp.path(), "us_pkg", HASH_A, "dep-lib-us_pkg", "us_pkg");
+        let units = record_units(tmp.path());
+        assert!(units[&format!("us_pkg-{HASH_A}")]
+            .sources
+            .contains_key("us_pkg/src/nested.rs"));
+    }
+
+    #[test]
+    fn record_resolves_explicit_target_names() {
+        let cases = [
+            ("dep-lib-core_name", "core_name"),
+            ("dep-test-lib-core_name", "core_name"),
+            ("dep-bin-my-tool", "my_tool"),
+            ("dep-test-bin-my-tool", "my_tool"),
+            ("dep-test-integration-test-it-x", "it_x"),
+            ("dep-example-ex-y", "ex_y"),
+            ("dep-bench-be-z", "be_z"),
+        ];
+        for (dep_file, d_stem) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            add_unit(tmp.path(), "my-hy-pkg", HASH_A, dep_file, d_stem);
+            let units = record_units(tmp.path());
+            assert_eq!(units.len(), 1, "{dep_file} was not resolved");
+        }
+    }
+
+    #[test]
+    fn record_reports_unresolved_dep_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        add_unit(ws, "hy-pkg", HASH_A, "dep-lib-hy_pkg", "wrong_name");
+        let stats = record(&ws.join("target"), ws, &ws.join("m.json"), "debug").unwrap();
+        assert_eq!(stats.crates_recorded, 0);
+        assert_eq!(
+            stats.unresolved_dep_info,
+            [format!("hy-pkg-{HASH_A}/dep-lib-hy_pkg")]
+        );
     }
 }

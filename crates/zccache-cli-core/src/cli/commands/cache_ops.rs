@@ -913,6 +913,15 @@ pub(crate) fn cmd_snapshot_fp_record(
                 stats.crates_recorded,
                 stats.sources_hashed,
             );
+            for unit in &stats.unresolved_dep_info {
+                eprintln!("zccache snapshot-fp-record: warning: no dep-info found for {unit}");
+            }
+            if stats.crates_recorded == 0 {
+                eprintln!(
+                    "zccache snapshot-fp-record: warning: manifest has no source coverage; \
+                     an empty manifest does not guard freshness"
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
