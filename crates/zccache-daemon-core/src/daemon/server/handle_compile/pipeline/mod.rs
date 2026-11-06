@@ -38,9 +38,10 @@ use hash_verify::{
     hash_and_verify, miss_reason_for_verdict, HashSourceOutcome, HashVerifyInput, HashVerifyOutcome,
 };
 use request_prep::{
-    begin_prepared_request, discover_request_system_includes, invalidate_missing_depgraph_artifact,
-    parse_single_compile_request, prepare_request_arguments, record_dylint_input_hash,
-    wait_for_startup_depgraph_load, ParsedRequestArguments, ParsedSingleRequest,
+    begin_prepared_request, discover_request_system_includes, invalidate_depgraph_artifact,
+    invalidate_missing_depgraph_artifact, parse_single_compile_request, prepare_request_arguments,
+    record_dylint_input_hash, wait_for_startup_depgraph_load, ParsedRequestArguments,
+    ParsedSingleRequest,
 };
 use store_outcome::{store_successful_compile, StoreOutcomeRequest};
 use system_includes::SystemIncludesOutcome;
@@ -569,6 +570,9 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
             // the helper to `cleared=0` and breaking the test.
             if let CachedHitFailure::CacheBlobMissing(evidence) = &failure {
                 invalidate_missing_depgraph_artifact(state, &sid, &artifact_key_hex, evidence);
+            }
+            if matches!(failure, CachedHitFailure::DepfileInvalid) {
+                invalidate_depgraph_artifact(state, &sid, &artifact_key_hex);
             }
         }
         crate::depgraph::CacheVerdict::SourceChanged { artifact_key } => {

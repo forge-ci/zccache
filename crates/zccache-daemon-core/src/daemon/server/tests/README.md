@@ -40,3 +40,5 @@ fails closed without them, #1193).
 Per-domain helpers (fixture builders,
 `start_daemon`, jobserver-env constructors, `write_fake_linker`, etc.) live
 next to the tests that use them — no `common.rs` indirection.
+`depfile_hit_1992.rs` drives real compiles through a script compiler: an unusable
+`-MF` depfile is never stored, and a persisted depfile-less entry is a miss that heals (#1992).

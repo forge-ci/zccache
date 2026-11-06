@@ -594,6 +594,14 @@ pub(super) fn invalidate_missing_depgraph_artifact(
     artifact_key_hex: &str,
     _evidence: &CacheBlobMissing,
 ) {
+    invalidate_depgraph_artifact(state, sid, artifact_key_hex);
+}
+
+pub(super) fn invalidate_depgraph_artifact(
+    state: &SharedState,
+    sid: &SessionId,
+    artifact_key_hex: &str,
+) {
     let mut stale_keys = std::collections::HashSet::with_capacity(1);
     stale_keys.insert(artifact_key_hex.to_string());
     let cleared = state.dep_graph.load().invalidate_artifact_keys(&stale_keys);

@@ -102,9 +102,14 @@ fn collect_compile_scan(req: CompileScanRequest) -> CompileScanCollection {
             match crate::depgraph::depfile::parse_depfile_path(path, &source_path, &cwd_path) {
                 Ok(result) => {
                     if want_capture {
-                        if let Ok(bytes) = std::fs::read(path) {
-                            user_depfile_capture = Some((path.clone(), bytes));
-                        }
+                        // #1992: an unusable depfile stays uncaptured, which
+                        // makes the store refuse the whole entry.
+                        user_depfile_capture = std::fs::read(path)
+                            .ok()
+                            .filter(|bytes| {
+                                crate::depgraph::depfile::depfile_names_prerequisites(bytes)
+                            })
+                            .map(|bytes| (path.clone(), bytes));
                     }
                     if matches!(depfile_strategy, DepfileStrategy::Injected { .. }) {
                         let _ = std::fs::remove_file(path);
@@ -245,6 +250,40 @@ mod tests {
         assert!(collection.scan_result.resolved.contains(&header));
         assert!(collection.scan_result.has_computed);
         assert!(collection.depfile_parse_warning.is_some());
+    }
+
+    /// #1992: a depfile Ninja would read as "no dependencies" is not captured,
+    /// so the store refuses the entry instead of recording it as depfile-less.
+    #[test]
+    fn unusable_user_depfiles_are_not_captured() {
+        let cases: [Option<&[u8]>; 4] = [None, Some(b""), Some(b"main.o:\n"), Some(&[0xff, 0xfe])];
+        for bytes in cases {
+            let temp = tempfile::TempDir::new().unwrap();
+            let source = temp.path().join("main.c");
+            std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+            let depfile = temp.path().join("main.d");
+            if let Some(bytes) = bytes {
+                std::fs::write(&depfile, bytes).unwrap();
+            }
+            let collection = collect_compile_scan(CompileScanRequest {
+                is_rustc: false,
+                rustc_args: None,
+                source_path: source.into(),
+                cwd_path: temp.path().into(),
+                depfile_strategy: DepfileStrategy::UserSpecified {
+                    path: depfile.into(),
+                    augment_system_headers: false,
+                },
+                compiler_dependency_scan: None,
+                include_search: Default::default(),
+                dependency_mode: DependencyDiscoveryMode::AllHeaders,
+                scan_cache: Default::default(),
+            });
+            assert!(
+                collection.user_depfile_capture.is_none(),
+                "captured {bytes:?}"
+            );
+        }
     }
 
     /// zccache#1668: a parsed user `-MMD` depfile is authoritative; the

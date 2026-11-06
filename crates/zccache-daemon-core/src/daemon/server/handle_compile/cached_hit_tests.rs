@@ -378,31 +378,30 @@ async fn cached_hit_restores_user_depfile_alongside_object() {
     );
 }
 
-/// Legacy contract: a 1-output cached artifact (no depfile recorded
-/// at miss time, e.g. compiles without `-MD`/`-MF`) must keep working
-/// even when the current request happens to supply a
-/// `current_depfile_dest`. The fix must not regress the
-/// pre-#643-store-format hit path.
-#[tokio::test(flavor = "current_thread")]
-async fn cached_hit_object_only_artifact_ignores_depfile_dest() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = crate::daemon::server::tests::bind_isolated_server(dir.path());
-    let state = server.state.as_ref();
-    let cache_dir = state.artifact_dir.clone();
-
-    let source_path: NormalizedPath = dir.path().join("source.cc").into();
-    let output_path: NormalizedPath = dir.path().join("source.o").into();
-    let depfile_dest: NormalizedPath = dir.path().join("source.o.d").into();
-
-    let obj_payload = Arc::new(b"object only".to_vec());
-    let cache_path = cache_dir.join("legacy-key_0");
-    let _ = crate::platform::fs::permissions::make_writable(&cache_path);
-    std::fs::write(&cache_path, obj_payload.as_slice()).unwrap();
-    write_authoritative_blob_digest(&cache_path).unwrap();
-
+/// One hit against an artifact whose payloads are `(name, bytes)`, with the
+/// current request asking for a depfile at `<dir>/source.o.d`.
+fn hit_requesting_depfile(
+    dir: &Path,
+    state: &SharedState,
+    payloads: &[(&str, &[u8])],
+) -> (
+    Result<Response, CachedHitFailure>,
+    NormalizedPath,
+    NormalizedPath,
+) {
+    let source_path: NormalizedPath = dir.join("source.cc").into();
+    let output_path: NormalizedPath = dir.join("source.o").into();
+    let depfile_dest: NormalizedPath = dir.join("source.o.d").into();
+    let mut paths = Vec::new();
+    for (index, (_, bytes)) in payloads.iter().enumerate() {
+        let path = state.artifact_dir.join(format!("depfile-1992_{index}"));
+        std::fs::write(&path, bytes).unwrap();
+        write_authoritative_blob_digest(&path).unwrap();
+        paths.push(path);
+    }
     let sid = state.sessions.create(crate::depgraph::SessionConfig {
         client_pid: std::process::id(),
-        working_dir: dir.path().into(),
+        working_dir: dir.into(),
         log_file: None,
         track_stats: true,
         journal_path: None,
@@ -410,27 +409,31 @@ async fn cached_hit_object_only_artifact_ignores_depfile_dest() {
         private_env: Vec::new(),
         owner_pids: Vec::new(),
     });
-
     let meta = ArtifactIndex::new(
-        vec!["source.o".to_string()],
-        vec![obj_payload.len() as u64],
+        payloads
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect(),
+        payloads
+            .iter()
+            .map(|(_, bytes)| bytes.len() as u64)
+            .collect(),
         Arc::new(Vec::new()),
         Arc::new(Vec::new()),
         0,
     );
     state.artifacts.insert(
-        "legacy-key".to_string(),
-        CachedArtifact::from_file_payloads(meta, vec![cache_path]),
+        "depfile-1992".to_string(),
+        CachedArtifact::from_file_payloads(meta, paths),
     );
-
-    let response = materialize_cached_compile_hit(CachedHitMaterializeRequest {
+    let result = materialize_cached_compile_hit(CachedHitMaterializeRequest {
         state,
         sid: &sid,
-        artifact_key_hex: "legacy-key",
+        artifact_key_hex: "depfile-1992",
         verdict_key_hex: None,
         source_path: &source_path,
         output_path: &output_path,
-        secondary_output_dir: dir.path().into(),
+        secondary_output_dir: dir.into(),
         current_depfile_dest: Some(depfile_dest.clone()),
         current_rustc_out_dir: None,
         depfile_key_root: None,
@@ -445,21 +448,140 @@ async fn cached_hit_object_only_artifact_ignores_depfile_dest() {
         materialization_mode: MaterializationMode::Auto,
         pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
-    })
-    .expect("legacy single-output hit must still succeed");
-    assert!(matches!(
-        response,
-        Response::CompileResult {
-            cached: true,
-            exit_code: 0,
-            ..
-        }
-    ));
-    assert_eq!(std::fs::read(&output_path).unwrap(), obj_payload.as_slice());
-    assert!(
-        !depfile_dest.as_path().exists(),
-        "legacy single-output artifact must NOT manufacture a depfile",
+    });
+    (result, output_path, depfile_dest)
+}
+
+fn failure_name(result: Result<Response, CachedHitFailure>) -> &'static str {
+    match result {
+        Ok(_) => "served",
+        Err(failure) => failure.miss_bucket().1,
+    }
+}
+
+/// #1992: Ninja reads a missing depfile as "no dependencies" and never rebuilds
+/// the object after a header edit, so an entry without a depfile payload is a
+/// miss for a compile that asked for one. Nothing is written first.
+#[tokio::test(flavor = "current_thread")]
+async fn object_only_artifact_is_a_miss_when_the_request_wants_a_depfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::daemon::server::tests::bind_isolated_server(dir.path());
+    let (result, output, depfile) = hit_requesting_depfile(
+        dir.path(),
+        server.state.as_ref(),
+        &[("source.o", b"object only")],
     );
+    assert_eq!(failure_name(result), "depfile_invalid");
+    assert!(!output.as_path().exists(), "a refused hit writes no object");
+    assert!(!depfile.as_path().exists());
+}
+
+/// #1992: an import-provenance sidecar at index 1 is not a depfile.
+#[tokio::test(flavor = "current_thread")]
+async fn pch_with_only_a_provenance_sidecar_is_a_miss_when_the_request_wants_a_depfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let sidecar = format!("source.gch{}", super::super::pch_provenance::SIDECAR_SUFFIX);
+    let output: NormalizedPath = dir.path().join("source.gch").into();
+    assert!(!cached_depfile_payload_present(
+        &["source.gch".to_string(), sidecar],
+        &[4, 4],
+        &output
+    ));
+}
+
+/// #1992: entries already persisted with an empty or malformed depfile are
+/// never served, whichever way the bytes went bad.
+#[tokio::test(flavor = "current_thread")]
+async fn persisted_bad_depfile_payloads_are_a_miss() {
+    let cases: [&[u8]; 4] = [b"", b" \n\n", b"source.o:\n", &[0xff, 0xfe]];
+    for bad in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(dir.path());
+        let (result, _, _) = hit_requesting_depfile(
+            dir.path(),
+            server.state.as_ref(),
+            &[("source.o", b"object"), ("source.o.d", bad)],
+        );
+        assert_eq!(failure_name(result), "depfile_invalid", "payload {bad:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn valid_depfile_payload_is_served_to_the_requested_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::daemon::server::tests::bind_isolated_server(dir.path());
+    let (result, _, depfile) = hit_requesting_depfile(
+        dir.path(),
+        server.state.as_ref(),
+        &[
+            ("source.o", b"object"),
+            ("source.o.d", b"source.o: source.cc a.h\n"),
+        ],
+    );
+    assert_eq!(failure_name(result), "served");
+    assert_eq!(
+        std::fs::read(depfile.as_path()).unwrap(),
+        b"source.o: source.cc a.h\n"
+    );
+}
+
+/// A compile that did not ask for a depfile keeps using object-only entries.
+#[tokio::test(flavor = "current_thread")]
+async fn object_only_artifact_still_serves_a_request_without_a_depfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::daemon::server::tests::bind_isolated_server(dir.path());
+    let state = server.state.as_ref();
+    let path = state.artifact_dir.join("no-depfile_0");
+    std::fs::write(&path, b"object").unwrap();
+    write_authoritative_blob_digest(&path).unwrap();
+    let sid = state.sessions.create(crate::depgraph::SessionConfig {
+        client_pid: std::process::id(),
+        working_dir: dir.path().into(),
+        log_file: None,
+        track_stats: true,
+        journal_path: None,
+        profile: false,
+        private_env: Vec::new(),
+        owner_pids: Vec::new(),
+    });
+    let meta = ArtifactIndex::new(
+        vec!["source.o".to_string()],
+        vec![6],
+        Arc::new(Vec::new()),
+        Arc::new(Vec::new()),
+        0,
+    );
+    state.artifacts.insert(
+        "no-depfile".to_string(),
+        CachedArtifact::from_file_payloads(meta, vec![path]),
+    );
+    let source_path: NormalizedPath = dir.path().join("source.cc").into();
+    let output_path: NormalizedPath = dir.path().join("source.o").into();
+    materialize_cached_compile_hit(CachedHitMaterializeRequest {
+        state,
+        sid: &sid,
+        artifact_key_hex: "no-depfile",
+        verdict_key_hex: None,
+        source_path: &source_path,
+        output_path: &output_path,
+        secondary_output_dir: dir.path().into(),
+        current_depfile_dest: None,
+        current_rustc_out_dir: None,
+        depfile_key_root: None,
+        compile_start: Instant::now(),
+        hit_label: "HIT_TEST",
+        cached_error_label: "CACHED_ERROR_TEST",
+        record_compilation: true,
+        downgrade_output_metadata: false,
+        mtime_floor_paths: Vec::new(),
+        rustc_metadata_compat_outputs: None,
+        rustc_archive_hardlink_eligible: None,
+        materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
+        phases: CachedHitPhases::request_cache(0, 0),
+    })
+    .expect("no depfile was requested");
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"object");
 }
 
 /// Issue #460: warm-hit materialization should stay under budget — the

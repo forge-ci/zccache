@@ -8,7 +8,8 @@ use super::super::args::UserDepFlags;
 use super::canonicalize::{canonicalize_cache_len_for_test, canonicalize_path, strip_win_prefix};
 use super::error::DepfileError;
 use super::parse::{
-    find_separator_colon, join_continuations, parse_depfile, parse_depfile_path, split_and_unescape,
+    depfile_names_prerequisites, find_separator_colon, join_continuations, parse_depfile,
+    parse_depfile_path, split_and_unescape,
 };
 use super::strategy::{
     prepare_depfile, prepare_depfile_with_mmd, user_depfile_destination, DepfileStrategy,
@@ -730,4 +731,26 @@ fn depfile_path_tokens_names_every_rule_path() {
         ]
     );
     assert_eq!(super::depfile_path_tokens("a.o : b.h\n"), ["a.o", "b.h"]);
+}
+
+/// #1992: Ninja records `#deps 0` for a depfile without prerequisites.
+#[test]
+fn depfile_names_prerequisites_requires_a_rule_with_a_prerequisite() {
+    for good in [
+        &b"a.o: a.c\n"[..],
+        b"a.o: \\\n  a.c \\\n  a.h\n",
+        b"C:/out/a.o: C:/src/a.c\n",
+    ] {
+        assert!(depfile_names_prerequisites(good), "{good:?}");
+    }
+    for bad in [
+        &b""[..],
+        b" \n\n",
+        b"a.o:\n",
+        b"a.o: \\\n\n",
+        b"no separator\n",
+        &[0xff, 0xfe],
+    ] {
+        assert!(!depfile_names_prerequisites(bad), "{bad:?}");
+    }
 }

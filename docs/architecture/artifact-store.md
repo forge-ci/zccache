@@ -664,3 +664,13 @@ imported files so their provenance describes the bytes actually compiled.
  `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.
+
+### Requested depfiles are mandatory on C/C++ hits (#1992)
+
+Ninja reads a missing or empty `-MF` depfile as "no dependencies" and records
+`#deps 0`, so a C/C++ entry is only valid for a depfile-requesting compile if it
+can deliver a depfile naming at least one prerequisite. The store refuses to
+publish a compile whose depfile is unusable; the compile still succeeds,
+uncached. A hit checks the recorded payload before writing anything and the
+delivered bytes after, and any failure is a miss that invalidates the depgraph
+link, which also covers entries already persisted with bad depfiles.
