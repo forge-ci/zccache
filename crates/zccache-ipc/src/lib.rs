@@ -29,8 +29,9 @@ pub use manifest::{publish_manifest, publish_manifest_in, publish_service_defini
 pub use ownership::{
     backend_identity_path, backend_identity_path_for, daemon_identity_matches,
     daemon_identity_matches_for, force_kill_verified_daemon, force_kill_verified_daemon_for,
-    probe_backend_handle, read_backend_identity, read_backend_identity_for, verify_daemon_pid,
-    verify_daemon_pid_for, write_backend_identity, write_backend_identity_for,
+    probe_backend_handle, read_backend_identity, read_backend_identity_for,
+    remove_backend_identity_for, verify_daemon_pid, verify_daemon_pid_for, write_backend_identity,
+    write_backend_identity_for,
 };
 pub use transport::IpcClientConnection;
 pub use transport::{
@@ -764,17 +765,22 @@ pub fn check_running_daemon_for(endpoint: &str) -> Option<u32> {
     // intentionally retain that compatibility path. Only a confirmed-dead
     // PID may retire the endpoint or remove its lock; otherwise the caller
     // still gets a chance to probe/directly shut down the serving daemon.
+    // #2035: a record that positively contradicts the live process is the
+    // other proof: the PID belongs to someone else, typically after a new
+    // container reused it on a persistent cache dir.
     if is_process_alive(pid) {
-        Some(pid)
-    } else {
-        // Confirmed-dead lock file — clean up without disturbing a live but
-        // unverified legacy/direct daemon. #1904: this must retire `endpoint`,
-        // not the default endpoint.
-        remove_lock_file_for(endpoint);
-        let endpoint = crate::platform::ipc::Endpoint::from_native(endpoint.to_string());
-        let _ = endpoint.retire();
-        None
+        if !ownership::daemon_record_is_stale(endpoint, pid) {
+            return Some(pid);
+        }
+        remove_backend_identity_for(endpoint);
     }
+    // Confirmed-stale lock file — clean up without disturbing a live but
+    // unverified legacy/direct daemon. #1904: this must retire `endpoint`,
+    // not the default endpoint.
+    remove_lock_file_for(endpoint);
+    let endpoint = crate::platform::ipc::Endpoint::from_native(endpoint.to_string());
+    let _ = endpoint.retire();
+    None
 }
 
 /// Shared test-only environment-variable coordination for the `ipc` module

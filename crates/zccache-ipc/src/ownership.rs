@@ -77,7 +77,80 @@ pub fn write_backend_identity_for(
         // #1171: same directory family as the socket endpoint.
         zccache_core::config::create_dir_all_private(parent)?;
     }
+    // #2035: the namespace goes first. A reader catching the gap pairs the old
+    // identity with the new namespace, which only skips a staleness shortcut;
+    // the other order could retire the daemon that is starting right now.
+    let namespace_path = pid_namespace_path_for(endpoint);
+    match crate::platform::host::pid_namespace() {
+        Some(namespace) => std::fs::write(namespace_path.as_path(), namespace)?,
+        None => {
+            let _ = std::fs::remove_file(namespace_path.as_path());
+        }
+    }
     daemon.write_sidecar(path.as_path())
+}
+
+/// The PID namespace of the daemon recorded for `endpoint` (#2035). A sibling
+/// file, because the identity sidecar is a frozen format shared across
+/// zccache versions and owned by the facade.
+pub(crate) fn pid_namespace_path_for(endpoint: &str) -> NormalizedPath {
+    let identity = backend_identity_path_for(endpoint);
+    NormalizedPath::from(format!("{}.pid-namespace", identity.display()))
+}
+
+/// Remove `endpoint`'s identity record and its PID-namespace sibling.
+pub fn remove_backend_identity_for(endpoint: &str) {
+    let _ = std::fs::remove_file(backend_identity_path_for(endpoint).as_path());
+    let _ = std::fs::remove_file(pid_namespace_path_for(endpoint).as_path());
+}
+
+/// Was `endpoint`'s record written in a PID namespace other than this one?
+/// A PID from another namespace names nothing here, whatever now holds it.
+/// Unknown on either side (no namespaces, or no sibling file) is not a "yes".
+fn recorded_in_another_pid_namespace(endpoint: &str) -> bool {
+    let Some(current) = crate::platform::host::pid_namespace() else {
+        return false;
+    };
+    std::fs::read_to_string(pid_namespace_path_for(endpoint).as_path())
+        .is_ok_and(|recorded| !recorded.trim().is_empty() && recorded.trim() != current)
+}
+
+/// Does this failure prove the recorded daemon is not the process holding the
+/// PID (#2035)? Deliberately excludes a digest change and a deleted executable:
+/// a live daemon whose binary was replaced in place still serves its clients.
+/// An unreadable fact proves nothing either.
+pub(crate) fn verify_error_proves_foreign(
+    error: &kernal_api::daemon_identity::DaemonVerifyError,
+) -> bool {
+    use kernal_api::daemon_identity::DaemonVerifyError as E;
+    match error {
+        E::StaleProcess { .. } => true,
+        E::BootIdMismatch { actual, .. } => actual != "unavailable",
+        E::ExecutablePathMismatch {
+            expected, actual, ..
+        } => {
+            let deleted = format!("{} (deleted)", expected.display());
+            actual.as_os_str() != std::ffi::OsStr::new(&deleted)
+        }
+        _ => false,
+    }
+}
+
+/// Does `endpoint`'s own record prove that live `pid` is not its daemon (#2035)?
+///
+/// A missing record, or one naming another PID, is no verdict: legacy/direct
+/// daemons run without one, and a starting daemon writes its lock first.
+pub(crate) fn daemon_record_is_stale(endpoint: &str, pid: u32) -> bool {
+    let Some(identity) = read_backend_identity_for(endpoint) else {
+        return false;
+    };
+    if identity.pid() != pid {
+        return false;
+    }
+    recorded_in_another_pid_namespace(endpoint)
+        || identity
+            .verify_live()
+            .is_err_and(|error| verify_error_proves_foreign(&error))
 }
 
 /// Read the persisted daemon identity, if one is recorded and parseable.
@@ -182,7 +255,7 @@ pub fn verify_daemon_pid_for(endpoint: &str, pid: u32) -> bool {
     let Some(identity) = read_backend_identity_for(endpoint) else {
         return false;
     };
-    if identity.pid() != pid {
+    if identity.pid() != pid || recorded_in_another_pid_namespace(endpoint) {
         return false;
     }
     identity

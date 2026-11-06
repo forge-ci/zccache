@@ -187,7 +187,7 @@ pub(crate) fn clear_stale_daemon_state(endpoint: &str) {
     let lock = crate::ipc::lock_file_path_for(endpoint);
     let spawn_slot = PathBuf::from(format!("{}.spawn", lock.display()));
     let _ = std::fs::remove_file(spawn_slot);
-    let _ = std::fs::remove_file(crate::ipc::backend_identity_path_for(endpoint).as_path());
+    crate::ipc::remove_backend_identity_for(endpoint);
 }
 
 #[cfg(test)]
