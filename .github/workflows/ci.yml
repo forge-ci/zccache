@@ -580,6 +580,14 @@ jobs:
         shell: bash
         run: |
           soldr cargo test -p zccache --features test-support --test cache_native --no-run
+      # #1976: `cargo test --workspace --lib` builds zccache-cli-core without its
+      # `cli` feature, so the wrapper's named-pipe recovery tests run nowhere else
+      # on Windows. The step needs no vcvars, so it stays before that PATH change.
+      - name: Run the unreachable-daemon recovery tests on named pipes
+        shell: bash
+        run: |
+          soldr cargo test -p zccache-cli-core --features cli --lib -- \
+            cli::runtime::unreachable:: racing_clients_do_not_double
       - name: Set up MSVC environment (vcvars64)
         uses: ilammy/msvc-dev-cmd@v1
         with:
