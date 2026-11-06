@@ -4,6 +4,20 @@
 //! vocabulary are product policy. The transport objects remain the canonical
 //! protected kernal-api socket/pipe capabilities.
 
+// Keep host selection for Unix-only transport tests inside this boundary.
+#[cfg(all(test, unix))]
+macro_rules! unix_transport_tests {
+    ($($item:tt)*) => { $($item)* };
+}
+
+#[cfg(all(test, not(unix)))]
+macro_rules! unix_transport_tests {
+    ($($item:tt)*) => {};
+}
+
+#[cfg(test)]
+pub(crate) use unix_transport_tests;
+
 pub(crate) mod host {
     pub(crate) fn runtime_dir() -> Option<String> {
         (!kernal_api::platform::host::target_is_windows())

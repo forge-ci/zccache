@@ -568,5 +568,7 @@ pub fn unique_test_endpoint() -> String {
 mod tests;
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod bind_exclusion_tests;
+crate::platform::unix_transport_tests! {
+    #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    mod bind_exclusion_tests;
+}
