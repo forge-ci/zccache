@@ -48,6 +48,21 @@ def test_formatting_job_runs_only_the_lint_lane() -> None:
     assert {c.lane for c in local_gate.checks()} == set(local_gate.LANES)
 
 
+def test_lint_lane_builds_cli_core_with_only_download_client() -> None:
+    """#2107: workspace feature unification hides this combination's breakage."""
+    argvs = [c.argv for c in local_gate.checks() if c.lane == "lint"]
+    assert (
+        "soldr",
+        "cargo",
+        "check",
+        "-p",
+        "zccache-cli-core",
+        "--no-default-features",
+        "--features",
+        "download-client",
+    ) in argvs
+
+
 def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
     for workflow, job in (
         ("ci.yml", "fmt"),

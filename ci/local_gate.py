@@ -91,6 +91,23 @@ def checks() -> list[Check]:
             "lint",
             RUST_ENV,
         ),
+        # A workspace build unifies features, which hides a module gated on the
+        # wrong feature; only a build of this feature alone can catch it (#2107).
+        Check(
+            "zccache-cli-core builds with only download-client",
+            (
+                "soldr",
+                "cargo",
+                "check",
+                "-p",
+                "zccache-cli-core",
+                "--no-default-features",
+                "--features",
+                "download-client",
+            ),
+            "lint",
+            RUST_ENV,
+        ),
         Check(
             "Strict benchmark metric type check (pyright)",
             ("uvx", "--from", "pyright==1.1.411", "pyright"),
