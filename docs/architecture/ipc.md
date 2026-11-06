@@ -71,7 +71,10 @@ life, so the kernel releases it on any exit, including a crash.
   probed once, so a live daemon from a build without the lock is refused rather
   than unlinked. A refused connect means stale, and the file is reclaimed.
 
-The compile daemon's existing `AddrInUse` arm exits 0 and defers to the winner.
+A compile daemon that loses the bind, or the cache-root writer lock, retries for
+up to 8 s, because the loser may be the replacement for a daemon still exiting.
+It defers with exit 0 as soon as a daemon on its endpoint is reachable, and when
+the budget ends. A writer-lock loss still exits 1, now after that wait.
 The lock file is never deleted: a holder of a deleted file excludes nobody. Only
 bind and retire touch the lock or the probe, so the compile path gains no
 roundtrip. Windows named pipes are unchanged, since the OS already refuses a
