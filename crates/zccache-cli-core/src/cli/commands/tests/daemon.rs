@@ -226,6 +226,7 @@ pub(crate) struct IsolatedCacheRoot {
 impl IsolatedCacheRoot {
     const NAMESPACE: &str = "stop-endpoint-scope";
 
+    #[cfg(feature = "download-daemon")]
     pub(crate) fn path(&self) -> &std::path::Path {
         self._tmp.path()
     }
