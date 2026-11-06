@@ -22,6 +22,7 @@ crates/zccache-download-protocol/src/daemon_mgmt.rs
 crates/zccache-cli-core/src/cli/commands/tests/analyze.rs
 crates/zccache-cli-core/src/cli/runtime/mod.rs
 crates/zccache-cli-core/src/cli/snapshot_fp.rs
+crates/zccache-cli-core/src/cli/snapshot_fp/tests.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/tests/entry.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/tests/journal_file.rs
 crates/zccache-daemon-core/src/daemon/compile_journal/tests/miss_reason.rs
