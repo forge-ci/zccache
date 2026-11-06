@@ -198,12 +198,13 @@ pub(super) fn rehydrate_depfile_root(
 
 /// Rewrite a delivered depfile in place for the requesting compile: staged
 /// output names, then the logical worktree root. One read and at most one
-/// atomic replace, which never touches the shared blob.
+/// atomic replace, which never touches the shared blob. Returns the delivered
+/// bytes so the caller can validate them without another read.
 pub(super) fn rehydrate_delivered_depfile(
     path: &NormalizedPath,
     requested_outputs: &[NormalizedPath],
     key_root: Option<&NormalizedPath>,
-) -> std::io::Result<()> {
+) -> std::io::Result<Vec<u8>> {
     let bytes = std::fs::read(path.as_path())?;
     let staged = crate::daemon::server::rehydrate_logical_depfile_bytes(&bytes, requested_outputs);
     let rewritten = rehydrate_depfile_root(staged, key_root.map(NormalizedPath::as_path))
@@ -216,7 +217,7 @@ pub(super) fn rehydrate_delivered_depfile(
     if rewritten != bytes {
         crate::daemon::server::replace_depfile_bytes(path.as_path(), &rewritten)?;
     }
-    Ok(())
+    Ok(rewritten)
 }
 
 #[cfg(test)]

@@ -80,6 +80,24 @@ pub fn parse_depfile_path(
     parse_depfile(&content, source, cwd)
 }
 
+/// Whether `bytes` are a depfile a build tool can ingest: valid text holding a
+/// rule that names at least one prerequisite. A compiler always lists the
+/// source, so anything less is damage, and Ninja reads it as "no dependencies"
+/// without an error (#1992).
+#[must_use]
+pub fn depfile_names_prerequisites(bytes: &[u8]) -> bool {
+    let Ok(content) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let joined = join_continuations(content);
+    let Ok(colon) = find_separator_colon(&joined) else {
+        return false;
+    };
+    split_and_unescape(&joined[colon + 1..])
+        .iter()
+        .any(|token| !token.is_empty())
+}
+
 /// Every path a depfile names, unescaped and in file order: the targets and
 /// prerequisites of every rule, including `-MP` phony rules. Relative paths
 /// stay relative. The rule separator (a token's trailing `:`, or a lone `:`)

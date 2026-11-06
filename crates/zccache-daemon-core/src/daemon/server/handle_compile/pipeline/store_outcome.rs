@@ -341,6 +341,22 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
         mut user_depfile_capture,
         ..
     } = scan_collection;
+    // #1992: a hit could not restore a depfile this compile failed to produce,
+    // and a downstream build reads its absence as "no dependencies". The
+    // compile itself still succeeds, exactly as it would without zccache.
+    let user_depfile_unusable =
+        !is_rustc && requested_user_depfile_path.is_some() && user_depfile_capture.is_none();
+    if user_depfile_unusable {
+        tracing::warn!(
+            source = %source_path.display(),
+            "compiler produced no usable depfile; not caching this compile"
+        );
+        write_session_log(
+            &state.sessions,
+            sid,
+            &format!("[DIAG] depfile_store_refused: {}", source_path.display()),
+        );
+    }
     let user_depfile_persist_temp = if !is_rustc && staged_plan.is_some() {
         match preserve_staged_depfile_for_persistence(
             &mut user_depfile_capture,
@@ -650,7 +666,9 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
     // Clear/GC writer is queued between the two reads.
     // zccache#1550: an admitted `--test` harness is size-bounded here, after
     // its outputs are known and already materialized for the caller.
-    let store_stats = if !test_harness_admission::admit_store(compilation, rust_output_bytes) {
+    let store_stats = if user_depfile_unusable
+        || !test_harness_admission::admit_store(compilation, rust_output_bytes)
+    {
         MissArtifactStoreStats::default()
     } else if let Some(publication_guard) = begin_artifact_publication(state_arc).await {
         // #955: the miss persist (a large rustc `.rlib` copy when it can't be

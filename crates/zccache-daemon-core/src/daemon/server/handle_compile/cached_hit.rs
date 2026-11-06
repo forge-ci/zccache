@@ -42,9 +42,8 @@ pub(super) struct CachedHitMaterializeRequest<'a> {
     /// an implicit `<output>.d`) and the cached artifact carries the
     /// depfile as its second payload, write payloads[1] to this path
     /// alongside writing payloads[0] to `output_path`. `None` on hits
-    /// from compiles without depfile flags, and on artifacts cached before
-    /// this fix landed (legacy single-output entries are honoured even
-    /// when `Some(_)` is passed).
+    /// from compiles without depfile flags. For C/C++, `Some` makes a usable
+    /// depfile mandatory: an artifact that cannot supply one is a miss (#1992).
     pub(super) current_depfile_dest: Option<NormalizedPath>,
     /// Physical OUT_DIR of the current rustc request; used only to rebase
     /// dep-info after a cross-worktree hit, never to choose artifact bytes.
@@ -163,6 +162,9 @@ pub(super) enum CachedHitFailure {
     /// serving it would load a PCH clang treats as stale or that defeats
     /// `#pragma once`. The PCH is rebuilt.
     PchInputsStale,
+    /// The request wants a depfile and this entry has none, or an unusable
+    /// one. Ninja would record `#deps 0` and never rebuild the object (#1992).
+    DepfileInvalid,
 }
 
 impl CachedHitFailure {
@@ -177,6 +179,7 @@ impl CachedHitFailure {
                 "destination_write_failed",
             ),
             Self::PchInputsStale => (miss_reason::INPUT_FINGERPRINT_MISMATCH, "pch_inputs_stale"),
+            Self::DepfileInvalid => (miss_reason::NO_ARTIFACT_FOR_KEY, "depfile_invalid"),
         }
     }
 }
@@ -309,6 +312,23 @@ pub(super) fn materialize_cached_compile_hit(
             stderr,
             cached: true,
         });
+    }
+    // `Some` identifies a rustc request, whose dep-info has its own contract.
+    let requires_native_depfile =
+        rustc_archive_hardlink_eligible.is_none() && current_depfile_dest.is_some();
+    if requires_native_depfile
+        && !cached_depfile_payload_present(
+            &cached.meta.output_names,
+            &cached.meta.output_sizes,
+            output_path,
+        )
+    {
+        write_session_log(
+            &state.sessions,
+            sid,
+            &format!("[DIAG] cached_depfile_missing: key={artifact_key_hex}"),
+        );
+        return Err(CachedHitFailure::DepfileInvalid);
     }
     let payloads = ensure_payloads_for_materialization_for_state(state, &cached, artifact_key_hex)
         .map_err(|error| {
@@ -534,9 +554,9 @@ pub(super) fn materialize_cached_compile_hit(
     let rehydrate_stderr = contains_staged_output_marker(stderr.as_slice());
     if !depfile_targets.is_empty() || rehydrate_stdout || rehydrate_stderr {
         for target in depfile_targets {
-            if let Err(error) =
-                rehydrate_delivered_depfile(target, &targets, depfile_key_root.as_ref())
-            {
+            let delivered =
+                rehydrate_delivered_depfile(target, &targets, depfile_key_root.as_ref());
+            if let Err(error) = &delivered {
                 write_session_log(
                     &state.sessions,
                     sid,
@@ -549,6 +569,20 @@ pub(super) fn materialize_cached_compile_hit(
                 // output paths; treat it like any destination write failure
                 // (soft miss — the shared artifact stays valid).
                 return Err(CachedHitFailure::DestinationWrite);
+            }
+            // The recorded size cannot vouch for the blob's bytes, so judge
+            // what was delivered. The miss's compile overwrites this file.
+            if requires_native_depfile
+                && !delivered.is_ok_and(|bytes| {
+                    crate::depgraph::depfile::depfile_names_prerequisites(&bytes)
+                })
+            {
+                write_session_log(
+                    &state.sessions,
+                    sid,
+                    &format!("[DIAG] cached_depfile_unusable: key={artifact_key_hex}"),
+                );
+                return Err(CachedHitFailure::DepfileInvalid);
             }
             if let Some(current_out_dir) = current_rustc_out_dir.as_ref() {
                 if let Err(error) = rehydrate_rustc_out_dir_depfile(
@@ -651,6 +685,19 @@ pub(super) fn materialize_cached_compile_hit(
         stderr,
         cached: true,
     })
+}
+
+/// Whether a C/C++ artifact carries a non-empty depfile payload.
+fn cached_depfile_payload_present(
+    names: &[String],
+    sizes: &[u64],
+    output: &NormalizedPath,
+) -> bool {
+    let is_sidecar = |name: &String| {
+        super::pch_gate::is_pch_output(output)
+            && name.ends_with(super::pch_provenance::SIDECAR_SUFFIX)
+    };
+    names.get(1).is_some_and(|name| !is_sidecar(name)) && sizes.get(1).is_some_and(|size| *size > 0)
 }
 
 pub(super) fn rustc_compat_payload_index_for(
