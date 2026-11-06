@@ -310,34 +310,44 @@ fn persistently_unreadable_directory_is_not_treated_as_vanished() {
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
-/// The production classifier against a real ACL: `ERROR_ACCESS_DENIED` that
-/// never clears must surface after the ladder, not read as a vanished entry.
+/// The production classifier against a real delete-pending file. Closing a
+/// `FILE_FLAG_DELETE_ON_CLOSE` handle while another handle stays open leaves
+/// the name in place and denies every open of it: that must surface after the
+/// ladder, not read as vanished. Once the last handle closes it is really gone.
 #[cfg(windows)]
 #[test]
-fn persistently_denied_directory_is_not_treated_as_vanished() {
-    struct DenyGuard<'a>(&'a Path);
-    impl Drop for DenyGuard<'_> {
-        fn drop(&mut self) {
-            let _ = icacls(self.0, &["/remove:d", "*S-1-1-0"]);
-        }
-    }
-    fn icacls(path: &Path, args: &[&str]) -> std::process::ExitStatus {
-        std::process::Command::new("icacls")
-            .arg(path)
-            .args(args)
-            .stdout(std::process::Stdio::null())
-            .status()
-            .unwrap()
-    }
+fn delete_pending_entry_is_vanished_only_once_really_gone() {
+    use crate::daemon::server::persist::listed_entry;
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    const SHARE_ALL: u32 = 0x7;
 
     let root = tempfile::tempdir().unwrap();
-    let tree = root.path().join("tree");
-    std::fs::create_dir(&tree).unwrap();
-    assert!(icacls(&tree, &["/deny", "*S-1-1-0:(RD)"]).success());
-    let _guard = DenyGuard(&tree);
+    let path = root.path().join("deleting");
+    std::fs::write(&path, b"x").unwrap();
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_ALL)
+        .open(&path)
+        .unwrap();
+    drop(
+        std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(SHARE_ALL)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+            .open(&path)
+            .unwrap(),
+    );
 
-    let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
-    let error = add_tree(&tree, &mut artifact, &mut HashSet::new()).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    assert!(error.to_string().contains("tree"), "{error}");
+    let error = listed_entry(&path, |entry| std::fs::symlink_metadata(entry)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("deleting"), "{error}");
+
+    drop(holder);
+    assert!(
+        listed_entry(&path, |entry| std::fs::symlink_metadata(entry))
+            .unwrap()
+            .is_none()
+    );
 }
