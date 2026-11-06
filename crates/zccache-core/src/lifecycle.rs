@@ -43,6 +43,7 @@
 //! | `client-disconnected` (#755) | client | IPC connection broke mid-request | `endpoint`, `client_pid`, `client_version`, `client_binary_path`, `cause`, `detail` |
 //! | `wrapper-local-fallback` | CLI wrapper | retired by #1170; kept so historical logs still resolve and the audit rule can assert it never reappears | `reason`, tool fields |
 //! | `daemon_spawn_breaker_open` (#1170) | CLI wrapper | daemon recovery was exhausted; later invocations fail immediately until the cool-down expires | `reason`, `cooldown_ms`, `consecutive_failures` |
+//! | `daemon_unreachable_recovery` (#1976) | CLI wrapper | a live PID's endpoint stayed gone; the spawn-slot holder stopped the proven instance or left an unproven PID running | `endpoint`, `pid`, `process_alive`, `instance`, `waited_ns` |
 //! | `wrapper-daemon-unavailable` (#1170) | CLI wrapper | the daemon could not be reached before request dispatch and the wrapper refused to run the tool uncached | `tool`, `cwd`, `endpoint`, `reason`, `phase`, `route`, `exit_code` |
 //! | `wrapper-no-verdict` | CLI wrapper | the daemon lost a dispatched request with no tool left running: it closed the connection, or the wrapper confirmed a wedged daemon dead; the wrapper exits 1 | `endpoint`, `cause`, `exit_code` |
 //! | `version_mismatch` | daemon | client / daemon protocol versions disagree | `daemon_protocol_version`, `client_protocol_version`, `reason` |
@@ -239,6 +240,9 @@ pub const EVENT_WRAPPER_NO_VERDICT: &str = "wrapper-no-verdict";
 /// seconds rather than paying the ladder 1000 times, and an event per TU
 /// would reintroduce the cost it removes in the log.
 pub const EVENT_DAEMON_SPAWN_BREAKER_OPEN: &str = "daemon_spawn_breaker_open";
+/// The lock file named a live PID whose endpoint stayed gone through the bounded
+/// wait, and the client holding the spawn slot decided what to do about it (#1976).
+pub const EVENT_DAEMON_UNREACHABLE_RECOVERY: &str = "daemon_unreachable_recovery";
 /// Phase 0 log-audit event names. These are emitted by the owning cache paths;
 /// the audit catalog consumes the stable spellings rather than source regexes.
 pub const EVENT_LEGACY_ARTIFACT_PATH_ACCESSED: &str = "legacy_artifact_path_accessed";
@@ -337,6 +341,7 @@ pub const EVENT_ALL: &[&str] = &[
     EVENT_WRAPPER_DAEMON_UNAVAILABLE,
     EVENT_WRAPPER_NO_VERDICT,
     EVENT_DAEMON_SPAWN_BREAKER_OPEN,
+    EVENT_DAEMON_UNREACHABLE_RECOVERY,
     EVENT_STAGED_PUBLICATION_CONFLICT,
     EVENT_STAGED_PUBLICATION_REPLACES_INVALID_GENERATION,
     EVENT_STAGED_PUBLICATION_FAILED,
