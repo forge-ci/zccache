@@ -9,6 +9,10 @@ use super::*;
 #[path = "disk_maintenance_retired_stores.rs"]
 mod retired_stores;
 
+// Entries vanishing between listing and stat during a scan.
+#[path = "disk_maintenance_scan_races.rs"]
+mod scan_races;
+
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn artifact(key: &str, bytes: u64, now: SystemTime, age: Duration) -> DiskArtifact {

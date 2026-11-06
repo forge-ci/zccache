@@ -413,6 +413,11 @@ longer present rather than an eviction estimate. The embedded
 `ZccacheService::maintain_disk` method lets a host request an immediate pressure
 or full pass against that same root; it does not broaden ownership.
 
+Scans walk the live store while publishers rename and remove temporaries, so an
+entry that vanishes between listing and stat is skipped. Only `NotFound` on an
+individual entry is tolerated: a missing root and every other I/O error fail the
+pass.
+
 ## Corruption Detection
 
 On artifact lookup:

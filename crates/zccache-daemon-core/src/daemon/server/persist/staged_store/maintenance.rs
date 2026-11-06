@@ -20,8 +20,27 @@ pub(crate) struct StagedDiskArtifact {
     pub(crate) generation: Option<String>,
 }
 
-fn staged_tree_stats(path: &Path) -> io::Result<(u64, SystemTime)> {
-    let metadata = fs::symlink_metadata(path)?;
+/// Classifies one operation on a single listed scan entry: `NotFound` means a
+/// concurrent publisher renamed or removed that entry after it was listed, so
+/// it yields `None`. Every other error still fails the scan. Apply this only
+/// to individual entries, never to the root being scanned.
+pub(in crate::daemon::server) fn entry_if_present<T>(
+    result: io::Result<T>,
+) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Returns `None` when `path` vanished during the walk.
+fn staged_tree_stats(path: &Path) -> io::Result<Option<(u64, SystemTime)>> {
+    #[cfg(test)]
+    super::hook::pause(path, super::StagedHookPoint::ScanEntryListed);
+    let Some(metadata) = entry_if_present(fs::symlink_metadata(path))? else {
+        return Ok(None);
+    };
     if is_staged_link_or_reparse(path) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -34,13 +53,20 @@ fn staged_tree_stats(path: &Path) -> io::Result<(u64, SystemTime)> {
     let mut size = metadata.len();
     let mut mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     if metadata.is_dir() {
-        for entry in fs::read_dir(path)?.flatten() {
-            let (child_size, child_mtime) = staged_tree_stats(&entry.path())?;
-            size = size.saturating_add(child_size);
-            mtime = mtime.max(child_mtime);
+        let Some(entries) = entry_if_present(fs::read_dir(path))? else {
+            return Ok(None);
+        };
+        for entry in entries {
+            let Some(entry) = entry_if_present(entry)? else {
+                continue;
+            };
+            if let Some((child_size, child_mtime)) = staged_tree_stats(&entry.path())? {
+                size = size.saturating_add(child_size);
+                mtime = mtime.max(child_mtime);
+            }
         }
     }
-    Ok((size, mtime))
+    Ok(Some((size, mtime)))
 }
 
 pub(crate) fn scan_staged_disk_artifacts(
@@ -61,9 +87,16 @@ fn scan_staged_disk_artifacts_locked(
     root: &Path,
 ) -> io::Result<Vec<StagedDiskArtifact>> {
     let mut artifacts = Vec::new();
-    for entry in fs::read_dir(root)?.flatten() {
+    for entry in fs::read_dir(root)? {
+        let Some(entry) = entry_if_present(entry)? else {
+            continue;
+        };
         let key_root = entry.path();
-        let key_metadata = fs::symlink_metadata(&key_root)?;
+        #[cfg(test)]
+        super::hook::pause(&key_root, super::StagedHookPoint::ScanEntryListed);
+        let Some(key_metadata) = entry_if_present(fs::symlink_metadata(&key_root))? else {
+            continue;
+        };
         if is_staged_link_or_reparse(&key_root) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -80,7 +113,9 @@ fn scan_staged_disk_artifacts_locked(
         if !staged_key_supported(&key) {
             continue;
         }
-        let (mut _total_size, mut mtime) = staged_tree_stats(&key_root)?;
+        let Some((mut _total_size, mut mtime)) = staged_tree_stats(&key_root)? else {
+            continue;
+        };
         let pointer = pointer_path(artifact_dir, &key);
         let generation = if let Ok(metadata) = fs::symlink_metadata(&pointer) {
             if is_staged_link_or_reparse(&pointer) {

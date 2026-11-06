@@ -15,6 +15,9 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaterializePublish,
     MaintenanceStoreLockPending,
     MaterializationStoreLockPending,
+    /// A disk scan has listed this entry and has not yet stat'ed it: another
+    /// writer may legitimately rename or remove it inside this window.
+    ScanEntryListed,
 }
 
 struct ActiveHook {

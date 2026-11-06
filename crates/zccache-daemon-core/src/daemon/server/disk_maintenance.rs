@@ -453,9 +453,23 @@ fn add_file(
     artifact: &mut DiskArtifact,
     seen: &mut HashSet<crate::platform::fs::FileIdentity>,
 ) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
+    match entry_if_present(std::fs::symlink_metadata(path))? {
+        Some(metadata) => {
+            add_file_metadata(path, &metadata, artifact, seen);
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+fn add_file_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    artifact: &mut DiskArtifact,
+    seen: &mut HashSet<crate::platform::fs::FileIdentity>,
+) {
     if !metadata.file_type().is_file() {
-        return Ok(());
+        return;
     }
     artifact.last_access = artifact
         .last_access
@@ -464,7 +478,7 @@ fn add_file(
         .ok()
         .is_none_or(|id| seen.insert(id))
     {
-        let allocated = crate::platform::fs::volume::allocated_bytes(path, &metadata);
+        let allocated = crate::platform::fs::volume::allocated_bytes(path, metadata);
         artifact.allocated_bytes = artifact.allocated_bytes.saturating_add(allocated);
         // Unknown link count is treated as shared: never over-promise space.
         // A reflink clone in a build tree leaves the cache file at nlink == 1
@@ -473,7 +487,6 @@ fn add_file(
             artifact.reclaimable_bytes = artifact.reclaimable_bytes.saturating_add(allocated);
         }
     }
-    Ok(())
 }
 
 fn validate_owned_artifact_root(artifact_dir: &Path) -> io::Result<()> {
@@ -513,9 +526,19 @@ fn add_tree(
     if !root.is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(root)?.flatten() {
+    let Some(entries) = entry_if_present(std::fs::read_dir(root))? else {
+        return Ok(());
+    };
+    for entry in entries {
+        let Some(entry) = entry_if_present(entry)? else {
+            continue;
+        };
         let path = entry.path();
-        let metadata = std::fs::symlink_metadata(&path)?;
+        #[cfg(test)]
+        staged_hook_pause(&path, StagedHookPoint::ScanEntryListed);
+        let Some(metadata) = entry_if_present(std::fs::symlink_metadata(&path))? else {
+            continue;
+        };
         if crate::platform::fs::links::classify(&path)
             .is_ok_and(|kind| kind != crate::platform::fs::links::LinkKind::Regular)
         {
@@ -552,13 +575,23 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
     if !artifact_dir.is_dir() {
         return Ok(Vec::new());
     }
-    for entry in std::fs::read_dir(artifact_dir)?.flatten() {
+    for entry in std::fs::read_dir(artifact_dir)? {
+        let Some(entry) = entry_if_present(entry)? else {
+            continue;
+        };
         let path = entry.path();
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+        #[cfg(test)]
+        staged_hook_pause(&path, StagedHookPoint::ScanEntryListed);
+        if !entry_if_present(entry.file_type())?.is_some_and(|kind| kind.is_file()) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some((key, output_index)) = legacy_key(&name) else {
+            continue;
+        };
+        // Stat before creating the group: a group for a vanished file would
+        // carry a UNIX_EPOCH last_access and be planned for age expiry.
+        let Some(metadata) = entry_if_present(std::fs::symlink_metadata(&path))? else {
             continue;
         };
         if let Some(output_index) = output_index {
@@ -582,7 +615,7 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
                 staged: false,
                 staged_generation: None,
             });
-        add_file(&path, artifact, &mut seen)?;
+        add_file_metadata(&path, &metadata, artifact, &mut seen);
         artifact.legacy_files.push(path.into());
     }
 
@@ -607,8 +640,7 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
             &staged_root.join(format!("{key}.current")),
             artifact,
             &mut seen,
-        )
-        .ok();
+        )?;
     }
     Ok(groups.into_values().collect())
 }
