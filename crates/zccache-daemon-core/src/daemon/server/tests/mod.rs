@@ -26,6 +26,7 @@ mod depgraph_save_failure;
 mod disk_maintenance;
 mod embedded_bringup;
 mod embedded_flush;
+mod env_lock_bound;
 mod env_precision_1806;
 mod exec_probe;
 mod fingerprint;
@@ -98,14 +99,50 @@ pub(crate) struct CacheDirEnvGuard {
 
 static CACHE_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Budget for one wait on [`CACHE_DIR_ENV_LOCK`] (#2098).
+///
+/// A waiter can only be queued behind the tests of its own binary. The whole
+/// daemon-core lib binary, about 1,150 tests, takes 145 s on Linux CI and 201 s
+/// on Windows CI, so 20 minutes is six times the worst case of waiting for the
+/// entire binary. It also outlasts one holder running two fixture compiles to
+/// their 5 minute limit, so such a compile reports itself first, and it is
+/// under the 45 minute Test job limit, so this message appears before CI kills
+/// the job. A false timeout is worse than a slow failure.
+const CACHE_DIR_ENV_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// Acquires `lock` within `bound`, panicking with the wait's name on expiry.
+///
+/// `blocking_sync::Mutex::lock_for` does not fit: expiry aborts the process,
+/// losing every sibling result in a shared `cargo test` binary, and its holder
+/// watchdog aborts on holds that span a whole test. Poison is recovered, since
+/// the guarded value is `()` and one failed test must not fail its neighbours.
+fn lock_env_within(
+    lock: &std::sync::Mutex<()>,
+    bound: std::time::Duration,
+) -> std::sync::MutexGuard<'_, ()> {
+    let started = std::time::Instant::now();
+    loop {
+        match lock.try_lock() {
+            Ok(guard) => return guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => return error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        let remaining = bound.saturating_sub(started.elapsed());
+        assert!(
+            !remaining.is_zero(),
+            "timed out after {bound:?} waiting for the test env lock \
+             (CacheDirEnvGuard); another test is holding it, likely wedged"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1).min(remaining));
+    }
+}
+
 impl CacheDirEnvGuard {
     /// Serializes tests that read or mutate daemon process environment without
     /// changing any variables itself. Tests with explicit cache roots use
     /// this when they must remain immune to concurrent staged-policy changes.
     pub(crate) fn lock() -> std::sync::MutexGuard<'static, ()> {
-        CACHE_DIR_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        lock_env_within(&CACHE_DIR_ENV_LOCK, CACHE_DIR_ENV_LOCK_WAIT)
     }
 
     pub(crate) fn set(path: &Path) -> Self {

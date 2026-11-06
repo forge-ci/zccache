@@ -26,3 +26,10 @@ def test_timing_sensitive_tests_run_alone_under_nextest() -> None:
     ):
         assert pattern.search(name), name
     assert not pattern.search("daemon_rustc_restore_test::first_compile_waits_for_background_depgraph_load")
+
+
+def test_wedged_test_backstop_outlasts_the_slowest_legitimate_test() -> None:
+    """#2098: the slowest test is a 120 s timer bounded at 125 s."""
+    config = tomllib.loads((ROOT / ".config" / "nextest.toml").read_text(encoding="utf-8"))
+    timeout = config["profile"]["default"]["slow-timeout"]
+    assert int(timeout["period"].removesuffix("s")) * timeout["terminate-after"] >= 5 * 120
