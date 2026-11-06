@@ -49,6 +49,13 @@ const REGISTERED_NAMES: &[&str] = &[
     "ZCCACHE_NO_SPAWN",
     "ZCCACHE_PROBE_BYPASS",
     "ZCCACHE_CACHE_TEST_BINS",
+    "ZCCACHE_QUIET",
+    "ZCCACHE_DISABLE_MTIME_FLOOR",
+    "ZCCACHE_COLOCATE",
+    "ZCCACHE_PACK_ARTIFACTS",
+    "ZCCACHE_DIAG_CWD",
+    "ZCCACHE_SUMMARY_VERBOSE",
+    "ZCCACHE_DISABLE_LINK_RETRY",
 ];
 const POLICY_OWNER: &str = "crates/zccache-core/src/config/env_policy.rs";
 const RAW_ENV_FUNCTIONS: &[&[&str]] = &[&["std", "env", "var"], &["std", "env", "var_os"]];

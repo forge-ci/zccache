@@ -10,8 +10,8 @@ here based on tool family and environment.
   (Windows-sealed hardlinked) outputs a rustc invocation will write with
   private writable copies so rustc's read-only refusal cannot fail the build
   (#1791).
-- **`diag.rs`** — opt-in CWD/argv diagnostic. When `ZCCACHE_DIAG_CWD` is set
-  to any non-empty, non-`0` value, each wrapper invocation emits one
+- **`diag.rs`** — opt-in CWD/argv diagnostic. When `ZCCACHE_DIAG_CWD` is `1`
+  or `true`, each wrapper invocation emits one
   tab-separated `ZCCACHE_DIAG_CWD` line to stderr before any CWD mutation,
   carrying `pid`, `cwd`, `tmp`, `argv0`, and the raw `args`. Used to
   diagnose cases (issue #683) where the request reaching the daemon carries

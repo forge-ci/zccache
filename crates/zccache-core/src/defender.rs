@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 /// Suppression env var for the daemon's first-run "not excluded" banner.
 ///
-/// Any non-empty value other than `"0"` silences the banner. CI / scripted
+/// `1` or case-insensitive `true` silences the banner. CI / scripted
 /// callers can set this once and forget. The user-visible `defender-exclusions
 /// check` subcommand is unaffected — it always prints.
 pub const QUIET_ENV: &str = "ZCCACHE_QUIET";
@@ -66,10 +66,10 @@ pub fn is_elevated() -> bool {
     crate::host::is_elevated()
 }
 
-/// True when `ZCCACHE_QUIET` is set to a non-empty value other than `"0"`.
+/// True when `ZCCACHE_QUIET` is `1` or case-insensitive `true`.
 #[must_use]
 pub fn is_quiet_env() -> bool {
-    quiet_value_silences(std::env::var(QUIET_ENV).ok().as_deref())
+    crate::config::quiet_enabled()
 }
 
 /// Predicate version of [`is_quiet_env`] that operates on a borrowed
@@ -77,7 +77,7 @@ pub fn is_quiet_env() -> bool {
 /// exercise the rule without `unsafe` env mutation.
 #[must_use]
 pub fn quiet_value_silences(value: Option<&str>) -> bool {
-    value.is_some_and(|v| !v.is_empty() && v != "0")
+    crate::config::owned_flag_enabled(value)
 }
 
 /// Emit a single stderr line if the daemon's cache root is not on the
@@ -315,6 +315,18 @@ mod tests {
         assert!(!quiet_value_silences(Some("0")));
         assert!(quiet_value_silences(Some("1")));
         assert!(quiet_value_silences(Some("true")));
+    }
+
+    #[test]
+    fn only_the_owned_grammar_silences_the_banner() {
+        for value in ["1", "true", "TRUE", " true ", " 1 "] {
+            assert!(quiet_value_silences(Some(value)), "{value:?}");
+        }
+        for value in [
+            "  ", "false", "FALSE", "off", "no", "yes", "on", "maybe", "2",
+        ] {
+            assert!(!quiet_value_silences(Some(value)), "{value:?}");
+        }
     }
 
     #[test]

@@ -23,9 +23,7 @@ use super::*;
 pub(in crate::daemon::server) const PACK_MAGIC: &[u8; 4] = b"ZCPK";
 
 pub(in crate::daemon::server) fn pack_mode_enabled() -> bool {
-    std::env::var("ZCCACHE_PACK_ARTIFACTS")
-        .ok()
-        .is_some_and(|v| !v.is_empty() && v != "0")
+    crate::core::config::pack_artifacts_enabled()
 }
 
 pub(in crate::daemon::server) fn pack_path_for(artifact_dir: &Path, key_hex: &str) -> PathBuf {
