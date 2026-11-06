@@ -1,8 +1,11 @@
 """#1445: fixed-overhead cold floors must not depend on the runner's speed."""
 
+import json
+from pathlib import Path
+
 import pytest
 
-from ci import benchmark_stats, perf_floor, perf_guard
+from ci import benchmark_stats, perf_floor, perf_guard, perf_precision
 
 C_REF = perf_floor.REFERENCE_BARE_SECONDS[("c-inline", "Single-file, Cold", "bare")]
 RUST_REF = perf_floor.REFERENCE_BARE_SECONDS[("rust", "Check, Cold", "bare")]
@@ -243,8 +246,6 @@ def test_cpp_batched_warm_budget_is_independent_of_compiler_speed(
 
 
 def test_cpp_batched_warm_uses_nanosecond_record_at_budget_boundary() -> None:
-    import json
-
     row = {
         "benchmark": "cpp-inline",
         "mode": "warm",
@@ -259,11 +260,32 @@ def test_cpp_batched_warm_uses_nanosecond_record_at_budget_boundary() -> None:
         bare_duration_ns=5_000_000_000,
         sccache_duration_ns=5_000_000_000,
     )
-    from ci import perf_precision
-
     (precise,) = perf_precision.apply_metric_precision(
         [row], "ZCCACHE_BENCH_METRIC_V1 " + json.dumps(record)
     )
     budget = perf_floor.warm_hit_budget_seconds("cpp-inline", "Multi-file, Warm")
     assert budget is not None
     assert precise["zccache_seconds"] > budget
+
+
+def test_cpp_batched_warm_budget_matches_retained_attempts() -> None:
+    history_path = (
+        Path(__file__).resolve().parents[2] / "ci/perf_threshold_history.json"
+    )
+    history = json.loads(history_path.read_text("utf-8"))
+    (record,) = [
+        entry
+        for entry in history
+        if entry.get("kind") == "warm-floor-provenance"
+        and entry.get("benchmark") == "cpp-inline"
+    ]
+    samples = record["samples"]
+    assert len(samples) == record["n_attempts"] == 17
+    assert len({sample["run_id"] for sample in samples}) == record["n_runs"] == 11
+    # Integer arithmetic: max * 1.2, rounded UP to the next 100,000 ns.
+    largest_ns = max(sample["zccache_duration_ns"] for sample in samples)
+    budget_ns = ((largest_ns * 12 + 999_999) // 1_000_000) * 100_000
+    assert budget_ns == record["budget_ns"]
+    assert budget_ns / 1e9 == perf_floor.warm_hit_budget_seconds(
+        "cpp-inline", "Multi-file, Warm"
+    )
