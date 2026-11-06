@@ -222,9 +222,6 @@ exit /b 0
 
 #[tokio::test]
 async fn link_cache_hit_restores_sibling_side_effects() {
-    if staged_link_lane_enabled() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let fake_linker = write_fake_linker(tmp.path());
     let input = tmp.path().join("main.o");
@@ -234,6 +231,10 @@ async fn link_cache_hit_restores_sibling_side_effects() {
     std::fs::write(&input, b"fake object").unwrap();
 
     let _cache_dir = CacheDirEnvGuard::set(&tmp.path().join("zccache-cache"));
+    // Read the lane under the env lock so a sibling's guard cannot change it.
+    if staged_link_lane_enabled() {
+        return;
+    }
     let server = DaemonServer::bind(&crate::ipc::unique_test_endpoint()).unwrap();
     let args = vec![
         "-o".to_string(),
@@ -304,9 +305,6 @@ async fn link_cache_hit_restores_sibling_side_effects() {
 /// created sidecar as part of its own cached artifact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_same_directory_links_are_isolated() {
-    if staged_link_lane_enabled() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let fake_linker = write_overlap_detecting_linker(tmp.path());
     let input_a = tmp.path().join("a.o");
@@ -319,6 +317,10 @@ async fn parallel_same_directory_links_are_isolated() {
     std::fs::write(&input_b, b"input-b").unwrap();
 
     let _cache_dir = CacheDirEnvGuard::set(&tmp.path().join("zccache-cache"));
+    // Read the lane under the env lock so a sibling's guard cannot change it.
+    if staged_link_lane_enabled() {
+        return;
+    }
     let server = DaemonServer::bind(&crate::ipc::unique_test_endpoint()).unwrap();
     let args_a = vec![
         "-o".to_string(),
@@ -544,9 +546,6 @@ async fn link_cache_key_preserves_input_order_under_parallel_hashing() {
 
 #[tokio::test]
 async fn directory_bundle_cache_hit_restores_complete_tree() {
-    if !staged_link_lane_enabled() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let fake_dsymutil = write_fake_dsymutil(tmp.path());
     let input = tmp.path().join("app");
@@ -554,6 +553,10 @@ async fn directory_bundle_cache_hit_restores_complete_tree() {
     std::fs::write(&input, b"fake executable with debug information").unwrap();
 
     let _cache_dir = CacheDirEnvGuard::set(&tmp.path().join("zccache-cache"));
+    // Read the lane under the env lock so a sibling's guard cannot change it.
+    if !staged_link_lane_enabled() {
+        return;
+    }
     let server = DaemonServer::bind(&crate::ipc::unique_test_endpoint()).unwrap();
     let args = vec![
         input.to_string_lossy().into_owned(),

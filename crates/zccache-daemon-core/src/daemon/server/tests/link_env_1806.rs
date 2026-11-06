@@ -67,15 +67,16 @@ async fn link(
 
 #[tokio::test]
 async fn linker_env_splits_the_link_key_and_unrelated_env_does_not() {
-    if staged_link_lane_enabled() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let tool = write_env_echo_linker(tmp.path());
     let input = tmp.path().join("main.o");
     let output = tmp.path().join("app.exe");
     std::fs::write(&input, b"fake object").unwrap();
     let _cache_dir = CacheDirEnvGuard::set(&tmp.path().join("zccache-cache"));
+    // Read the lane under the env lock so a sibling's guard cannot change it.
+    if staged_link_lane_enabled() {
+        return;
+    }
     let server = DaemonServer::bind(&crate::ipc::unique_test_endpoint()).unwrap();
     let args = vec![
         "-o".to_string(),
