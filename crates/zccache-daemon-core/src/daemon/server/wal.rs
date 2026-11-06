@@ -271,6 +271,9 @@ pub(super) async fn run_index_writer(
 
     loop {
         let winner = {
+            // The recv future is raced against the ticker and shutdown signal
+            // below, so the wait is bounded by the race, not by a duration.
+            #[allow(deprecated)]
             let message = rx.recv();
             let tick = ticker.tick();
             let shutdown_wait = shutdown.notified();

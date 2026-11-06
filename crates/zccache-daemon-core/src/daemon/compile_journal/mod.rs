@@ -17,7 +17,6 @@
 //! - `tests/` — all `#[cfg(test)]` tests, grouped per subject
 
 use std::cell::Cell;
-use std::fs;
 use std::future::Future;
 use std::path::Path;
 use std::sync::mpsc;
@@ -27,7 +26,8 @@ use zccache_core::blocking_sync::Mutex;
 use crate::core::NormalizedPath;
 use serde::{Deserialize, Serialize};
 
-use log_io::{format_timestamp, open_append};
+use crate::platform::fs::durability::open_shared_append;
+use log_io::format_timestamp;
 
 mod derive;
 mod env;
@@ -539,9 +539,9 @@ impl CompileJournal {
     }
 
     fn try_new(log_dir: NormalizedPath) -> std::io::Result<Self> {
-        fs::create_dir_all(&log_dir)?;
+        zccache_core::config::create_dir_all_private(&log_dir)?;
         let path = log_dir.join("compile_journal.jsonl");
-        let file = open_append(&path)?;
+        let file: Box<dyn std::io::Write + Send> = Box::new(open_shared_append(&path)?);
 
         let (tx, rx) = mpsc::channel();
 

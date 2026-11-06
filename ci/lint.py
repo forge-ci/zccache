@@ -299,6 +299,7 @@ def lint_workspace():
     if not skip_dylint:
         for dylint_manifest in (
             "dylints/ban_std_pathbuf/Cargo.toml",
+            "dylints/ban_std_fs_outside_adapters/Cargo.toml",
             "dylints/ban_unrooted_tempdir/Cargo.toml",
             "dylints/ban_tmp_literal/Cargo.toml",
             "dylints/ban_raw_subprocess_in_daemon/Cargo.toml",

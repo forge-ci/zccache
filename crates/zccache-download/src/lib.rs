@@ -514,8 +514,8 @@ pub fn canonical_destination(path: &Path) -> Result<NormalizedPath, std::io::Err
         )
     })?;
     let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let canonical_parent = std::fs::canonicalize(parent)?;
+    kernal_api::platform::fs::create_dir_all(parent)?;
+    let canonical_parent = kernal_api::platform::fs::canonical_context_path(parent)?;
     Ok(NormalizedPath::new(canonical_parent.join(filename)))
 }
 

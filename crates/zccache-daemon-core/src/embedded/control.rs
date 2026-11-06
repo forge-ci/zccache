@@ -171,6 +171,9 @@ impl ZccacheService {
         let Some(semaphore) = &self.compile_permits else {
             return Ok(ExternalWorkPermit { _permit: None });
         };
+        // The acquire future is raced against the cancellation tokens below,
+        // so the wait is bounded by the race, not by a duration.
+        #[allow(deprecated)]
         let permit = semaphore.acquire();
         let permit = match &self.host_cancellation {
             Some(token) => {

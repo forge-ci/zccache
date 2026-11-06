@@ -453,7 +453,7 @@ fn add_file(
     artifact: &mut DiskArtifact,
     seen: &mut HashSet<crate::platform::fs::FileIdentity>,
 ) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
+    let metadata = kernal_api::platform::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() {
         return Ok(());
     }
@@ -477,7 +477,7 @@ fn add_file(
 }
 
 fn validate_owned_artifact_root(artifact_dir: &Path) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(artifact_dir)?;
+    let metadata = kernal_api::platform::fs::symlink_metadata(artifact_dir)?;
     if crate::platform::fs::links::classify(artifact_dir)
         .is_ok_and(|kind| kind != crate::platform::fs::links::LinkKind::Regular)
     {
@@ -513,9 +513,8 @@ fn add_tree(
     if !root.is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(root)?.flatten() {
-        let path = entry.path();
-        let metadata = std::fs::symlink_metadata(&path)?;
+    for path in kernal_api::platform::fs::read_dir_paths(root)? {
+        let metadata = kernal_api::platform::fs::symlink_metadata(&path)?;
         if crate::platform::fs::links::classify(&path)
             .is_ok_and(|kind| kind != crate::platform::fs::links::LinkKind::Regular)
         {
@@ -552,12 +551,15 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
     if !artifact_dir.is_dir() {
         return Ok(Vec::new());
     }
-    for entry in std::fs::read_dir(artifact_dir)?.flatten() {
-        let path = entry.path();
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+    for path in kernal_api::platform::fs::read_dir_paths(artifact_dir)? {
+        if !kernal_api::platform::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file())
+        {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let Some((key, output_index)) = legacy_key(&name) else {
             continue;
         };
@@ -914,7 +916,7 @@ fn full_marker_path(cache_dir: &Path) -> NormalizedPath {
 }
 
 fn full_maintenance_due(cache_dir: &Path, now: SystemTime) -> bool {
-    let Ok(contents) = std::fs::read_to_string(full_marker_path(cache_dir)) else {
+    let Ok(contents) = kernal_api::platform::fs::read_to_string(full_marker_path(cache_dir)) else {
         return true;
     };
     let Ok(last_secs) = contents.trim().parse::<u64>() else {
@@ -928,19 +930,19 @@ fn full_maintenance_due(cache_dir: &Path, now: SystemTime) -> bool {
 }
 
 fn record_full_maintenance(cache_dir: &Path, now: SystemTime) -> io::Result<()> {
-    std::fs::create_dir_all(cache_dir)?;
+    kernal_api::platform::fs::create_dir_all(cache_dir)?;
     let marker = full_marker_path(cache_dir);
     let temp = cache_dir.join(format!("{FULL_MARKER}.{}.tmp", std::process::id()));
     let now_secs = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    std::fs::write(&temp, format!("{now_secs}\n"))?;
-    match std::fs::rename(&temp, &marker) {
+    kernal_api::platform::fs::write_file(&temp, format!("{now_secs}\n"))?;
+    match kernal_api::platform::fs::rename(&temp, &marker) {
         Ok(()) => Ok(()),
         Err(error) if marker.exists() => {
-            std::fs::remove_file(&marker)?;
-            std::fs::rename(&temp, &marker).map_err(|_| error)
+            kernal_api::platform::fs::remove_file(&marker)?;
+            kernal_api::platform::fs::rename(&temp, &marker).map_err(|_| error)
         }
         Err(error) => Err(error),
     }

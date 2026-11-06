@@ -5,7 +5,7 @@
 
 use super::metadata::{Confidence, FileMetadata, MetadataCache};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use zccache_core::{NormalizedPath, Result};
 use zccache_hash::ContentHash;
 
@@ -21,10 +21,10 @@ pub enum VerifyResult {
 }
 
 impl MetadataCache {
-    fn metadata_from_fs(fs_meta: std::fs::Metadata) -> Result<FileMetadata> {
+    fn metadata_from_parts(mtime: SystemTime, size: u64) -> Result<FileMetadata> {
         Ok(FileMetadata {
-            mtime: fs_meta.modified()?,
-            size: fs_meta.len(),
+            mtime,
+            size,
             confidence: Confidence::High,
             last_verified: Instant::now(),
             content_hash: None,
@@ -39,7 +39,8 @@ impl MetadataCache {
     ///
     /// Returns an error if the file cannot be stat'd (not found, permission denied, etc.).
     pub fn stat_file(path: &Path) -> Result<FileMetadata> {
-        Self::metadata_from_fs(std::fs::metadata(path)?)
+        let metadata = kernal_api::platform::fs::path_metadata(path)?;
+        Self::metadata_from_parts(metadata.modified()?, metadata.len())
     }
 
     /// Verify whether the cached entry for `path` still matches the filesystem.
@@ -185,8 +186,9 @@ impl MetadataCache {
 }
 
 fn hash_file_snapshot(path: &Path) -> Result<(FileMetadata, ContentHash, FileMetadata)> {
-    let file = std::fs::File::open(path)?;
-    let pre = MetadataCache::metadata_from_fs(file.metadata()?)?;
+    let file = kernal_api::platform::fs::open_read_regular_file(path)?;
+    let metadata = file.metadata()?;
+    let pre = MetadataCache::metadata_from_parts(metadata.modified()?, metadata.len())?;
     let hash = zccache_hash::hash_open_file(&file, pre.size)?;
     let post = MetadataCache::stat_file(path)?;
     Ok((pre, hash, post))
@@ -196,7 +198,6 @@ fn hash_file_snapshot(path: &Path) -> Result<(FileMetadata, ContentHash, FileMet
 mod tests {
     use super::Confidence;
     use super::*;
-    use std::fs;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -205,7 +206,7 @@ mod tests {
     /// Helper: create a file with given content, return its path.
     fn create_file(dir: &TempDir, name: &str, content: &str) -> NormalizedPath {
         let path = dir.path().join(name);
-        fs::write(&path, content).expect("failed to create test file");
+        kernal_api::platform::fs::write_file(&path, content).expect("failed to create test file");
         path.into()
     }
 
@@ -283,7 +284,7 @@ mod tests {
 
         // Touch: rewrite same content after a delay so mtime changes
         sleep_for_mtime();
-        fs::write(&path, "void f() {}").unwrap();
+        kernal_api::platform::fs::write_file(&path, "void f() {}").unwrap();
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Stale);
@@ -303,7 +304,7 @@ mod tests {
         cache.insert(path.clone(), meta);
 
         sleep_for_mtime();
-        fs::write(&path, "int x = 42; // changed").unwrap();
+        kernal_api::platform::fs::write_file(&path, "int x = 42; // changed").unwrap();
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Stale);
@@ -319,7 +320,7 @@ mod tests {
         cache.insert(path.clone(), meta);
 
         // Write different-length content immediately (mtime might not change on coarse FS)
-        fs::write(&path, "much longer content than before").unwrap();
+        kernal_api::platform::fs::write_file(&path, "much longer content than before").unwrap();
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Stale);
@@ -338,7 +339,7 @@ mod tests {
         let meta = MetadataCache::stat_file(&path).unwrap();
         cache.insert(path.clone(), meta);
 
-        fs::remove_file(&path).unwrap();
+        kernal_api::platform::fs::remove_file(&path).unwrap();
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Gone);
@@ -358,9 +359,9 @@ mod tests {
         cache.insert(path.clone(), meta);
 
         // Replace: delete and recreate — mtime will differ
-        fs::remove_file(&path).unwrap();
+        kernal_api::platform::fs::remove_file(&path).unwrap();
         sleep_for_mtime();
-        fs::write(&path, "original").unwrap(); // same content!
+        kernal_api::platform::fs::write_file(&path, "original").unwrap(); // same content!
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Stale);
@@ -429,7 +430,7 @@ mod tests {
         let hash_v1 = cache.lookup(&path).unwrap();
 
         sleep_for_mtime();
-        fs::write(&path, "v2 with more content").unwrap();
+        kernal_api::platform::fs::write_file(&path, "v2 with more content").unwrap();
 
         let hash_v2 = cache.lookup(&path).unwrap();
         assert_ne!(hash_v1, hash_v2);
@@ -450,7 +451,7 @@ mod tests {
         let cache = MetadataCache::new();
         let _hash = cache.lookup(&path).unwrap();
 
-        fs::remove_file(&path).unwrap();
+        kernal_api::platform::fs::remove_file(&path).unwrap();
 
         let result = cache.lookup(&path);
         assert!(result.is_err());
@@ -492,7 +493,7 @@ mod tests {
         cache.downgrade(&path);
 
         sleep_for_mtime();
-        fs::write(&path, "after").unwrap();
+        kernal_api::platform::fs::write_file(&path, "after").unwrap();
 
         let hash_after = cache.lookup(&path).unwrap();
         assert_ne!(hash_before, hash_after);
@@ -513,7 +514,7 @@ mod tests {
         let hash_b = cache.lookup(&path_b).unwrap();
 
         sleep_for_mtime();
-        fs::write(&path_b, "file b modified").unwrap();
+        kernal_api::platform::fs::write_file(&path_b, "file b modified").unwrap();
 
         let hash_a2 = cache.lookup(&path_a).unwrap();
         assert_eq!(hash_a, hash_a2);
@@ -538,7 +539,7 @@ mod tests {
         assert!(entry.content_hash.is_some());
 
         sleep_for_mtime();
-        fs::write(&path, "changed content").unwrap();
+        kernal_api::platform::fs::write_file(&path, "changed content").unwrap();
 
         let new_hash = cache.lookup(&path).unwrap();
         let expected = zccache_hash::hash_bytes(b"changed content");
@@ -560,20 +561,20 @@ mod tests {
         assert!(cache.lookup(&path).is_err());
 
         // 2. Create the file
-        fs::write(&path, "version 1").unwrap();
+        kernal_api::platform::fs::write_file(&path, "version 1").unwrap();
         let hash_v1 = cache.lookup(&path).unwrap();
         assert_eq!(hash_v1, zccache_hash::hash_bytes(b"version 1"));
 
         // 3. First edit
         sleep_for_mtime();
-        fs::write(&path, "version 2").unwrap();
+        kernal_api::platform::fs::write_file(&path, "version 2").unwrap();
         let hash_v2 = cache.lookup(&path).unwrap();
         assert_ne!(hash_v1, hash_v2);
         assert_eq!(hash_v2, zccache_hash::hash_bytes(b"version 2"));
 
         // 4. Second edit
         sleep_for_mtime();
-        fs::write(&path, "version 3 with extra stuff").unwrap();
+        kernal_api::platform::fs::write_file(&path, "version 3 with extra stuff").unwrap();
         let hash_v3 = cache.lookup(&path).unwrap();
         assert_ne!(hash_v2, hash_v3);
         assert_eq!(
@@ -582,7 +583,7 @@ mod tests {
         );
 
         // 5. Remove
-        fs::remove_file(&path).unwrap();
+        kernal_api::platform::fs::remove_file(&path).unwrap();
         assert!(cache.lookup(&path).is_err());
 
         // 6. Cache entry should be gone (or at least lookup returns error)
@@ -604,7 +605,7 @@ mod tests {
 
         sleep_for_mtime();
         use std::io::Write;
-        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = kernal_api::platform::fs::open_shared_append(&path).unwrap();
         f.write_all(b"line 2\n").unwrap();
         drop(f);
 
@@ -626,7 +627,7 @@ mod tests {
         cache.insert(path.clone(), meta);
 
         sleep_for_mtime();
-        fs::write(&path, "").unwrap();
+        kernal_api::platform::fs::write_file(&path, "").unwrap();
 
         let result = cache.verify(&path).unwrap();
         assert_eq!(result, VerifyResult::Stale);
@@ -689,7 +690,7 @@ mod tests {
         cache.downgrade_all();
 
         sleep_for_mtime();
-        fs::write(&path, "v2 longer content").unwrap();
+        kernal_api::platform::fs::write_file(&path, "v2 longer content").unwrap();
 
         let promoted = cache.rescan_all();
         assert_eq!(promoted, 0);
@@ -718,7 +719,7 @@ mod tests {
         cache.lookup(&path).unwrap();
         cache.downgrade_all();
 
-        fs::remove_file(&path).unwrap();
+        kernal_api::platform::fs::remove_file(&path).unwrap();
 
         let promoted = cache.rescan_all();
         assert_eq!(promoted, 0);
@@ -740,8 +741,8 @@ mod tests {
         cache.downgrade_all();
 
         sleep_for_mtime();
-        fs::write(&path_changed, "new content").unwrap();
-        fs::remove_file(&path_gone).unwrap();
+        kernal_api::platform::fs::write_file(&path_changed, "new content").unwrap();
+        kernal_api::platform::fs::remove_file(&path_gone).unwrap();
 
         let promoted = cache.rescan_all();
         assert_eq!(promoted, 1); // only path_unchanged
@@ -821,7 +822,8 @@ mod tests {
         sleep_for_mtime();
         for (i, path) in paths.iter().enumerate() {
             if i % 3 == 0 {
-                fs::write(path, format!("modified content {i}")).unwrap();
+                kernal_api::platform::fs::write_file(path, format!("modified content {i}"))
+                    .unwrap();
             }
         }
 

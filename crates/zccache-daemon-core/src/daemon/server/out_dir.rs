@@ -228,10 +228,12 @@ fn outputs_omit_text(outputs: &[RustcOutputFile], text: &str) -> bool {
                 .extension()
                 .is_none_or(|ext| ext != "d")
         })
-        .all(|output| match std::fs::read(output.path.as_path()) {
-            Ok(bytes) => finders.iter().all(|finder| finder.find(&bytes).is_none()),
-            Err(_) => false,
-        })
+        .all(
+            |output| match kernal_api::platform::fs::read_file(output.path.as_path()) {
+                Ok(bytes) => finders.iter().all(|finder| finder.find(&bytes).is_none()),
+                Err(_) => false,
+            },
+        )
 }
 
 /// Physical path to replay in dep-info after a hit whose `OUT_DIR` identity
@@ -312,7 +314,7 @@ fn path_only_certificate_matches(
     match &certificate.sources {
         SourceAttestation::Listed(files) => {
             for &(relative, digest) in *files {
-                let Ok(bytes) = std::fs::read(manifest.join(relative)) else {
+                let Ok(bytes) = kernal_api::platform::fs::read_file(manifest.join(relative)) else {
                     return false;
                 };
                 if format!("{:x}", Sha256::digest(bytes)) != digest {
@@ -372,7 +374,7 @@ fn path_only_certificate_matches(
     {
         return false;
     }
-    let Ok(generated_bytes) = std::fs::read(&generated) else {
+    let Ok(generated_bytes) = kernal_api::platform::fs::read_file(&generated) else {
         return false;
     };
     // Exact generated output attestation closes lexical bypasses such as
@@ -409,15 +411,17 @@ fn rust_source_tree_sha256(manifest: &Path) -> Option<String> {
     let mut directories = vec![manifest.to_path_buf()];
     let mut files = Vec::new();
     while let Some(directory) = directories.pop() {
-        for entry in std::fs::read_dir(directory).ok()? {
-            let entry = entry.ok()?;
-            let kind = entry.file_type().ok()?;
+        for path in kernal_api::platform::fs::read_dir_paths(directory).ok()? {
+            let kind = kernal_api::platform::fs::symlink_metadata(&path)
+                .ok()?
+                .file_type();
             if kind.is_symlink() {
                 return None;
             }
-            let path = entry.path();
             if kind.is_dir() {
-                if entry.file_name() != "target" && entry.file_name() != ".git" {
+                if path.file_name() != Some(std::ffi::OsStr::new("target"))
+                    && path.file_name() != Some(std::ffi::OsStr::new(".git"))
+                {
                     directories.push(path);
                 }
             } else if path.extension().is_some_and(|extension| extension == "rs") {
@@ -431,7 +435,7 @@ fn rust_source_tree_sha256(manifest: &Path) -> Option<String> {
     for (relative, path) in files {
         hasher.update(relative.as_bytes());
         hasher.update([0]);
-        hasher.update(std::fs::read(path).ok()?);
+        hasher.update(kernal_api::platform::fs::read_file(path).ok()?);
         hasher.update([0]);
     }
     Some(format!("{:x}", hasher.finalize()))
@@ -444,8 +448,9 @@ mod tests {
     use zccache_hash::hash_bytes;
 
     fn write(path: &Path, bytes: &str) {
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
-        std::fs::write(path, bytes).expect("fixture file");
+        kernal_api::platform::fs::create_dir_all(path.parent().expect("parent"))
+            .expect("directory");
+        kernal_api::platform::fs::write_file(path, bytes).expect("fixture file");
     }
 
     fn context(source: &Path) -> CompileContext {
@@ -635,7 +640,11 @@ mod tests {
             environments.push(env);
         }
 
-        let hash_file = |path: &Path| Some(hash_bytes(&std::fs::read(path).expect("input")));
+        let hash_file = |path: &Path| {
+            Some(hash_bytes(
+                &kernal_api::platform::fs::read_file(path).expect("input"),
+            ))
+        };
         let a = graph.register_rustc_with_key_and_root_result(
             key,
             context(&source_paths[0]),

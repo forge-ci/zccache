@@ -113,10 +113,8 @@ impl DaemonServer {
                 let result = kernal_api::async_engine::launch_blocking(move || {
                     let migrated = migrate_legacy_blob_digests(&migration_root)?;
                     use std::io::Write;
-                    let mut marker_file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&marker)?;
+                    let mut marker_file =
+                        kernal_api::platform::fs::create_private_file(&marker)?;
                     marker_file.write_all(b"v1\n")?;
                     marker_file.sync_all()?;
                     Ok::<usize, std::io::Error>(migrated)
@@ -142,7 +140,7 @@ impl DaemonServer {
         {
             let legacy_logs = cache_dir.join("logs.bak");
             if legacy_logs.is_dir() {
-                match std::fs::remove_dir_all(&legacy_logs) {
+                match kernal_api::platform::fs::remove_dir_all(&legacy_logs) {
                     Ok(()) => tracing::info!("removed legacy logs.bak directory"),
                     Err(e) => tracing::warn!(
                         path = %legacy_logs.display(),
@@ -152,7 +150,7 @@ impl DaemonServer {
             }
             // Also remove stale daemon.lock.bak if present.
             let legacy_lock = cache_dir.join("daemon.lock.bak");
-            let _ = std::fs::remove_file(&legacy_lock);
+            let _ = kernal_api::platform::fs::remove_file(&legacy_lock);
         }
 
         // Legacy temp-root state removal is a standalone-only member of
@@ -289,7 +287,7 @@ impl DaemonServer {
                         let save_state = Arc::clone(&self.state);
                         let depgraph_save = run_depgraph_save_with(save_state, None, move |dg| {
                             if let Some(parent) = path.parent() {
-                                std::fs::create_dir_all(parent).ok();
+                                kernal_api::platform::fs::create_dir_all(parent).ok();
                             }
                             let (cold_ctxs, warm_ctxs, stale_ctxs) = dg.state_breakdown();
                             let ctxs_with_key = dg.contexts_with_artifact_key();
@@ -495,7 +493,7 @@ impl DaemonServer {
                     }
 
                     // Clean up our own depfile temp directory.
-                    let _ = std::fs::remove_dir_all(&self.state.depfile_tmpdir);
+                    let _ = kernal_api::platform::fs::remove_dir_all(&self.state.depfile_tmpdir);
 
                     // #1162: everything durable is now on disk, so this daemon
                     // has stopped writing and the next one may claim the root.
@@ -646,6 +644,9 @@ pub(super) fn start_watcher_tasks(
                 // task neither sends nor drops its sender the consumer parks
                 // forever and ignores shutdown — a shutdown-cleanliness gap.
                 let winner = {
+                    // The recv future is raced against the shutdown signal
+                    // below, so the wait is bounded by the race, not a duration.
+                    #[allow(deprecated)]
                     let event = settled_rx.recv();
                     let shutdown = state.shutdown.notified();
                     let mut event = std::pin::pin!(event);

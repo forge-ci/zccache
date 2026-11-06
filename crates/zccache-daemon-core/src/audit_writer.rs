@@ -164,24 +164,29 @@ impl AuditSink {
             .as_deref()
             .ok_or(AuditSinkError::MissingOutputRoot)?;
         let output_root = PathBuf::from(output_root);
-        std::fs::create_dir_all(&output_root)?;
+        kernal_api::platform::fs::create_dir_all(&output_root)?;
         let path = output_root.join(config.event_log.as_deref().unwrap_or("audit.jsonl"));
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = kernal_api::platform::fs::open_shared_append(&path)?;
         // Start from the on-disk length so a restart onto an existing file
-        // resumes counting rather than granting it a fresh budget.
-        let mut current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        // resumes counting rather than granting it a fresh budget. The handle
+        // is boxed as a write sink so the rotation path swaps handles without
+        // naming a host file type at this seam.
+        let mut current_size = kernal_api::platform::fs::path_metadata(&path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         let rotate_path = path.clone();
-        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        let mut writer: BufWriter<Box<dyn Write + Send>> =
+            BufWriter::with_capacity(64 * 1024, Box::new(file));
 
         let (sender, mut receiver) = async_engine::channel::<Command>(WRITER_QUEUE_CAPACITY);
         let lost_events = Arc::new(AtomicU64::new(0));
         let degraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let writer_task = async move {
+            // Bounded by the channel closing when the sink drops its sender;
+            // the writer task has no separate shutdown signal to observe.
+            #[allow(deprecated)]
             while let Some(cmd) = receiver.recv().await {
                 match cmd {
                     Command::Event(event) => {
@@ -296,7 +301,7 @@ impl AuditSink {
     pub async fn flush(&self) -> Result<(), AuditSinkError> {
         let (tx, rx) = async_engine::oneshot_channel();
         self.sender
-            .send(Command::Flush(tx))
+            .send_within(Command::Flush(tx), std::time::Duration::from_secs(5))
             .await
             .map_err(|_| AuditSinkError::Closed)?;
         let _ = rx.await;
@@ -310,7 +315,11 @@ impl AuditSink {
         // If the writer is already closed, the send will fail — that's
         // also acceptable because the contract guarantees only that
         // pending events are drained on a best-effort basis.
-        match self.sender.send(Command::Shutdown(tx)).await {
+        match self
+            .sender
+            .send_within(Command::Shutdown(tx), std::time::Duration::from_secs(5))
+            .await
+        {
             Ok(()) => {
                 let _ = rx.await;
             }
@@ -343,22 +352,18 @@ impl AuditSink {
 /// Returns `None` if the rename or reopen fails, in which case the caller
 /// keeps writing to the existing handle: an audit log that is too large beats
 /// one that silently stops recording.
-fn rotate_audit_log(path: &Path) -> Option<std::fs::File> {
+fn rotate_audit_log(path: &Path) -> Option<Box<dyn Write + Send>> {
     let file_name = path.file_name()?.to_string_lossy().into_owned();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let rotated = path.with_file_name(format!("{file_name}.{nanos:020}"));
-    std::fs::rename(path, &rotated).ok()?;
+    kernal_api::platform::fs::rename(path, &rotated).ok()?;
 
-    let fresh = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()?;
+    let fresh = kernal_api::platform::fs::open_shared_append(path).ok()?;
     gc_audit_logs(path, &file_name);
-    Some(fresh)
+    Some(Box::new(fresh))
 }
 
 /// Keep only the newest [`AUDIT_MAX_FILES`] archives beside `path`.
@@ -371,13 +376,12 @@ fn gc_audit_logs(path: &Path, file_name: &str) {
         return;
     };
     let prefix = format!("{file_name}.");
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = kernal_api::platform::fs::read_dir_paths(dir) else {
         return;
     };
 
     let mut archives: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
+        .into_iter()
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
@@ -391,7 +395,7 @@ fn gc_audit_logs(path: &Path, file_name: &str) {
     archives.sort();
     let excess = archives.len() - AUDIT_MAX_FILES;
     for stale in archives.into_iter().take(excess) {
-        let _ = std::fs::remove_file(stale);
+        let _ = kernal_api::platform::fs::remove_file(stale);
     }
 }
 
@@ -421,15 +425,19 @@ mod tests {
     /// Seed `count` archives whose embedded timestamps ascend, oldest first.
     fn seed_archives(dir: &Path, live: &str, count: u64) {
         for n in 1..=count {
-            std::fs::write(dir.join(format!("{live}.{n:020}")), "x").unwrap();
+            kernal_api::platform::fs::write_file(dir.join(format!("{live}.{n:020}")), "x").unwrap();
         }
     }
 
     fn names_in(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
+        let entries = kernal_api::platform::fs::read_dir_paths(dir).unwrap();
+        let mut names: Vec<String> = entries
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
             .collect();
         names.sort();
         names
@@ -441,14 +449,14 @@ mod tests {
     fn rotating_moves_the_live_log_aside_and_reopens_it() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("audit.jsonl");
-        std::fs::write(&path, "original\n").unwrap();
+        kernal_api::platform::fs::write_file(&path, "original\n").unwrap();
 
         let fresh = rotate_audit_log(&path).expect("rotation must succeed");
         drop(fresh);
 
         assert!(path.exists(), "a fresh live log must be reopened in place");
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            kernal_api::platform::fs::read_to_string(&path).unwrap(),
             "",
             "the reopened log starts empty"
         );
@@ -462,7 +470,7 @@ mod tests {
             "the old contents must survive as an archive"
         );
         assert_eq!(
-            std::fs::read_to_string(temp.path().join(&archives[0])).unwrap(),
+            kernal_api::platform::fs::read_to_string(temp.path().join(&archives[0])).unwrap(),
             "original\n"
         );
     }
@@ -471,7 +479,7 @@ mod tests {
     fn gc_keeps_the_newest_archives_and_drops_the_oldest() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("audit.jsonl");
-        std::fs::write(&path, "live").unwrap();
+        kernal_api::platform::fs::write_file(&path, "live").unwrap();
         seed_archives(temp.path(), "audit.jsonl", AUDIT_MAX_FILES as u64 + 2);
 
         gc_audit_logs(&path, "audit.jsonl");
@@ -500,10 +508,14 @@ mod tests {
     fn gc_follows_a_renamed_event_log() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("custom.jsonl");
-        std::fs::write(&path, "live").unwrap();
+        kernal_api::platform::fs::write_file(&path, "live").unwrap();
         seed_archives(temp.path(), "custom.jsonl", AUDIT_MAX_FILES as u64 + 1);
         // An unrelated neighbour that must not be touched.
-        std::fs::write(temp.path().join("audit.jsonl.00000000000000000001"), "x").unwrap();
+        kernal_api::platform::fs::write_file(
+            temp.path().join("audit.jsonl.00000000000000000001"),
+            "x",
+        )
+        .unwrap();
 
         gc_audit_logs(&path, "custom.jsonl");
 
@@ -555,7 +567,7 @@ mod tests {
         sink.shutdown().await.expect("shutdown ok");
 
         let path = output_root.join("audit.jsonl");
-        let contents = std::fs::read_to_string(&path).expect("file readable");
+        let contents = kernal_api::platform::fs::read_to_string(&path).expect("file readable");
         let lines: Vec<_> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "two events should produce two JSONL rows");
         for line in lines {

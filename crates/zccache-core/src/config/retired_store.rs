@@ -40,7 +40,6 @@
 //! platform zccache ships (see its own doc comments for the per-platform
 //! mechanics).
 
-use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -65,11 +64,7 @@ pub const LAST_ACTIVE_MARKER_FILE: &str = ".last-active";
 /// # Errors
 /// Returns any I/O error from opening the marker or setting its mtime.
 pub fn touch_store_activity_marker(store: &Path) -> io::Result<()> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(store.join(LAST_ACTIVE_MARKER_FILE))?;
+    let file = kernal_api::platform::fs::create_file(store.join(LAST_ACTIVE_MARKER_FILE))?;
     file.set_modified(SystemTime::now())
 }
 
@@ -266,7 +261,7 @@ pub fn sweep_retired_version_store_with_mode(
             return report;
         }
     }
-    match std::fs::metadata(store) {
+    match kernal_api::platform::fs::path_metadata(store) {
         Ok(metadata) if metadata.is_dir() => {}
         _ => {
             report.failed += 1;
@@ -287,8 +282,9 @@ pub fn sweep_retired_version_store_with_mode(
     };
 
     if mode == RetiredSweepMode::Routine {
-        let marker_recent = std::fs::metadata(store.join(LAST_ACTIVE_MARKER_FILE))
-            .is_ok_and(|metadata| !is_older_than(&metadata, now, max_age));
+        let marker_recent =
+            kernal_api::platform::fs::path_metadata(store.join(LAST_ACTIVE_MARKER_FILE))
+                .is_ok_and(|metadata| !is_older_than(metadata.modified().ok(), now, max_age));
         if marker_recent {
             report.stores_recently_active += 1;
             return report;
@@ -297,11 +293,11 @@ pub fn sweep_retired_version_store_with_mode(
 
     sweep_directory_contents(store, store, now, max_age, mode, &mut report);
 
-    let only_markers_remain = std::fs::read_dir(store)
+    let only_markers_remain = kernal_api::platform::fs::read_dir_paths(store)
         .map(|entries| {
             entries
-                .flatten()
-                .all(|entry| is_root_marker(&entry.file_name()))
+                .iter()
+                .all(|entry| entry.file_name().is_some_and(is_root_marker))
         })
         .unwrap_or(false);
 
@@ -311,7 +307,7 @@ pub fn sweep_retired_version_store_with_mode(
     drop(lock_guard);
 
     if only_markers_remain {
-        match std::fs::remove_dir_all(store) {
+        match kernal_api::platform::fs::remove_dir_all(store) {
             Ok(()) => report.stores_removed += 1,
             // Best-effort, mirroring `prune_stale_version_dirs_in`: a
             // removal that fails here (most often a lingering Windows
@@ -339,23 +335,26 @@ pub fn sweep_retired_version_stores_in_with_mode(
     mode: RetiredSweepMode,
 ) -> RetiredStoreSweepReport {
     let mut report = RetiredStoreSweepReport::default();
-    let entries = match std::fs::read_dir(top_level) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(top_level) {
         Ok(entries) => entries,
         Err(_) => return report,
     };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    for entry in entries {
+        let is_dir = kernal_api::platform::fs::symlink_metadata(&entry)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = entry
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if !super::resolve::is_version_dir_name(&name) || !is_older_version_dir(&name, keep) {
             continue;
         }
         report.merge(&sweep_retired_version_store_with_mode(
-            &entry.path(),
-            max_age,
-            now,
-            mode,
+            &entry, max_age, now, mode,
         ));
     }
     report
@@ -378,11 +377,7 @@ fn acquire_store_lock(
     store: &Path,
 ) -> Result<Option<kernal_api::platform::fs::OwnedFileLock>, LockAcquireOutcome> {
     let lock_path = store.join(WRITER_LOCK_FILE_NAME);
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-    {
+    let file = match kernal_api::platform::fs::open_read_regular_file(&lock_path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(LockAcquireOutcome::Failed),
@@ -413,25 +408,17 @@ fn sweep_directory_contents(
     mode: RetiredSweepMode,
     report: &mut RetiredStoreSweepReport,
 ) {
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(dir) {
         Ok(entries) => entries,
         Err(_) => {
             report.failed += 1;
             return;
         }
     };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                report.failed += 1;
-                continue;
-            }
-        };
-        if dir == store_root && is_root_marker(&entry.file_name()) {
+    for path in entries {
+        if dir == store_root && path.file_name().is_some_and(is_root_marker) {
             continue;
         }
-        let path = entry.path();
         let kind = match kernal_api::platform::fs::classify(&path) {
             Ok(kind) => kind,
             Err(_) => {
@@ -445,8 +432,8 @@ fn sweep_directory_contents(
             remove_link_entry(&path, report);
             continue;
         }
-        let is_dir = match entry.file_type() {
-            Ok(file_type) => file_type.is_dir(),
+        let is_dir = match kernal_api::platform::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata.is_dir(),
             Err(_) => {
                 report.failed += 1;
                 continue;
@@ -455,7 +442,7 @@ fn sweep_directory_contents(
         if is_dir {
             sweep_directory_contents(&path, store_root, now, max_age, mode, report);
             if is_dir_empty(&path) {
-                let _ = std::fs::remove_dir(&path);
+                let _ = kernal_api::platform::fs::remove_dir(&path);
             }
             continue;
         }
@@ -468,7 +455,9 @@ fn sweep_directory_contents(
 /// directory symlink or junction needs `remove_dir`, which removes the link
 /// and never the target's contents. No bytes are credited.
 fn remove_link_entry(path: &Path, report: &mut RetiredStoreSweepReport) {
-    if std::fs::remove_file(path).is_ok() || std::fs::remove_dir(path).is_ok() {
+    if kernal_api::platform::fs::remove_file(path).is_ok()
+        || kernal_api::platform::fs::remove_dir(path).is_ok()
+    {
         report.files_removed += 1;
     } else {
         report.failed += 1;
@@ -476,8 +465,8 @@ fn remove_link_entry(path: &Path, report: &mut RetiredStoreSweepReport) {
 }
 
 fn is_dir_empty(dir: &Path) -> bool {
-    std::fs::read_dir(dir)
-        .map(|mut entries| entries.next().is_none())
+    kernal_api::platform::fs::read_dir_paths(dir)
+        .map(|entries| entries.is_empty())
         .unwrap_or(false)
 }
 
@@ -490,7 +479,7 @@ fn sweep_regular_file(
     mode: RetiredSweepMode,
     report: &mut RetiredStoreSweepReport,
 ) {
-    let metadata = match std::fs::symlink_metadata(path) {
+    let metadata = match kernal_api::platform::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => metadata,
         Ok(_) => return,
         Err(_) => {
@@ -508,12 +497,12 @@ fn sweep_regular_file(
     );
     let should_delete = match (mode, link_count) {
         (RetiredSweepMode::Pressure, Some(1)) => true,
-        _ => is_older_than(&metadata, now, max_age),
+        _ => is_older_than(metadata.modified().ok(), now, max_age),
     };
     if !should_delete {
         return;
     }
-    match std::fs::remove_file(path) {
+    match kernal_api::platform::fs::remove_file(path) {
         Ok(()) => {
             report.files_removed += 1;
             // Only credit bytes when removal provably frees space: the
@@ -526,10 +515,8 @@ fn sweep_regular_file(
     }
 }
 
-fn is_older_than(metadata: &Metadata, now: SystemTime, max_age: Duration) -> bool {
-    metadata
-        .modified()
-        .ok()
+fn is_older_than(modified: Option<SystemTime>, now: SystemTime, max_age: Duration) -> bool {
+    modified
         .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|age| age >= max_age)
 }

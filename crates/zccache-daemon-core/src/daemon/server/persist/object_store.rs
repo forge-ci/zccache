@@ -7,14 +7,11 @@
 //! naturally distributes sequential objects across the fixed bucket set.
 
 use std::collections::HashSet;
-use std::fs;
 use std::io;
 use std::path::Path;
 
 use crate::core::NormalizedPath;
 
-#[cfg(test)]
-use std::fs::{File, OpenOptions};
 #[cfg(test)]
 use std::io::{Read, Write};
 
@@ -109,40 +106,33 @@ pub(crate) fn object_pointer_path(artifact_dir: &Path, key: &str) -> NormalizedP
 pub(crate) fn ensure_object_layout(artifact_dir: &Path) -> io::Result<()> {
     let objects = object_root(artifact_dir);
     let deleting = deleting_root(artifact_dir);
-    fs::create_dir_all(&objects)?;
-    fs::create_dir_all(&deleting)?;
-    fs::create_dir_all(pointer_root(artifact_dir))?;
+    kernal_api::platform::fs::create_dir_all(&objects)?;
+    kernal_api::platform::fs::create_dir_all(&deleting)?;
+    kernal_api::platform::fs::create_dir_all(pointer_root(artifact_dir))?;
     for bucket in 0..BUCKET_COUNT {
         let name = format!("{bucket:02x}");
-        fs::create_dir_all(objects.join(&name))?;
-        fs::create_dir_all(deleting.join(&name))?;
+        kernal_api::platform::fs::create_dir_all(objects.join(&name))?;
+        kernal_api::platform::fs::create_dir_all(deleting.join(&name))?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 fn sync_file(path: &Path) -> io::Result<()> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?
-        .sync_all()
+    kernal_api::platform::fs::open_read_write_file(path)?.sync_all()
 }
 
 #[cfg(test)]
 fn write_counter(path: &Path, value: u64) -> io::Result<()> {
     let temporary = path.with_file_name(format!(".{COUNTER_FILE}.tmp-{}", std::process::id()));
     {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
+        let mut file = kernal_api::platform::fs::create_private_file(&temporary)?;
         file.write_all(&value.to_le_bytes())?;
         file.sync_all()?;
     }
-    let result = fs::rename(&temporary, path);
+    let result = kernal_api::platform::fs::rename(&temporary, path);
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     result
 }
@@ -150,7 +140,7 @@ fn write_counter(path: &Path, value: u64) -> io::Result<()> {
 #[cfg(test)]
 fn read_counter(path: &Path) -> io::Result<Option<u64>> {
     let mut bytes = [0_u8; 8];
-    let mut file = match File::open(path) {
+    let mut file = match kernal_api::platform::fs::open_read_regular_file(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -176,13 +166,12 @@ fn path_occupied(artifact_dir: &Path, id: ArtifactObjectId) -> bool {
 pub(crate) fn allocate_object_id(artifact_dir: &Path) -> io::Result<ArtifactObjectId> {
     ensure_object_layout(artifact_dir)?;
     let lock_path = artifact_dir.join(COUNTER_LOCK);
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)?;
-    let _lock_guard = kernal_api::platform::fs::lock_exclusive(&lock)?;
+    let lock = kernal_api::platform::fs::open_lock_file(&lock_path)?;
+    // Store-lock operations carry the documented 30 s acquisition budget
+    // (`docs/architecture/runtime.md`); an expired wait returns instead of
+    // parking on a stuck cross-process holder (#433).
+    const STORE_LOCK_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+    let _lock_guard = kernal_api::platform::fs::lock_exclusive_for(&lock, STORE_LOCK_WITHIN)?;
 
     let counter_path = artifact_dir.join(COUNTER_FILE);
     let last = match read_counter(&counter_path) {
@@ -222,7 +211,7 @@ pub(crate) fn read_object_pointer(
     key: &str,
 ) -> io::Result<Option<ArtifactObjectId>> {
     let path = object_pointer_path(artifact_dir, key);
-    let value = match fs::read_to_string(path) {
+    let value = match kernal_api::platform::fs::read_to_string(&path) {
         Ok(value) => value,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -251,17 +240,14 @@ pub(crate) fn write_object_pointer(
         std::process::id()
     ));
     {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
+        let mut file = kernal_api::platform::fs::create_private_file(&temporary)?;
         file.write_all(id.name().as_bytes())?;
         file.write_all(b"\n")?;
         file.sync_all()?;
     }
-    let result = fs::rename(&temporary, &target);
+    let result = kernal_api::platform::fs::rename(&temporary, &target);
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     if result.is_ok() {
         let _ = sync_file(&target);
@@ -279,7 +265,7 @@ pub(crate) fn remove_object_pointer_if_matches(
     if read_object_pointer(artifact_dir, key)? != Some(expected) {
         return Ok(false);
     }
-    match fs::remove_file(path) {
+    match kernal_api::platform::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
@@ -291,12 +277,14 @@ pub(crate) fn remove_object_pointer_if_matches(
 pub(crate) fn queue_orphaned_objects(artifact_dir: &Path) -> io::Result<usize> {
     ensure_object_layout(artifact_dir)?;
     let mut live = HashSet::new();
-    for entry in fs::read_dir(pointer_root(artifact_dir))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
+    for entry in kernal_api::platform::fs::read_dir_paths(pointer_root(artifact_dir))? {
+        let Ok(metadata) = kernal_api::platform::fs::symlink_metadata(&entry) else {
+            continue;
+        };
+        if !metadata.is_file() {
             continue;
         }
-        if let Ok(value) = fs::read_to_string(entry.path()) {
+        if let Ok(value) = kernal_api::platform::fs::read_to_string(&entry) {
             if let Some(id) = ArtifactObjectId::parse(value.trim()) {
                 live.insert(id);
             }
@@ -304,18 +292,30 @@ pub(crate) fn queue_orphaned_objects(artifact_dir: &Path) -> io::Result<usize> {
     }
 
     let mut queued = 0;
-    for bucket in fs::read_dir(object_root(artifact_dir))? {
-        let bucket = bucket?;
-        if !bucket.file_type()?.is_dir() {
+    for bucket in kernal_api::platform::fs::read_dir_paths(object_root(artifact_dir))? {
+        let Ok(bucket_metadata) = kernal_api::platform::fs::symlink_metadata(&bucket) else {
+            continue;
+        };
+        if !bucket_metadata.is_dir() {
             continue;
         }
-        let bucket_name = bucket.file_name().to_string_lossy().to_string();
-        for entry in fs::read_dir(bucket.path())? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
+        let bucket_name = bucket
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        for entry in kernal_api::platform::fs::read_dir_paths(&bucket)? {
+            let Ok(entry_metadata) = kernal_api::platform::fs::symlink_metadata(&entry) else {
+                continue;
+            };
+            if !entry_metadata.is_file() {
                 continue;
             }
-            let leaf = entry.file_name().to_string_lossy().to_string();
+            let leaf = entry
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let Some(id) = ArtifactObjectId::parse(&format!("{bucket_name}{leaf}")) else {
                 continue;
             };
@@ -323,7 +323,7 @@ pub(crate) fn queue_orphaned_objects(artifact_dir: &Path) -> io::Result<usize> {
                 continue;
             }
             let target = deleting_object_path(artifact_dir, id);
-            match fs::rename(entry.path(), target) {
+            match kernal_api::platform::fs::rename(&entry, target) {
                 Ok(()) => queued += 1,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -366,9 +366,10 @@ mod tests {
     fn allocation_recovers_from_stale_counter_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         ensure_object_layout(dir.path()).unwrap();
-        fs::write(dir.path().join(COUNTER_FILE), 7_u64.to_le_bytes()).unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join(COUNTER_FILE), 7_u64.to_le_bytes())
+            .unwrap();
         let stale = ArtifactObjectId(8);
-        fs::create_dir_all(object_path(dir.path(), stale)).unwrap();
+        kernal_api::platform::fs::create_dir_all(object_path(dir.path(), stale)).unwrap();
         let allocated = allocate_object_id(dir.path()).unwrap();
         assert_eq!(allocated, ArtifactObjectId(9));
         assert_eq!(
@@ -397,9 +398,9 @@ mod tests {
     fn orphan_objects_are_moved_to_recoverable_queue() {
         let dir = tempfile::tempdir().unwrap();
         let orphan = allocate_object_id(dir.path()).unwrap();
-        fs::write(object_path(dir.path(), orphan), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(object_path(dir.path(), orphan), b"payload").unwrap();
         let live = allocate_object_id(dir.path()).unwrap();
-        fs::write(object_path(dir.path(), live), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(object_path(dir.path(), live), b"payload").unwrap();
         write_object_pointer(dir.path(), "key", live).unwrap();
 
         assert_eq!(queue_orphaned_objects(dir.path()).unwrap(), 1);

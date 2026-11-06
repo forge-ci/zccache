@@ -15,7 +15,7 @@ default = ["native"]
 native = ["dep:kernal-api", "dep:serde"]
 
 [dependencies]
-kernal-api = { workspace = true, optional = true }
+kernal-api = { workspace = true, optional = true, features = ["fs"] }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

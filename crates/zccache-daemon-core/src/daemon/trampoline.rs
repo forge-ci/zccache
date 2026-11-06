@@ -26,7 +26,6 @@
 //! binaries). `release_cwd` runs on every OS — it's cheap and the
 //! Windows-specific motivation (cwd handle pinning) is the primary driver.
 
-use std::fs;
 use std::path::Path;
 
 /// Unlock the running daemon binary on Windows so it can be replaced by
@@ -106,7 +105,7 @@ pub fn unlock_exe() {
 /// still works.
 pub fn release_cwd() {
     if let Some(stable) = zccache_home_dir() {
-        let _ = std::fs::create_dir_all(&stable);
+        let _ = kernal_api::platform::fs::create_dir_all(&stable);
         if std::env::set_current_dir(&stable).is_ok() {
             return;
         }
@@ -167,7 +166,7 @@ pub fn redirect_stdio_to_log(log_path: &Path) {
 /// robust to symlinks and short-name (8.3) tilde expansion on Windows.
 fn exe_is_deployed_daemon(exe: &Path) -> bool {
     let cache_dir = crate::core::config::default_cache_dir();
-    let cache_canon = match fs::canonicalize(cache_dir.as_path()) {
+    let cache_canon = match kernal_api::platform::fs::canonical_context_path(cache_dir.as_path()) {
         Ok(p) => p,
         Err(_) => return false,
     };
@@ -175,7 +174,7 @@ fn exe_is_deployed_daemon(exe: &Path) -> bool {
         Some(p) => p,
         None => return false,
     };
-    let exe_parent_canon = match fs::canonicalize(exe_parent) {
+    let exe_parent_canon = match kernal_api::platform::fs::canonical_context_path(exe_parent) {
         Ok(p) => p,
         Err(_) => return false,
     };
@@ -184,15 +183,15 @@ fn exe_is_deployed_daemon(exe: &Path) -> bool {
 
 /// Delete stale .old files next to the exe. Best-effort — locked files skipped.
 fn gc_old_files(dir: &Path, stem: &str) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
+    let paths = match kernal_api::platform::fs::read_dir_paths(dir) {
+        Ok(p) => p,
         Err(_) => return,
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+    for path in paths {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let name_str = name.as_deref().unwrap_or_default();
         if name_str.starts_with(stem) && name_str.contains(".old") {
-            let _ = fs::remove_file(entry.path());
+            let _ = kernal_api::platform::fs::remove_file(&path);
         }
     }
 }
@@ -204,14 +203,14 @@ mod tests {
     #[test]
     fn test_gc_old_files() {
         let tmp = std::env::temp_dir().join("zccache-unlock-test");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let _ = kernal_api::platform::fs::remove_dir_all(&tmp);
+        kernal_api::platform::fs::create_dir_all(&tmp).unwrap();
 
         // Simulate: stem.exe + two stale .old files
-        fs::write(tmp.join("stem.exe"), b"current").unwrap();
-        fs::write(tmp.join("stem.exe.old.1"), b"old1").unwrap();
-        fs::write(tmp.join("stem.exe.old.2"), b"old2").unwrap();
-        fs::write(tmp.join("other.exe"), b"unrelated").unwrap();
+        kernal_api::platform::fs::write_file(tmp.join("stem.exe"), b"current").unwrap();
+        kernal_api::platform::fs::write_file(tmp.join("stem.exe.old.1"), b"old1").unwrap();
+        kernal_api::platform::fs::write_file(tmp.join("stem.exe.old.2"), b"old2").unwrap();
+        kernal_api::platform::fs::write_file(tmp.join("other.exe"), b"unrelated").unwrap();
 
         gc_old_files(&tmp, "stem.exe");
 
@@ -220,7 +219,7 @@ mod tests {
         assert!(!tmp.join("stem.exe.old.2").exists()); // cleaned
         assert!(tmp.join("other.exe").is_file()); // untouched
 
-        let _ = fs::remove_dir_all(&tmp);
+        let _ = kernal_api::platform::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -232,12 +231,12 @@ mod tests {
     #[test]
     fn test_release_cwd_changes_dir() {
         let tmp = std::env::temp_dir().join("zccache-release-cwd-test");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let _ = kernal_api::platform::fs::remove_dir_all(&tmp);
+        kernal_api::platform::fs::create_dir_all(&tmp).unwrap();
 
         // Resolve via canonicalize so the comparison is robust against
         // symlinked temp dirs (e.g. /var → /private/var on macOS).
-        let tmp_canon = fs::canonicalize(&tmp).unwrap();
+        let tmp_canon = kernal_api::platform::fs::canonical_context_path(&tmp).unwrap();
         std::env::set_current_dir(&tmp_canon).unwrap();
         assert_eq!(std::env::current_dir().unwrap(), tmp_canon);
 
@@ -245,7 +244,7 @@ mod tests {
 
         assert_ne!(std::env::current_dir().unwrap(), tmp_canon);
 
-        let _ = fs::remove_dir_all(&tmp);
+        let _ = kernal_api::platform::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -1,0 +1,60 @@
+[package]
+name = "ban_std_fs_outside_adapters"
+# 2026-10-31: 0.1.1 moves this crate onto Dylint 6.2.0 and the shared
+# `nightly-2026-08-15` toolchain (main's #2029 migration could not reach a
+# branch-only rule) and busts the dylint .so cache. Bump the version on any
+# change to src/allowlist.txt: setup-soldr's dylint cache key hashes the
+# manifest but not the allowlist, so a content-only edit would otherwise
+# re-use the cached compiled plugin and the OLD allowlist would stay in effect.
+# 2026-11-03: 0.1.10 shrinks allowlist 28 -> 20 (cached-artifact metadata sweep,
+# retired-store byte accounting, OUT_DIR source-tree hashing, side-effect
+# scanning, staging-root sweep/creation, legacy blob marker creation, depfile
+# rehydration and the materialize write-descriptor seam move onto
+# read_dir_paths/symlink_metadata/path_metadata/read_file/create_file/
+# open_read_write_file/create_private_file/make_executable from the 0.1.37 facade).
+# 2026-11-03: 0.1.8 shrinks allowlist 40 -> 36 (quarantine prune, trampoline
+# gc, staged-store maintenance and disk maintenance move their directory
+# listing/metadata reads onto read_dir_paths/symlink_metadata/read_file/
+# read_to_string from the 0.1.37 facade).
+# 2026-11-03: 0.1.7 shrinks allowlist 42 -> 40 (crash dump listing and the
+# artifact mtime floor move read_dir/read/read_to_string onto read_dir_paths,
+# read_file, read_to_string and symlink_metadata from the 0.1.37 facade).
+# 2026-11-01: 0.1.3 shrinks allowlist 56 -> 53 (the last three files whose only
+# `std::fs` call was `read`/`read_to_string`, now on the 0.1.36 read side).
+# 2026-11-01: 0.1.2 shrinks allowlist 63 -> 56 (read-side burn onto
+# kernal-api 0.1.36: read_file / read_to_string / symlink_metadata).
+# 2026-11-03: 0.1.13 shrinks allowlist 14 -> 8 (marker footer reads/appends, object-store counters and lock,
+# staged-store sync/write/read/lock, retired-store marker/lock/age check, fscache verify metadata and the
+# staged-root link removal move onto open_read_regular_file/open_shared_append/create_file/create_private_file/
+# open_read_write_file/open_lock_file/read_to_string from the 0.1.37 facade).
+# 2026-11-03: 0.1.12 shrinks allowlist 15 -> 14 (pch provenance import
+# verification moves File::open and OpenOptions create_new+write onto
+# open_read_regular_file/create_private_file from the 0.1.37 facade).
+# 2026-11-03: 0.1.11 shrinks allowlist 20 -> 15 (retired-store sweep, audit-log
+# gc, authority-sidecar reader, pch input read side, pch overlay snapshot writer,
+# directory-bundle walk and the detach hardlink copy move their last
+# read_dir/read/set_permissions/File/OpenOptions/Metadata uses onto
+# read_dir_paths/symlink_metadata/read_file/set_permissions/
+# open_read_regular_file/create_private_file).
+# 2026-11-04: 0.1.14 shrinks allowlist 6 -> 5 (audit-log writer opens and
+# rotates its append handle through open_shared_append, sizes it with
+# path_metadata and boxes the sink as dyn Write + Send so the seam no
+# longer names a host file type).
+version = "0.1.14"
+description = "Ban std::fs outside the approved platform adapters and legacy allowlist"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.2.0"
+
+[dev-dependencies]
+dylint_testing = "=6.2.0"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]

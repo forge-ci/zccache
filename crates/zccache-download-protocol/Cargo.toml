@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 zccache-core = { workspace = true }
 zccache-download = { workspace = true }
-kernal-api = { workspace = true }
+kernal-api = { workspace = true, features = ["fs"] }
 
 bincode = { workspace = true }
 bytes = { workspace = true }

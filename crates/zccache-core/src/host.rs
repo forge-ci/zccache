@@ -34,6 +34,10 @@ pub fn home_dir() -> Option<NormalizedPath> {
         .map(NormalizedPath::new)
 }
 
+/// Machine ids are a fixed-width hex string; the bound only rejects a
+/// pathological `/etc/machine-id`, never a real one.
+const MAX_MACHINE_ID_BYTES: usize = 4 * 1024;
+
 /// Opaque raw host inputs for native-CPU cache-key salting.
 ///
 /// Labels, ordering, and the PID fallback are zccache cache-key
@@ -43,10 +47,14 @@ pub fn cpu_identity_material() -> String {
     let target_os = os();
     let (machine_id, host_label, hostname) = match target_os {
         "linux" => (
-            std::fs::read_to_string("/etc/machine-id")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| value.trim().to_owned()),
+            kernal_api::platform::fs::read_context_regular_file_bounded(
+                Path::new("/etc/machine-id"),
+                MAX_MACHINE_ID_BYTES,
+            )
+            .ok()
+            .map(|observation| String::from_utf8_lossy(&observation.bytes).into_owned())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_owned()),
             "HOSTNAME",
             std::env::var_os("HOSTNAME"),
         ),

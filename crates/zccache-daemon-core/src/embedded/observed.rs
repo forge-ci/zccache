@@ -135,6 +135,9 @@ impl ZccacheService {
         let mut compile = std::pin::pin!(compile);
 
         let observed = loop {
+            // The recv future is raced against the compile future below, so the
+            // wait is bounded by the race, not by a duration.
+            #[allow(deprecated)]
             let chunk = receiver.recv();
             let mut chunk = std::pin::pin!(chunk);
             match kernal_api::biased_race!((chunk.as_mut()), (compile.as_mut())).await {

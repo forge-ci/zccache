@@ -57,28 +57,24 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zccache_core::blocking_sync::Mutex;
 
-static TRACE_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+static TRACE_FILE: OnceLock<Option<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
 
 /// Name of the env var that, when set to a writable file path, enables
 /// the JSONL trace. Unset = trace is off.
 pub const ENV_VAR: &str = "ZCCACHE_INNER_TRACE";
 
-fn init() -> Option<Mutex<std::fs::File>> {
+fn init() -> Option<Mutex<Box<dyn Write + Send>>> {
     let path = std::env::var_os(ENV_VAR)?;
     let path = PathBuf::from(path);
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = kernal_api::platform::fs::create_dir_all(parent);
     }
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    match kernal_api::platform::fs::open_shared_append(&path) {
         Ok(file) => {
             // One-line startup confirmation so hosts can verify the
             // env var was picked up by THIS process.
             eprintln!("zccache: {ENV_VAR} active, writing to {}", path.display());
-            Some(Mutex::new(file))
+            Some(Mutex::new(Box::new(file) as Box<dyn Write + Send>))
         }
         Err(e) => {
             eprintln!("zccache: {ENV_VAR}={} but open failed: {e}", path.display());
@@ -87,7 +83,7 @@ fn init() -> Option<Mutex<std::fs::File>> {
     }
 }
 
-fn writer() -> Option<&'static Mutex<std::fs::File>> {
+fn writer() -> Option<&'static Mutex<Box<dyn Write + Send>>> {
     TRACE_FILE.get_or_init(init).as_ref()
 }
 

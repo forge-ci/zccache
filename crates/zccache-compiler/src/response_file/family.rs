@@ -19,7 +19,7 @@ use super::ResponseFileError;
 /// The Rust reader accepts UTF-8 only; MSVC response files may be UTF-16.
 pub fn read_response_file_text_for(path: &Path, family: CompilerFamily) -> std::io::Result<String> {
     if family == CompilerFamily::Rustc {
-        std::fs::read_to_string(path)
+        kernal_api::platform::fs::read_to_string(path)
     } else {
         super::read_response_file_text(path)
     }

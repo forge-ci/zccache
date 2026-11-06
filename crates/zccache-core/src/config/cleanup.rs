@@ -63,14 +63,13 @@ pub(super) fn sweep_depfile_dirs<F>(base: &Path, is_alive: F, max_age: Duration)
 where
     F: Fn(u32) -> bool,
 {
-    let entries = match std::fs::read_dir(base) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(base) {
         Ok(entries) => entries,
         Err(_) => return 0,
     };
 
     let mut cleaned = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if !path.is_dir() {
             continue;
         }
@@ -86,7 +85,7 @@ where
         // age reclaims it regardless of what currently holds that number.
         let expired = dir_is_older_than(&path, max_age);
         if !is_alive(pid) || expired {
-            match std::fs::remove_dir_all(&path) {
+            match kernal_api::platform::fs::remove_dir_all(&path) {
                 Ok(()) => {
                     cleaned += 1;
                     tracing::info!(
@@ -114,7 +113,7 @@ where
 /// costs disk until the next sweep; reclaiming a live daemon's depfile
 /// directory breaks its build. Same bias as the staging-root age gate.
 fn dir_is_older_than(path: &Path, max_age: Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = kernal_api::platform::fs::path_metadata(path) else {
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -136,7 +135,7 @@ fn cleanup_legacy_temp_cache_dir(temp_root: &Path, current_cache_dir: &Path) -> 
         return 0;
     }
 
-    match std::fs::remove_dir_all(&legacy_cache_dir) {
+    match kernal_api::platform::fs::remove_dir_all(&legacy_cache_dir) {
         Ok(()) => {
             tracing::info!(path = %legacy_cache_dir.display(), "removed legacy temp cache dir");
             1
@@ -155,15 +154,14 @@ fn cleanup_legacy_temp_depfile_dirs<F>(temp_root: &Path, is_alive: F) -> usize
 where
     F: Fn(u32) -> bool,
 {
-    let entries = match std::fs::read_dir(temp_root) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(temp_root) {
         Ok(entries) => entries,
         Err(_) => return 0,
     };
 
     let mut cleaned = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let file_name = entry.file_name();
+    for path in entries {
+        let file_name = path.file_name().unwrap_or_default();
         let name = match file_name.to_str() {
             Some(name) if name.starts_with("zccache-depfiles-") => name,
             _ => continue,
@@ -182,7 +180,7 @@ where
             continue;
         }
 
-        match std::fs::remove_dir_all(&path) {
+        match kernal_api::platform::fs::remove_dir_all(&path) {
             Ok(()) => {
                 cleaned += 1;
                 tracing::info!(path = %path.display(), "removed legacy temp depfile dir");
@@ -204,7 +202,7 @@ fn legacy_temp_depfile_pid(name: &str) -> Option<u32> {
 }
 
 fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
+    kernal_api::platform::fs::symlink_metadata(path)
         .map(|meta| meta.file_type().is_dir())
         .unwrap_or(false)
 }
@@ -214,11 +212,11 @@ fn path_is_or_contains(parent: &Path, child: &Path) -> bool {
         return true;
     }
 
-    let parent = match std::fs::canonicalize(parent) {
+    let parent = match kernal_api::platform::fs::canonical_context_path(parent) {
         Ok(parent) => parent,
         Err(_) => return false,
     };
-    std::fs::canonicalize(child)
+    kernal_api::platform::fs::canonical_context_path(child)
         .map(|child| child.starts_with(parent))
         .unwrap_or(false)
 }

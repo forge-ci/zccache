@@ -9,6 +9,7 @@
 //! `ci/log_audit_source_fixture.json`, so either side drifting fails a test.
 
 use super::*;
+use std::fs;
 
 const FIXTURE: &str = include_str!("../../../../ci/log_audit_source_fixture.json");
 

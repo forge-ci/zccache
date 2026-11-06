@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, deprecated)]
 use std::process::Child as SyncChild;
 use tokio::process::{Child as AsyncChild, Command as AsyncCommand};
 async fn asynchronous(command: &mut AsyncCommand, child: &mut AsyncChild) {

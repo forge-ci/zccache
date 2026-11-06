@@ -10,6 +10,7 @@ description = "Cross-filesystem test fixtures for zccache"
 publish = false
 
 [dependencies]
+kernal-api = { workspace = true, features = ["fs"] }
 tempfile = { workspace = true }
 zccache-audit = { workspace = true }
 zccache-core = { workspace = true }

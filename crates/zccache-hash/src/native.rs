@@ -260,7 +260,7 @@ mod tests {
         // the facade's own 128 KB parallel-hash cutoff, so this exercises
         // the mapped, rayon-parallel path rather than the buffered one.
         let payload: Vec<u8> = (0..(256 * 1024)).map(|i| (i % 251) as u8).collect();
-        std::fs::write(tmp.path(), &payload).unwrap();
+        kernal_api::platform::fs::write_file(tmp.path(), &payload).unwrap();
         let via_file = hash_file(tmp.path()).unwrap();
         let via_bytes = hash_bytes(&payload);
         assert_eq!(
@@ -274,7 +274,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         // 4 KB — well below the threshold, exercises the unchanged path.
         let payload: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
-        std::fs::write(tmp.path(), &payload).unwrap();
+        kernal_api::platform::fs::write_file(tmp.path(), &payload).unwrap();
         let via_file = hash_file(tmp.path()).unwrap();
         let via_bytes = hash_bytes(&payload);
         assert_eq!(via_file, via_bytes);

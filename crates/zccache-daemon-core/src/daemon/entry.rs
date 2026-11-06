@@ -198,8 +198,10 @@ fn print_status(args: &Args) {
         .build()
         .expect("failed to create async runtime");
 
-    match rt.run(query_daemon_status(&endpoint)) {
-        Ok(status) => {
+    // A status roundtrip is a short IPC exchange; an unresponsive endpoint is
+    // reported as "not running" instead of blocking the command forever (#433).
+    match rt.run_within(query_daemon_status(&endpoint), STATUS_QUERY_WITHIN) {
+        Ok(Ok(status)) => {
             println!("  status:     running");
             println!("  daemon ns:  {}", status.daemon_namespace);
             println!("  daemon ep:  {}", status.endpoint);
@@ -220,7 +222,7 @@ fn print_status(args: &Args) {
                 status.cache_hits, status.cache_misses
             );
         }
-        Err(_) => {
+        Ok(Err(_)) | Err(_) => {
             println!("  status:     not running");
             println!();
             println!("Start with: zccache-daemon --foreground");
@@ -243,6 +245,19 @@ async fn query_daemon_status(
         None => Err("connection closed".into()),
     }
 }
+
+/// One status roundtrip against a live endpoint. Bounded so `zccache-daemon
+/// status` reports "not running" instead of blocking on a wedged endpoint (#433).
+const STATUS_QUERY_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The pre-bind probe already bounds its own IPC exchange to 500 ms; this is
+/// the runtime wait around it, with headroom for a slow scheduler (#433).
+const PROBE_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The daemon serves until its supervisor or the host stops it. A representable
+/// finite cap keeps the runtime wait bounded without pretending an unbounded
+/// block is safe; expiry exits for restart (#433).
+const SERVICE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
 
 fn run_server(args: Args) {
     let endpoint = args.endpoint.unwrap_or_else(crate::ipc::default_endpoint);
@@ -293,10 +308,12 @@ fn run_server(args: Args) {
             .enable_all()
             .build()
             .expect("failed to create async probe runtime");
-        let existing_daemon = probe_rt.run(crate::ipc::probe_existing_daemon(
-            &endpoint,
-            std::time::Duration::from_millis(500),
-        ));
+        let existing_daemon = probe_rt
+            .run_within(
+                crate::ipc::probe_existing_daemon(&endpoint, std::time::Duration::from_millis(500)),
+                PROBE_WITHIN,
+            )
+            .unwrap_or(false);
         if existing_daemon {
             tracing::info!(
                 %endpoint,
@@ -335,7 +352,11 @@ fn run_server(args: Args) {
     // Cache root for the v1 CacheManifest published after a successful bind
     // (zackees/running-process#435); cloned so it survives the async move.
     let manifest_cache_root = cache_root.clone();
-    rt.run(async move {
+    // The serve loop takes ownership of `endpoint`; keep the value its expiry
+    // path needs to retire the record.
+    let restart_endpoint = endpoint.clone();
+    if rt
+        .run_within(async move {
         // ── Issue #640: bind FIRST, then load depgraph in background ─────
         //
         // The prior flow loaded the depgraph (3+ s on a populated cache)
@@ -652,7 +673,19 @@ fn run_server(args: Args) {
         // The load may still be running if shutdown came in <3 s after
         // start; abort is safe (nothing for the swap to corrupt).
         load_handle.cancel();
-    });
+        },
+        SERVICE_LIFETIME,
+    )
+    .is_err()
+    {
+        // The serve loop is the daemon's whole lifetime; expiry means the
+        // supervisor-visible budget ran out while it was still running. Retire
+        // the endpoint record and exit so the next client spawns a fresh
+        // daemon instead of the process hanging in a wedged serve loop (#433).
+        tracing::error!("daemon service lifetime expired; exiting for restart");
+        let _ = crate::ipc::retire_endpoint(&restart_endpoint);
+        std::process::exit(1);
+    }
 }
 
 fn init_tracing(level: &str) {

@@ -245,7 +245,11 @@ pub struct RustArtifactPlanV1 {
 impl RustArtifactPlanV1 {
     /// Load, version-check, and validate a plan from a protobuf or legacy JSON file.
     pub fn load(path: &Path) -> Result<Self, RustPlanError> {
-        let raw = std::fs::read(path)?;
+        let raw = kernal_api::platform::fs::read_context_regular_file_bounded(
+            path,
+            kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+        )?
+        .bytes;
         if is_probably_json_plan(&raw) {
             let raw = std::str::from_utf8(&raw).map_err(|err| {
                 RustPlanError::InvalidPlan(format!("JSON plan is not valid UTF-8: {err}"))

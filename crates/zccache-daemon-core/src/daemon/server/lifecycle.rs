@@ -132,7 +132,7 @@ pub(super) fn new_shared_state(
     // second writer fails fast rather than part-initializing over a live one.
     let cache_root_lock = CacheRootWriterLock::acquire(cache_dir.as_path())?;
     let artifact_dir = crate::core::config::artifacts_dir_from_cache_dir(cache_dir);
-    std::fs::create_dir_all(&artifact_dir).ok();
+    kernal_api::platform::fs::create_dir_all_private(&artifact_dir).ok();
     ensure_object_layout(&artifact_dir)?;
     if let Err(error) = queue_orphaned_objects(&artifact_dir) {
         tracing::warn!(%error, "failed to queue orphaned artifact objects");
@@ -285,7 +285,7 @@ pub(super) fn new_shared_state(
             depfile_tmpdir: {
                 let dir = crate::core::config::depfile_dir_from_cache_dir(cache_dir)
                     .join(format!("{}-{instance}", std::process::id()));
-                std::fs::create_dir_all(&dir).ok();
+                kernal_api::platform::fs::create_dir_all_private(&dir).ok();
                 dir
             },
             fast_hit_cache: DashMap::new(),

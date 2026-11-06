@@ -1,6 +1,5 @@
 //! Exact-root validation and safe link/reparse removal for staged artifacts.
 
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -12,21 +11,18 @@ pub(super) use zccache_artifact::staged_lock::{
     is_staged_link_or_reparse, open_store_lock, staged_root, validate_staged_root_path,
 };
 
-pub(super) fn remove_staged_link_or_reparse(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> io::Result<()> {
+pub(super) fn remove_staged_link_or_reparse(path: &Path, is_directory: bool) -> io::Result<()> {
     use crate::platform::fs::links::LinkKind;
     if crate::platform::fs::links::classify(path)? != LinkKind::Regular {
         // A reparse point that is a directory (Windows junctions) is removed
         // with `remove_dir`; every other link form is a file to `remove_file`.
-        if metadata.is_dir() {
-            fs::remove_dir(path)
+        if is_directory {
+            kernal_api::platform::fs::remove_dir(path)
         } else {
-            fs::remove_file(path)
+            kernal_api::platform::fs::remove_file(path)
         }
     } else {
-        fs::remove_file(path)
+        kernal_api::platform::fs::remove_file(path)
     }
 }
 

@@ -40,7 +40,8 @@ pub(in crate::daemon::server) fn apply_batch_policy<'a>(
 pub(in crate::daemon::server) fn floor_artifact_mtime_to_sibling_max(
     path: &Path,
 ) -> std::io::Result<()> {
-    let own = FileTime::from_last_modification_time(&std::fs::metadata(path)?);
+    let own =
+        FileTime::from_last_modification_time(&kernal_api::platform::fs::path_metadata(path)?);
     if let Some(ft) = crate::core::mtime::sibling_floor_above(path, own)? {
         let _ = set_materialized_mtime(path, ft);
     }
@@ -52,7 +53,9 @@ pub(in crate::daemon::server) fn set_materialized_mtime(
     path: &Path,
     mtime: FileTime,
 ) -> std::io::Result<()> {
-    let readonly = crate::platform::fs::permissions::is_sealed(&std::fs::metadata(path)?);
+    let readonly = crate::platform::fs::permissions::is_sealed(
+        &kernal_api::platform::fs::path_metadata(path)?,
+    );
     if readonly {
         crate::platform::fs::permissions::make_writable(path)?;
     }

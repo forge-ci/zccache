@@ -100,7 +100,7 @@ pub(super) async fn handle_release_worktree_handles(
 /// fall back to the as-supplied path so a soldr teardown of a partially
 /// deleted worktree still sweeps sessions whose working_dir is gone.
 fn canonicalize_for_match(p: &Path) -> Option<std::path::PathBuf> {
-    std::fs::canonicalize(p).ok()
+    kernal_api::platform::fs::canonical_context_path(p).ok()
 }
 
 fn normalized_for_match(path: &NormalizedPath) -> NormalizedPath {

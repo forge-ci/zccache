@@ -137,7 +137,7 @@ pub fn prepare_depfile_with_mmd(
     // while the daemon is still running. Without this, the compiler fails
     // with "error opening ... no such file or directory".
     if !tmpdir.exists() {
-        let _ = std::fs::create_dir_all(tmpdir);
+        let _ = zccache_core::config::create_dir_all_private(tmpdir);
     }
     static DEPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
     let unique = DEPFILE_COUNTER.fetch_add(1, Ordering::Relaxed);

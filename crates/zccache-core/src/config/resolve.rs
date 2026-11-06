@@ -215,7 +215,7 @@ pub fn write_last_version_marker_in(top_level: &std::path::Path) -> std::io::Res
     // #1171: this is the first thing to create the top-level cache root on a
     // fresh install, so it decides that directory's mode for good.
     super::paths::create_dir_all_private(top_level)?;
-    std::fs::write(
+    kernal_api::platform::fs::write_file(
         top_level.join(LAST_VERSION_MARKER),
         format!("{}\n", crate::VERSION),
     )
@@ -225,7 +225,7 @@ pub fn write_last_version_marker_in(top_level: &std::path::Path) -> std::io::Res
 #[must_use]
 pub fn read_last_version_marker() -> Option<String> {
     let (top, _) = resolve_cache_root_top_level();
-    std::fs::read_to_string(top.join(LAST_VERSION_MARKER).as_path())
+    kernal_api::platform::fs::read_to_string(top.join(LAST_VERSION_MARKER).as_path())
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -274,19 +274,25 @@ pub fn prune_stale_version_dirs() -> PruneReport {
 /// Test seam for [`prune_stale_version_dirs`].
 pub fn prune_stale_version_dirs_in(top_level: &std::path::Path, keep: &str) -> PruneReport {
     let mut report = PruneReport::default();
-    let entries = match std::fs::read_dir(top_level) {
-        Ok(e) => e,
+    let paths = match kernal_api::platform::fs::read_dir_paths(top_level) {
+        Ok(paths) => paths,
         Err(_) => return report,
     };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    for path in paths {
+        if !kernal_api::platform::fs::symlink_metadata(&path)
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if name == keep || !is_version_dir_name(&name) {
             continue;
         }
-        match std::fs::remove_dir_all(entry.path()) {
+        match kernal_api::platform::fs::remove_dir_all(&path) {
             Ok(()) => report.removed.push(name),
             Err(_) => report.skipped.push(name),
         }
@@ -454,8 +460,8 @@ mod version_hygiene_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let top = tmp.path();
         for name in ["v1.12.13", "v1.12.14", "v1.12.15", "logs", "crashes"] {
-            std::fs::create_dir_all(top.join(name)).unwrap();
-            std::fs::write(top.join(name).join("marker"), b"x").unwrap();
+            kernal_api::platform::fs::create_dir_all(top.join(name)).unwrap();
+            kernal_api::platform::fs::write_file(top.join(name).join("marker"), b"x").unwrap();
         }
         // Keep v1.12.15 (the "current" version); prune the two older siblings.
         let report = prune_stale_version_dirs_in(top, "v1.12.15");
@@ -477,7 +483,8 @@ mod version_hygiene_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let top = tmp.path().join("nested-top");
         write_last_version_marker_in(&top).expect("marker write");
-        let contents = std::fs::read_to_string(top.join(LAST_VERSION_MARKER)).expect("read marker");
+        let contents = kernal_api::platform::fs::read_to_string(top.join(LAST_VERSION_MARKER))
+            .expect("read marker");
         assert_eq!(contents.trim(), crate::VERSION);
     }
 

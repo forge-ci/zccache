@@ -427,7 +427,7 @@ impl EmbeddedDaemon {
         )
         .await;
         report.steps.insert(0, maintenance_step);
-        let _ = std::fs::remove_dir_all(&self.state.depfile_tmpdir);
+        let _ = kernal_api::platform::fs::remove_dir_all(&self.state.depfile_tmpdir);
         // #1162: the final flush is done, so this service has stopped writing
         // and the root is free for the next writer. Only on `shutdown` — a
         // plain `flush` keeps serving and must keep its claim.
@@ -625,7 +625,7 @@ fn drop_time_checkpoint(state: &SharedState) {
     if state.dep_graph_load_complete.load(Ordering::Acquire) {
         let depgraph_path = depgraph_file_path_for_cache_dir(&state.cache_dir);
         if let Some(parent) = depgraph_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            kernal_api::platform::fs::create_dir_all(parent).ok();
         }
         // zccache#1661: a failed save is logged and the drop carries on to the
         // metadata snapshot; it must never abort the rest of the recovery.
@@ -828,7 +828,8 @@ async fn flush_embedded_state(
             }
             run_depgraph_save_with(Arc::clone(&depgraph_state), runtime_handle, move |dg| {
                 if let Some(parent) = depgraph_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                    kernal_api::platform::fs::create_dir_all(parent)
+                        .map_err(|error| error.to_string())?;
                 }
                 crate::depgraph::save_to_file(dg, depgraph_path.as_path())
                     .map_err(|error| error.to_string())?;

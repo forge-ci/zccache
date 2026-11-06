@@ -204,7 +204,11 @@ pub(super) fn rehydrate_delivered_depfile(
     requested_outputs: &[NormalizedPath],
     key_root: Option<&NormalizedPath>,
 ) -> std::io::Result<()> {
-    let bytes = std::fs::read(path.as_path())?;
+    let bytes = kernal_api::platform::fs::read_context_regular_file_bounded(
+        path.as_path(),
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )?
+    .bytes;
     let staged = crate::daemon::server::rehydrate_logical_depfile_bytes(&bytes, requested_outputs);
     let rewritten = rehydrate_depfile_root(staged, key_root.map(NormalizedPath::as_path))
         .ok_or_else(|| {

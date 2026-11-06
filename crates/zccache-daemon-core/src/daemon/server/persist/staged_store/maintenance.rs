@@ -6,7 +6,6 @@ use super::{
     validate_staged_artifact_root, STORE_LOCK,
 };
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::SystemTime;
@@ -21,7 +20,7 @@ pub(crate) struct StagedDiskArtifact {
 }
 
 fn staged_tree_stats(path: &Path) -> io::Result<(u64, SystemTime)> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = kernal_api::platform::fs::symlink_metadata(path)?;
     if is_staged_link_or_reparse(path) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -34,8 +33,8 @@ fn staged_tree_stats(path: &Path) -> io::Result<(u64, SystemTime)> {
     let mut size = metadata.len();
     let mut mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     if metadata.is_dir() {
-        for entry in fs::read_dir(path)?.flatten() {
-            let (child_size, child_mtime) = staged_tree_stats(&entry.path())?;
+        for child in kernal_api::platform::fs::read_dir_paths(path)? {
+            let (child_size, child_mtime) = staged_tree_stats(&child)?;
             size = size.saturating_add(child_size);
             mtime = mtime.max(child_mtime);
         }
@@ -61,9 +60,8 @@ fn scan_staged_disk_artifacts_locked(
     root: &Path,
 ) -> io::Result<Vec<StagedDiskArtifact>> {
     let mut artifacts = Vec::new();
-    for entry in fs::read_dir(root)?.flatten() {
-        let key_root = entry.path();
-        let key_metadata = fs::symlink_metadata(&key_root)?;
+    for key_root in kernal_api::platform::fs::read_dir_paths(root)? {
+        let key_metadata = kernal_api::platform::fs::symlink_metadata(&key_root)?;
         if is_staged_link_or_reparse(&key_root) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -76,13 +74,17 @@ fn scan_staged_disk_artifacts_locked(
         if !key_metadata.is_dir() {
             continue;
         }
-        let key = entry.file_name().to_string_lossy().into_owned();
+        let key = key_root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if !staged_key_supported(&key) {
             continue;
         }
         let (mut _total_size, mut mtime) = staged_tree_stats(&key_root)?;
         let pointer = pointer_path(artifact_dir, &key);
-        let generation = if let Ok(metadata) = fs::symlink_metadata(&pointer) {
+        let generation = if let Ok(metadata) = kernal_api::platform::fs::symlink_metadata(&pointer)
+        {
             if is_staged_link_or_reparse(&pointer) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -94,7 +96,7 @@ fn scan_staged_disk_artifacts_locked(
             }
             _total_size = _total_size.saturating_add(metadata.len());
             mtime = mtime.max(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
-            fs::read_to_string(&pointer)
+            kernal_api::platform::fs::read_to_string(&pointer)
                 .ok()
                 .map(|value| value.trim().to_string())
         } else {
@@ -165,7 +167,7 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
     let mut removed = HashSet::new();
     for (key, expected_generation) in expected.iter().filter(|(key, _)| staged_key_supported(key)) {
         let pointer = pointer_path(artifact_dir, key);
-        let current = match fs::symlink_metadata(&pointer) {
+        let current = match kernal_api::platform::fs::symlink_metadata(&pointer) {
             Ok(_) if is_staged_link_or_reparse(&pointer) => {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -175,7 +177,7 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
                     ),
                 ));
             }
-            Ok(_) => fs::read_to_string(&pointer)
+            Ok(_) => kernal_api::platform::fs::read_to_string(&pointer)
                 .ok()
                 .map(|value| value.trim().to_string()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -207,21 +209,21 @@ fn evict_staged_artifact_keys_locked(
 }
 
 pub(super) fn remove_staged_tree(path: &Path) -> io::Result<u64> {
-    let metadata = match fs::symlink_metadata(path) {
+    let metadata = match kernal_api::platform::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
         Err(error) => return Err(error),
     };
     if is_staged_link_or_reparse(path) {
-        remove_staged_link_or_reparse(path, &metadata)?;
+        remove_staged_link_or_reparse(path, metadata.is_dir())?;
         return Ok(0);
     }
     if metadata.is_dir() {
         let mut removed = 0;
-        for entry in fs::read_dir(path)?.flatten() {
-            removed += remove_staged_tree(&entry.path())?;
+        for child in kernal_api::platform::fs::read_dir_paths(path)? {
+            removed += remove_staged_tree(&child)?;
         }
-        fs::remove_dir(path)?;
+        kernal_api::platform::fs::remove_dir(path)?;
         return Ok(removed);
     }
     let size = metadata.len();
@@ -243,11 +245,11 @@ pub(in crate::daemon::server) fn clear_staged_artifacts(artifact_dir: &Path) -> 
     let _store_lock_guard =
         crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
     let mut bytes_removed = 0;
-    for entry in fs::read_dir(&root)?.flatten() {
-        if entry.file_name() == STORE_LOCK {
+    for path in kernal_api::platform::fs::read_dir_paths(&root)? {
+        if path.file_name().is_some_and(|n| n == STORE_LOCK) {
             continue;
         }
-        bytes_removed += remove_staged_tree(&entry.path())?;
+        bytes_removed += remove_staged_tree(&path)?;
     }
     Ok(bytes_removed)
 }
@@ -260,8 +262,9 @@ mod bounded_lock_tests {
     fn maintenance_contention_defers_eviction_without_waiting_for_the_reader() {
         let directory = tempfile::tempdir().unwrap();
         let root = staged_root(directory.path());
-        fs::create_dir_all(root.join("aa")).unwrap();
-        fs::write(root.join("aa/payload"), b"preserve while in use").unwrap();
+        kernal_api::platform::fs::create_dir_all(root.join("aa")).unwrap();
+        kernal_api::platform::fs::write_file(root.join("aa/payload"), b"preserve while in use")
+            .unwrap();
         let file = open_store_lock(&root).unwrap();
         let reader = kernal_api::platform::fs::try_lock_shared(&file).unwrap();
         let expected = HashMap::from([("aa".to_string(), None)]);

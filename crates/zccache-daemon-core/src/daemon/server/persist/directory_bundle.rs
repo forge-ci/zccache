@@ -80,7 +80,7 @@ impl StagedDirectoryPlan {
             return StagedPlanOutcome::Unsupported(StagedPlanReason::OutputMissingFilename);
         };
         let parent = requested.parent().unwrap_or(cwd);
-        if let Err(source) = std::fs::create_dir_all(parent) {
+        if let Err(source) = kernal_api::platform::fs::create_dir_all(parent) {
             return StagedPlanOutcome::Error(StagedPlanError {
                 reason: StagedPlanReason::StagingDirectoryCreate,
                 source,
@@ -144,7 +144,7 @@ fn create_private_directory(parent: &Path) -> std::io::Result<NormalizedPath> {
             std::process::id(),
             DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        match std::fs::create_dir(&path) {
+        match kernal_api::platform::fs::create_dir(&path) {
             Ok(()) => return Ok(path.into()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -191,10 +191,10 @@ pub(in crate::daemon::server) fn materialize_directory_payload(
 ) -> std::io::Result<u64> {
     let bytes = match payload {
         CachedPayload::Bytes(bytes) => Arc::clone(bytes),
-        CachedPayload::File(path) => Arc::new(std::fs::read(path)?),
+        CachedPayload::File(path) => Arc::new(kernal_api::platform::fs::read_file(path)?),
     };
     let parent = requested.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    kernal_api::platform::fs::create_dir_all(parent)?;
     let temp = parent.join(format!(
         ".zccache-directory-{}-{}",
         std::process::id(),
@@ -218,8 +218,8 @@ fn pack_directory(source: &Path, archive: &Path) -> std::io::Result<u64> {
         ));
     }
     let mut entries = Vec::new();
-    let root_metadata = std::fs::metadata(source)?;
-    let root_modified = modified_since_epoch(&root_metadata);
+    let root_metadata = kernal_api::platform::fs::path_metadata(source)?;
+    let root_modified = modified_since_epoch(root_metadata.modified().unwrap_or(UNIX_EPOCH));
     collect_entries(source, source, &mut entries)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     if entries.len() > MAX_BUNDLE_ENTRIES {
@@ -239,7 +239,7 @@ fn pack_directory(source: &Path, archive: &Path) -> std::io::Result<u64> {
             entries,
         })
         .map_err(invalid_bundle)?;
-    std::fs::write(archive, &bytes)?;
+    kernal_api::platform::fs::write_file(archive, &bytes)?;
     Ok(bytes.len() as u64)
 }
 
@@ -248,10 +248,8 @@ fn collect_entries(
     directory: &Path,
     entries: &mut Vec<DirectoryEntry>,
 ) -> std::io::Result<()> {
-    for child in std::fs::read_dir(directory)? {
-        let child = child?;
-        let path = child.path();
-        let metadata = std::fs::symlink_metadata(&path)?;
+    for path in kernal_api::platform::fs::read_dir_paths(directory)? {
+        let metadata = kernal_api::platform::fs::symlink_metadata(&path)?;
         // `classify` rejects Windows junctions/mount points too — a bundle
         // must not archive a tree that resolves elsewhere.
         if crate::platform::fs::links::classify(&path)?
@@ -269,7 +267,7 @@ fn collect_entries(
                 "directory output contains a non-UTF-8 path",
             )
         })?;
-        let modified = modified_since_epoch(&metadata);
+        let modified = modified_since_epoch(metadata.modified().unwrap_or(UNIX_EPOCH));
         let kind = if metadata.is_dir() {
             EntryKind::Directory
         } else if metadata.is_file() {
@@ -284,7 +282,7 @@ fn collect_entries(
             path: relative.replace('\\', "/"),
             kind,
             bytes: if metadata.is_file() {
-                std::fs::read(&path)?
+                kernal_api::platform::fs::read_file(&path)?
             } else {
                 Vec::new()
             },
@@ -310,17 +308,17 @@ fn unpack_directory(bytes: &[u8], target: &Path) -> std::io::Result<()> {
             "directory bundle exceeds entry limit",
         ));
     }
-    std::fs::create_dir(target)?;
+    kernal_api::platform::fs::create_dir(target)?;
     for entry in &bundle.entries {
         let relative = validated_relative_path(&entry.path)?;
         let path = target.join(relative);
         match entry.kind {
-            EntryKind::Directory => std::fs::create_dir_all(&path)?,
+            EntryKind::Directory => kernal_api::platform::fs::create_dir_all(&path)?,
             EntryKind::File => {
                 if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    kernal_api::platform::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(&path, &entry.bytes)?;
+                kernal_api::platform::fs::write_file(&path, &entry.bytes)?;
                 crate::platform::fs::permissions::apply_mode(&path, entry.mode)?;
                 set_mtime(&path, entry)?;
             }
@@ -345,12 +343,8 @@ fn unpack_directory(bytes: &[u8], target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn modified_since_epoch(metadata: &std::fs::Metadata) -> Duration {
-    metadata
-        .modified()
-        .unwrap_or(UNIX_EPOCH)
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+fn modified_since_epoch(modified: std::time::SystemTime) -> Duration {
+    modified.duration_since(UNIX_EPOCH).unwrap_or_default()
 }
 
 /// A validated bundle member is deliberately relative, so it must not be
@@ -371,7 +365,7 @@ fn validated_relative_path(path: &str) -> std::io::Result<Box<Path>> {
 }
 
 fn remove_directory_if_present(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_dir_all(path) {
+    match kernal_api::platform::fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -399,9 +393,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.dSYM");
         let nested = source.join("Contents/Resources/DWARF");
-        std::fs::create_dir_all(&nested).unwrap();
+        kernal_api::platform::fs::create_dir_all(&nested).unwrap();
         let binary = nested.join("app");
-        std::fs::write(&binary, b"debug-bytes").unwrap();
+        kernal_api::platform::fs::write_file(&binary, b"debug-bytes").unwrap();
         let mtime = kernal_api::platform::fs::FileTime::from_unix_time(1_700_000_000, 123_456_700);
         kernal_api::platform::fs::set_file_mtime(&binary, mtime).unwrap();
         let root_mtime =
@@ -411,19 +405,26 @@ mod tests {
         pack_directory(&source, &archive).unwrap();
         let target = temp.path().join("target.dSYM");
 
-        unpack_directory(&std::fs::read(archive).unwrap(), &target).unwrap();
+        unpack_directory(
+            &kernal_api::platform::fs::read_file(archive).unwrap(),
+            &target,
+        )
+        .unwrap();
 
         let restored = target.join("Contents/Resources/DWARF/app");
-        assert_eq!(std::fs::read(&restored).unwrap(), b"debug-bytes");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&restored).unwrap(),
+            b"debug-bytes"
+        );
         assert_eq!(
             kernal_api::platform::fs::FileTime::from_last_modification_time(
-                &std::fs::metadata(restored).unwrap()
+                &kernal_api::platform::fs::path_metadata(restored).unwrap()
             ),
             mtime
         );
         assert_eq!(
             kernal_api::platform::fs::FileTime::from_last_modification_time(
-                &std::fs::metadata(target).unwrap()
+                &kernal_api::platform::fs::path_metadata(target).unwrap()
             ),
             root_mtime
         );
@@ -485,8 +486,8 @@ mod tests {
     fn invalid_bundle_does_not_replace_existing_directory() {
         let temp = tempfile::tempdir().unwrap();
         let requested = temp.path().join("app.dSYM");
-        std::fs::create_dir(&requested).unwrap();
-        std::fs::write(requested.join("existing"), b"keep").unwrap();
+        kernal_api::platform::fs::create_dir(&requested).unwrap();
+        kernal_api::platform::fs::write_file(requested.join("existing"), b"keep").unwrap();
 
         let error = materialize_directory_payload(
             &CachedPayload::Bytes(Arc::new(b"not a bundle".to_vec())),
@@ -495,25 +496,31 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(std::fs::read(requested.join("existing")).unwrap(), b"keep");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(requested.join("existing")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]
     fn valid_bundle_replaces_existing_directory_as_a_complete_tree() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.dSYM");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(source.join("new"), b"new tree").unwrap();
+        kernal_api::platform::fs::create_dir(&source).unwrap();
+        kernal_api::platform::fs::write_file(source.join("new"), b"new tree").unwrap();
         let archive = temp.path().join("bundle.bin");
         pack_directory(&source, &archive).unwrap();
 
         let requested = temp.path().join("app.dSYM");
-        std::fs::create_dir(&requested).unwrap();
-        std::fs::write(requested.join("old"), b"old tree").unwrap();
+        kernal_api::platform::fs::create_dir(&requested).unwrap();
+        kernal_api::platform::fs::write_file(requested.join("old"), b"old tree").unwrap();
         materialize_directory_payload(&CachedPayload::File(archive.into()), requested.as_path())
             .unwrap();
 
-        assert_eq!(std::fs::read(requested.join("new")).unwrap(), b"new tree");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(requested.join("new")).unwrap(),
+            b"new tree"
+        );
         assert!(!requested.join("old").exists());
     }
 
@@ -521,8 +528,8 @@ mod tests {
     fn directory_bundle_rejects_symlinks() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.dSYM");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(temp.path().join("outside"), b"outside").unwrap();
+        kernal_api::platform::fs::create_dir(&source).unwrap();
+        kernal_api::platform::fs::write_file(temp.path().join("outside"), b"outside").unwrap();
         if crate::platform::fs::links::symlink_file(
             &temp.path().join("outside"),
             &source.join("link"),

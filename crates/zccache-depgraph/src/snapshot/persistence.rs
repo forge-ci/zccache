@@ -179,19 +179,19 @@ pub fn save_to_file_with(
     // Atomic write: write to .tmp, then rename.
     let tmp_path = path.with_extension("bin.tmp");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
 
     let written = write_tmp(&tmp_path, &payload, opts.fail_injection);
     if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         return Err(e);
     }
 
     // Windows: remove target before rename (rename doesn't overwrite on Windows).
-    let _ = std::fs::remove_file(path);
-    if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    let _ = kernal_api::platform::fs::remove_file(path);
+    if let Err(e) = kernal_api::platform::fs::rename(&tmp_path, path) {
+        let _ = kernal_api::platform::fs::remove_file(&tmp_path);
         return Err(e.into());
     }
 
@@ -245,7 +245,7 @@ fn fit_to_budget(graph: &DepGraph, opts: &SaveOptions) -> Result<Vec<u8>, Snapsh
 }
 
 fn write_tmp(tmp_path: &Path, payload: &[u8], fail_injection: bool) -> Result<(), SnapshotError> {
-    let file = std::fs::File::create(tmp_path)?;
+    let file = kernal_api::platform::fs::create_file(tmp_path)?;
     let mut writer = BufWriter::new(file);
 
     // Header: magic + version (LE u32) + payload len (LE u64).
@@ -378,7 +378,7 @@ pub fn load_from_file(path: &Path) -> Result<DepGraph, SnapshotError> {
 /// persisted wall-clock age exceeds `opts.ttl` are dropped; the rest keep
 /// their persisted wall-clock `last_accessed_unix_ms` verbatim.
 pub fn load_from_file_with(path: &Path, opts: &LoadOptions) -> Result<DepGraph, SnapshotError> {
-    let file = std::fs::File::open(path)?;
+    let file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let file_len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
 

@@ -57,13 +57,8 @@ impl StagingRoot {
             .map(|root| root.join(CONFIGURED_STAGING_CHILD))
             .unwrap_or_else(|| cache_dir.join("staging"));
         let path = parent.join(format!("{}-{instance}-{nonce}", std::process::id()));
-        std::fs::create_dir_all(&path)?;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path.join(STAGING_LOCK_FILE))?;
+        kernal_api::platform::fs::create_dir_all(&path)?;
+        let file = kernal_api::platform::fs::create_file(path.join(STAGING_LOCK_FILE))?;
         // Never wait behind a cleaner that observed this just-created
         // directory before we acquired its lock. Failing daemon startup is
         // safer than returning a staging root a concurrent cleaner unlinked.
@@ -91,9 +86,10 @@ impl StagingRoot {
             return Ok(0);
         };
         let mut removed = 0;
-        for entry in std::fs::read_dir(parent)?.flatten() {
-            let path = entry.path();
-            if !path.is_dir() || path == self.path.as_path() {
+        for path in kernal_api::platform::fs::read_dir_paths(parent)? {
+            if !kernal_api::platform::fs::path_metadata(&path).is_ok_and(|meta| meta.is_dir())
+                || path == self.path.as_path()
+            {
                 continue;
             }
             // Deliberately NOT `create(true)` (soldr#1250). Creating the lock
@@ -102,10 +98,11 @@ impl StagingRoot {
             // own brand-new file unlocked, conclude the root was abandoned,
             // and delete a staging root that another daemon is mid-way
             // through creating.
-            let lock = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path.join(STAGING_LOCK_FILE));
+            // Read-only and deliberately NOT create: opening a missing lock
+            // file must stay absent, or the cleaner manufactures the very
+            // artifact whose absence protects a root being born (soldr#1250).
+            let lock =
+                kernal_api::platform::fs::open_read_regular_file(path.join(STAGING_LOCK_FILE));
             let lock = match lock {
                 Ok(lock) => lock,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -113,7 +110,7 @@ impl StagingRoot {
                     // daemon that died before writing one. Only age tells them
                     // apart, and guessing wrong deletes live output.
                     if staging_dir_is_older_than(&path, min_age) {
-                        std::fs::remove_dir_all(&path)?;
+                        kernal_api::platform::fs::remove_dir_all(&path)?;
                         removed += 1;
                     }
                     continue;
@@ -131,7 +128,7 @@ impl StagingRoot {
             if !staging_tree_is_quiet_for(&path, STAGING_ABANDONED_QUIET_PERIOD) {
                 continue;
             }
-            std::fs::remove_dir_all(&path)?;
+            kernal_api::platform::fs::remove_dir_all(&path)?;
             removed += 1;
         }
         Ok(removed)
@@ -145,7 +142,7 @@ impl StagingRoot {
 /// look like it is from the future, both return false. Skipping real debris
 /// costs disk until the next pass; removing a live root costs a failed build.
 fn staging_dir_is_older_than(path: &Path, min_age: std::time::Duration) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = kernal_api::platform::fs::path_metadata(path) else {
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -165,15 +162,13 @@ fn staging_tree_is_quiet_for(root: &Path, quiet: std::time::Duration) -> bool {
     if !staging_dir_is_older_than(root, quiet) {
         return false;
     }
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = kernal_api::platform::fs::read_dir_paths(root) else {
         return false;
     };
-    for entry in entries {
-        let Ok(entry) = entry else {
-            return false;
-        };
-        let path = entry.path();
-        let quiet_entry = match entry.file_type() {
+    for path in entries {
+        let quiet_entry = match kernal_api::platform::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type())
+        {
             Ok(kind) if kind.is_dir() => staging_tree_is_quiet_for(&path, quiet),
             Ok(_) => staging_dir_is_older_than(&path, quiet),
             Err(_) => false,
@@ -190,7 +185,7 @@ impl Drop for StagingRoot {
         if let Some(lock) = self.lock.take() {
             drop(lock);
         }
-        let _ = std::fs::remove_dir_all(self.path.as_path());
+        let _ = kernal_api::platform::fs::remove_dir_all(self.path.as_path());
     }
 }
 

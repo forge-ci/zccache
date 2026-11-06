@@ -64,7 +64,7 @@ pub(super) fn write_temp_response_file(
     let path =
         NormalizedPath::new(tmp_dir.join(format!("zccache_{}_{}.rsp", std::process::id(), id)));
     let file = TempResponseFile { path };
-    std::fs::write(&file.path, content)?;
+    kernal_api::platform::fs::write_file(&file.path, content)?;
     Ok(file)
 }
 
@@ -89,6 +89,11 @@ mod tests {
         .unwrap();
         assert_eq!(expanded, args);
         drop(guard);
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert_eq!(
+            kernal_api::platform::fs::read_dir_paths(dir.path())
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }

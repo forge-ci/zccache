@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, deprecated)]
 use kernal_api::{ProcessSession as Session, ProcessSessionOptions, SpawnSpec as Tool};
 async fn bypass(tool: Tool, session: &Session, options: ProcessSessionOptions) {
     let _ = tool.spawn_session(options).await;

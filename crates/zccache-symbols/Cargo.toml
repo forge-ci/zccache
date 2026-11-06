@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 zccache-core = { workspace = true }
+kernal-api = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

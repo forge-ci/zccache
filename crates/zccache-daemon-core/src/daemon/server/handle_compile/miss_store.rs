@@ -686,7 +686,7 @@ pub(super) fn canonicalize_captured_depfile_root(
     }
     *bytes = canonical;
     if persist_temp.is_some() {
-        std::fs::write(source_path.as_path(), bytes.as_slice())?;
+        kernal_api::platform::fs::write_file(source_path.as_path(), bytes.as_slice())?;
         return Ok(persist_temp);
     }
     let requested = source_path.clone();
@@ -713,12 +713,12 @@ pub(super) fn preserve_staged_depfile_for_persistence(
             "staged user depfile has no file name",
         )
     })?;
-    std::fs::create_dir_all(temp_root)?;
+    kernal_api::platform::fs::create_dir_all(temp_root)?;
     let temp = tempfile::Builder::new()
         .prefix("staged-depfile-persist-")
         .tempdir_in(temp_root)?;
     let persisted_source = temp.path().join(file_name);
-    std::fs::write(&persisted_source, bytes)?;
+    kernal_api::platform::fs::write_file(&persisted_source, bytes.as_slice())?;
     *source_path = persisted_source.into();
     Ok(Some(temp))
 }

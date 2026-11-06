@@ -206,9 +206,13 @@ pub(super) fn requires_exclusive_access(
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| KNOWN_C_AMALGAMATIONS.contains(&name));
+            // Non-following observation: a source path that is itself a link
+            // reports no length, so it cannot be classified as an oversized
+            // amalgamation. Compilers are handed the link contents either way;
+            // the name check above still covers the known amalgamations.
             known
-                || std::fs::metadata(source_path)
-                    .is_ok_and(|metadata| metadata.len() >= AMALGAMATION_BYTES)
+                || kernal_api::platform::fs::context_path_metadata_no_follow(source_path)
+                    .is_ok_and(|observed| observed.len.is_some_and(|len| len >= AMALGAMATION_BYTES))
         }
         CompilerFamily::Rustfmt => false,
     }

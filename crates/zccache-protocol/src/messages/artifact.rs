@@ -69,7 +69,12 @@ impl ArtifactPayload {
     pub fn size_bytes(&self) -> u64 {
         match self {
             Self::Bytes(b) => b.len() as u64,
-            Self::Path(p) => std::fs::metadata(p.as_path()).map(|m| m.len()).unwrap_or(0),
+            // Observed without following a link: a `Path` payload is a real
+            // output file, so a symlink is a caller error, not a size source.
+            Self::Path(p) => kernal_api::platform::fs::context_path_metadata_no_follow(p.as_path())
+                .ok()
+                .and_then(|metadata| metadata.len)
+                .unwrap_or(0),
         }
     }
 

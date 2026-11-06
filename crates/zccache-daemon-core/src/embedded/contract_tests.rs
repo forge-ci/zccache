@@ -98,7 +98,8 @@ fn concurrent_real_cache_hits_leave_embedded_control_plane_responsive() {
         let file =
             zccache_artifact::staged_lock::open_store_lock(&root).expect("open staged-store lock");
         let lock =
-            kernal_api::platform::fs::lock_exclusive_owned(file).expect("hold staged-store lock");
+            kernal_api::platform::fs::lock_exclusive_owned_for(file, Duration::from_secs(30))
+                .expect("hold staged-store lock");
         locked_tx.send(()).expect("announce held lock");
         // Keep the lock until the test explicitly releases it. A disconnected
         // sender also releases it if an assertion unwinds; a wall-clock

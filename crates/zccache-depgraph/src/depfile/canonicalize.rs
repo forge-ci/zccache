@@ -50,7 +50,7 @@ pub fn canonicalize_path(path: &Path, cwd: &Path) -> NormalizedPath {
     if let Some(cached) = cache.get(&key) {
         return cached.clone();
     }
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| {
+    let canonical = kernal_api::platform::fs::canonical_context_path(path).unwrap_or_else(|_| {
         if path.is_absolute() {
             path.to_path_buf()
         } else {

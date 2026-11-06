@@ -3,7 +3,7 @@
 //! compatibility identity and a new publication path, never internal paths.
 
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::Path};
+use std::{io, path::Path};
 
 use crate::{ArtifactStore, StagedReadGuard};
 
@@ -51,7 +51,8 @@ pub fn export_store_snapshot(
     validate_compatibility(compatibility)?;
     let _writer = zccache_core::cache_root_lock::CacheRootWriterLock::acquire(cache_root)?;
     let index = cache_root.join("index.bin");
-    let store = ArtifactStore::from_snapshot(&index, &fs::read(&index)?)?;
+    let store =
+        ArtifactStore::from_snapshot(&index, &kernal_api::platform::fs::read_file(&index)?)?;
     export_snapshot(
         &store,
         &cache_root.join("artifacts"),
@@ -71,7 +72,7 @@ fn publish_snapshot(
         crate::staged_lock::staged_root(artifact_dir).as_path(),
     )?;
     // Caller-controlled destination parent; never replace a committed snapshot.
-    match fs::symlink_metadata(destination) {
+    match kernal_api::platform::fs::symlink_metadata(destination) {
         Ok(_) => {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -85,14 +86,14 @@ fn publish_snapshot(
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
+    kernal_api::platform::fs::create_dir_all(parent)?;
     let pending = tempfile::Builder::new()
         .prefix(".compiler-snapshot-")
         .tempdir_in(parent)?;
     let rows = store.load_all();
     let copied = ArtifactStore::open_empty(&pending.path().join("index.bin"));
     let target = pending.path().join("artifacts");
-    fs::create_dir_all(&target)?;
+    kernal_api::platform::fs::create_dir_all(&target)?;
     let mut outputs = 0;
     for (key, meta) in &rows {
         if meta.output_names.len() != meta.output_sizes.len()
@@ -112,17 +113,14 @@ fn publish_snapshot(
     }
     copied.flush()?;
     let index = pending.path().join("index.bin");
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&index)?
-        .sync_all()?;
+    kernal_api::platform::fs::open_read_write_file(&index)?.sync_all()?;
     let manifest = SnapshotManifest {
         schema: 1,
         compatibility: compatibility.into(),
         index_digest: index_digest(&index)?,
     };
     let manifest_path = pending.path().join("snapshot.json");
-    let mut manifest_file = fs::File::create(&manifest_path)?;
+    let mut manifest_file = kernal_api::platform::fs::create_file(&manifest_path)?;
     std::io::Write::write_all(
         &mut manifest_file,
         &serde_json::to_vec(&manifest).map_err(invalid)?,
@@ -149,13 +147,15 @@ pub fn import_snapshot(
     destination: &Path,
 ) -> io::Result<SnapshotReceipt> {
     validate_compatibility(compatibility)?;
-    let manifest: SnapshotManifest =
-        serde_json::from_slice(&fs::read(source.join("snapshot.json"))?).map_err(invalid)?;
+    let manifest: SnapshotManifest = serde_json::from_slice(&kernal_api::platform::fs::read_file(
+        source.join("snapshot.json"),
+    )?)
+    .map_err(invalid)?;
     if manifest.schema != 1 || manifest.compatibility != compatibility {
         return Err(invalid("snapshot schema or compatibility mismatch"));
     }
     let index = source.join("index.bin");
-    let bytes = fs::read(&index)?;
+    let bytes = kernal_api::platform::fs::read_file(&index)?;
     if kernal_api::hash::blake3_bytes(&bytes).to_hex().as_str() != manifest.index_digest.as_str() {
         return Err(invalid("snapshot index digest mismatch"));
     }
@@ -186,7 +186,7 @@ fn validate_compatibility(identity: &str) -> io::Result<()> {
 
 fn index_digest(path: &Path) -> io::Result<String> {
     let mut digest = kernal_api::hash::Blake3Hasher::new();
-    digest.update(&fs::read(path)?);
+    digest.update(&kernal_api::platform::fs::read_file(path)?);
     Ok(digest.finalize().to_hex().to_string())
 }
 
@@ -198,7 +198,7 @@ fn invalid(message: impl std::fmt::Display) -> io::Error {
 mod tests {
     use super::*;
     use crate::{layout_fixtures, resolve_staged_artifact_files, ArtifactIndex, ArtifactVerdict};
-    use std::{collections::BTreeMap, fs, sync::Arc};
+    use std::{collections::BTreeMap, sync::Arc};
 
     fn fixture() -> (tempfile::TempDir, ArtifactStore, String) {
         let temp = tempfile::tempdir().unwrap();
@@ -218,19 +218,19 @@ mod tests {
 
     fn file_identity(root: &Path) -> BTreeMap<String, Vec<u8>> {
         fn collect(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
-            for entry in fs::read_dir(dir).unwrap() {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    collect(root, &entry.path(), files);
+            for path in kernal_api::platform::fs::read_dir_paths(dir).unwrap() {
+                if kernal_api::platform::fs::symlink_metadata(&path)
+                    .unwrap()
+                    .is_dir()
+                {
+                    collect(root, &path, files);
                 } else {
                     files.insert(
-                        entry
-                            .path()
-                            .strip_prefix(root)
+                        path.strip_prefix(root)
                             .unwrap()
                             .to_string_lossy()
                             .into_owned(),
-                        fs::read(entry.path()).unwrap(),
+                        kernal_api::platform::fs::read_file(&path).unwrap(),
                     );
                 }
             }
@@ -270,14 +270,18 @@ mod tests {
                 &snapshot,
             )
             .unwrap();
-            fs::remove_file(
+            kernal_api::platform::fs::remove_file(
                 snapshot
                     .join("artifacts/.staged-v2")
                     .join(format!("{key}.current")),
             )
             .unwrap();
             if legacy_payload {
-                fs::write(snapshot.join("artifacts").join(format!("{key}_0")), b"obj").unwrap();
+                kernal_api::platform::fs::write_file(
+                    snapshot.join("artifacts").join(format!("{key}_0")),
+                    b"obj",
+                )
+                .unwrap();
             }
             let before = file_identity(&snapshot);
             let destination = temp.path().join(format!("restored-{legacy_payload}"));
@@ -300,12 +304,14 @@ mod tests {
         )
         .unwrap();
         let index = snapshot.join("index.bin");
-        fs::write(&index, b"invalid index").unwrap();
+        kernal_api::platform::fs::write_file(&index, b"invalid index").unwrap();
         let manifest_path = snapshot.join("snapshot.json");
         let mut manifest: SnapshotManifest =
-            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+            serde_json::from_slice(&kernal_api::platform::fs::read_file(&manifest_path).unwrap())
+                .unwrap();
         manifest.index_digest = index_digest(&index).unwrap();
-        fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        kernal_api::platform::fs::write_file(manifest_path, serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
         let before = file_identity(&snapshot);
         let destination = temp.path().join("restored");
         assert_eq!(
@@ -351,7 +357,8 @@ mod tests {
         let artifacts = temp.path().join("source/artifacts");
         let flat_key = "c".repeat(64);
         let pack_key = "d".repeat(64);
-        fs::write(artifacts.join(format!("{flat_key}_0")), b"flat").unwrap();
+        kernal_api::platform::fs::write_file(artifacts.join(format!("{flat_key}_0")), b"flat")
+            .unwrap();
         store.insert(
             &flat_key,
             &ArtifactIndex::new(
@@ -399,7 +406,7 @@ mod tests {
             assert_eq!(
                 files
                     .iter()
-                    .map(|p| fs::read(p).unwrap())
+                    .map(|p| kernal_api::platform::fs::read_file(p).unwrap())
                     .collect::<Vec<_>>(),
                 expected
             );
@@ -415,11 +422,11 @@ mod tests {
         let prior = temp.path().join("prior");
         let compatibility = "b".repeat(64);
         export_snapshot(&store, &artifacts, &compatibility, &prior).unwrap();
-        let prior_index = fs::read(prior.join("index.bin")).unwrap();
+        let prior_index = kernal_api::platform::fs::read_file(prior.join("index.bin")).unwrap();
         let files = resolve_staged_artifact_files(&artifacts, &key, &[3])
             .unwrap()
             .unwrap();
-        fs::write(&files[0], b"bad").unwrap();
+        kernal_api::platform::fs::write_file(&files[0], b"bad").unwrap();
         let next = temp.path().join("next");
         assert_eq!(
             export_snapshot(&store, &artifacts, &compatibility, &next)
@@ -428,7 +435,10 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert!(!next.exists());
-        assert_eq!(fs::read(prior.join("index.bin")).unwrap(), prior_index);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(prior.join("index.bin")).unwrap(),
+            prior_index
+        );
         assert!(import_snapshot(&prior, &compatibility, &temp.path().join("restored")).is_ok());
         assert_eq!(
             export_snapshot(&store, &artifacts, &compatibility, &prior)
@@ -458,7 +468,7 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert!(!destination.exists());
-        fs::write(snapshot.join("index.bin"), b"corrupt").unwrap();
+        kernal_api::platform::fs::write_file(snapshot.join("index.bin"), b"corrupt").unwrap();
         assert_eq!(
             import_snapshot(&snapshot, &compatibility, &destination)
                 .unwrap_err()
@@ -509,7 +519,7 @@ mod tests {
         let files = resolve_staged_artifact_files(&snapshot.join("artifacts"), &key, &[3])
             .unwrap()
             .unwrap();
-        fs::write(&files[0], b"bad").unwrap();
+        kernal_api::platform::fs::write_file(&files[0], b"bad").unwrap();
         let destination = temp.path().join("restored");
         assert_eq!(
             import_snapshot(&snapshot, &compatibility, &destination)
@@ -550,16 +560,21 @@ mod tests {
             zccache_core::mtime::FileTime::from_unix_time(1_700_000_000, 0),
         )
         .unwrap();
-        let mut permissions = fs::metadata(&files[0]).unwrap().permissions();
+        let mut permissions = kernal_api::platform::fs::path_metadata(&files[0])
+            .unwrap()
+            .permissions();
         permissions.set_readonly(true);
-        fs::set_permissions(&files[0], permissions).unwrap();
-        let expected_mtime = fs::metadata(&files[0]).unwrap().modified().unwrap();
+        kernal_api::platform::fs::set_permissions(&files[0], permissions).unwrap();
+        let expected_mtime = kernal_api::platform::fs::path_metadata(&files[0])
+            .unwrap()
+            .modified()
+            .unwrap();
         let snapshot = temp.path().join("snapshot");
         export_snapshot(&store, &artifacts, &"b".repeat(64), &snapshot).unwrap();
         let copied = resolve_staged_artifact_files(&snapshot.join("artifacts"), &key, &[3])
             .unwrap()
             .unwrap();
-        let metadata = fs::metadata(&copied[0]).unwrap();
+        let metadata = kernal_api::platform::fs::path_metadata(&copied[0]).unwrap();
         assert_eq!(metadata.modified().unwrap(), expected_mtime);
         assert!(metadata.permissions().readonly());
     }
@@ -610,8 +625,14 @@ mod tests {
         let payloads = resolve_staged_artifact_files(&destination.join("artifacts"), &key, &[3, 7])
             .unwrap()
             .unwrap();
-        assert_eq!(fs::read(&payloads[0]).unwrap(), b"obj");
-        assert_eq!(fs::read(&payloads[1]).unwrap(), b"depfile");
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&payloads[0]).unwrap(),
+            b"obj"
+        );
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&payloads[1]).unwrap(),
+            b"depfile"
+        );
     }
 
     #[test]
@@ -622,7 +643,8 @@ mod tests {
         let (temp, store, staged_key) = fixture();
         let artifacts = temp.path().join("source/artifacts");
         let flat_key = "c".repeat(64);
-        fs::write(artifacts.join(format!("{flat_key}_0")), b"flat").unwrap();
+        kernal_api::platform::fs::write_file(artifacts.join(format!("{flat_key}_0")), b"flat")
+            .unwrap();
         store.insert(
             &flat_key,
             &ArtifactIndex::new(vec!["flat.o".into()], vec![4], vec![], vec![], 0),
@@ -642,8 +664,11 @@ mod tests {
                 {
                     let sidecar = crate::blob_digest::sidecar_path(&file);
                     assert_eq!(
-                        fs::read(sidecar.as_path()).unwrap(),
-                        kernal_api::hash::blake3_bytes(&fs::read(&file).unwrap()).as_bytes(),
+                        kernal_api::platform::fs::read_file(sidecar.as_path()).unwrap(),
+                        kernal_api::hash::blake3_bytes(
+                            &kernal_api::platform::fs::read_file(&file).unwrap()
+                        )
+                        .as_bytes(),
                         "{} has no matching digest sidecar",
                         file.display()
                     );

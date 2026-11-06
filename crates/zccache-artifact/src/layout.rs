@@ -5,7 +5,6 @@
 //! staged generation.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::Arc;
@@ -96,7 +95,7 @@ pub fn resolve_artifact_payloads(
             LegacyArtifactAccessPurpose::CompatibilityRead,
             call_site,
         );
-        match fs::metadata(&legacy) {
+        match kernal_api::platform::fs::path_metadata(&legacy) {
             Ok(metadata) if metadata.is_file() && metadata.len() == expected_size => {
                 payloads.push(ResolvedArtifactPayload::File(legacy));
             }
@@ -176,7 +175,7 @@ fn load_published_generation(
     validate_key(key_hex)?;
     let root = artifact_dir.join(STAGED_ROOT);
     let pointer = root.join(format!("{key_hex}.current"));
-    let generation_hex = match fs::read_to_string(pointer) {
+    let generation_hex = match kernal_api::platform::fs::read_to_string(pointer) {
         Ok(value) => value.trim().to_string(),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -213,7 +212,7 @@ fn verify_generation_outputs(generation: &PublishedGeneration) -> io::Result<Vec
         // `dir` is already a `NormalizedPath`, so `join` yields one — the
         // `.into()` this replaced became a no-op when the field changed type.
         let path = generation.dir.join(format!("output-{}", output.index));
-        if fs::metadata(&path)?.len() != output.size {
+        if kernal_api::platform::fs::path_metadata(&path)?.len() != output.size {
             return Err(invalid_data(
                 "staged output size does not match its manifest",
             ));
@@ -288,7 +287,7 @@ pub(crate) fn copy_artifact_generation(
     let payloads = resolve_artifact_payloads(source, key, sizes, false, "snapshot::export")?
         .ok_or_else(|| invalid_data("snapshot payload is missing or invalid"))?;
     let root = destination.join(STAGED_ROOT);
-    fs::create_dir_all(&root)?;
+    kernal_api::platform::fs::create_dir_all(&root)?;
     let pending = tempfile::Builder::new()
         .prefix(".snapshot-generation-")
         .tempdir_in(&root)?;
@@ -297,7 +296,7 @@ pub(crate) fn copy_artifact_generation(
         .any(|p| matches!(p, ResolvedArtifactPayload::Bytes(_)))
     {
         Some(zccache_core::mtime::FileTime::from_last_modification_time(
-            &fs::metadata(source.join(format!("{key}.pack")))?,
+            &kernal_api::platform::fs::path_metadata(source.join(format!("{key}.pack")))?,
         ))
     } else {
         None
@@ -308,7 +307,7 @@ pub(crate) fn copy_artifact_generation(
         match payload {
             ResolvedArtifactPayload::File(path) => copy_snapshot_file(path, &target)?,
             ResolvedArtifactPayload::Bytes(bytes) => {
-                let mut file = fs::File::create(&target)?;
+                let mut file = kernal_api::platform::fs::create_file(&target)?;
                 std::io::Write::write_all(&mut file, bytes)?;
                 if let Some(mtime) = pack_mtime {
                     zccache_core::mtime::stamp_mtime(&target, mtime)?;
@@ -334,7 +333,7 @@ pub(crate) fn copy_artifact_generation(
         generation_hex: generation_hex.clone(),
         outputs,
     };
-    let mut file = fs::File::create(pending.path().join("manifest.bin"))?;
+    let mut file = kernal_api::platform::fs::create_file(pending.path().join("manifest.bin"))?;
     std::io::Write::write_all(
         &mut file,
         &bincode::serialize(&manifest).map_err(|e| invalid_data(e.to_string()))?,
@@ -344,7 +343,7 @@ pub(crate) fn copy_artifact_generation(
     drop(file);
     kernal_api::platform::fs::sync_directory_if_supported(pending.path())?;
     let target = root.join(key).join(&generation_hex);
-    fs::create_dir_all(root.join(key))?;
+    kernal_api::platform::fs::create_dir_all(root.join(key))?;
     kernal_api::platform::fs::replacement::rename_generation(pending.path(), &target)?;
     publish_snapshot_pointer(destination, key, &generation_hex, sizes)
 }
@@ -368,7 +367,7 @@ fn copy_staged_generation(
     let root = destination.join(STAGED_ROOT);
     let key_dir = root.join(key);
     let target = key_dir.join(generation_name);
-    fs::create_dir_all(&target)?;
+    kernal_api::platform::fs::create_dir_all(&target)?;
     let manifest = generation.dir.join("manifest.bin");
     for path in paths
         .iter()
@@ -400,21 +399,21 @@ fn write_blob_digest_sidecar(blob: &Path, digest_hex: &str) -> io::Result<()> {
     let digest = kernal_api::hash::Blake3Digest::from_hex(digest_hex)
         .map_err(|_| invalid_data("staged output digest is not hex"))?;
     let sidecar = crate::blob_digest::sidecar_path(blob);
-    let mut file = fs::File::create(sidecar.as_path())?;
+    let mut file = kernal_api::platform::fs::create_file(sidecar.as_path())?;
     std::io::Write::write_all(&mut file, digest.as_bytes())?;
     file.sync_all()
 }
 
 fn copy_snapshot_file(source: &Path, destination: &Path) -> io::Result<()> {
-    let metadata = fs::metadata(source)?;
-    let mut input = fs::File::open(source)?;
-    let mut output = fs::File::create(destination)?;
+    let metadata = kernal_api::platform::fs::path_metadata(source)?;
+    let mut input = kernal_api::platform::fs::open_read_regular_file(source)?;
+    let mut output = kernal_api::platform::fs::create_file(destination)?;
     io::copy(&mut input, &mut output)?;
     zccache_core::mtime::stamp_mtime(
         destination,
         zccache_core::mtime::FileTime::from_last_modification_time(&metadata),
     )?;
-    fs::set_permissions(destination, metadata.permissions())?;
+    kernal_api::platform::fs::set_permissions(destination, metadata.permissions())?;
     output.sync_all()
 }
 
@@ -430,7 +429,7 @@ fn publish_snapshot_pointer(
     // Revalidate copied bytes; an unsupported concurrent payload mutation must
     // fail publication, never produce a ready snapshot with an invalid digest.
     let pointer = root.join(format!("{key}.current"));
-    let mut pointer_file = fs::File::create(&pointer)?;
+    let mut pointer_file = kernal_api::platform::fs::create_file(&pointer)?;
     std::io::Write::write_all(&mut pointer_file, generation.as_bytes())?;
     pointer_file.sync_all()?;
     resolve_staged_artifact_files(destination, key, sizes)?;
@@ -448,17 +447,22 @@ fn publish_snapshot_pointer(
 /// staged root is an empty list, not an error.
 pub fn published_staged_keys(artifact_dir: &Path) -> io::Result<Vec<String>> {
     let root = artifact_dir.join(STAGED_ROOT);
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
+    let paths = match kernal_api::platform::fs::read_dir_paths(&root) {
+        Ok(paths) => paths,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
     let mut keys = Vec::new();
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+    for path in paths {
+        if !kernal_api::platform::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file())
+        {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let Some(key) = name.strip_suffix(".current") else {
             continue;
         };
@@ -497,7 +501,7 @@ pub fn verified_staged_generation(
         // `0..len` with no repeats, so this cannot panic or overwrite.
         sizes[output.index] = output.size;
     }
-    let stored_at = fs::metadata(generation.dir.join("manifest.bin"))?
+    let stored_at = kernal_api::platform::fs::path_metadata(generation.dir.join("manifest.bin"))?
         .modified()
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     Ok(Some((sizes, stored_at)))
@@ -508,8 +512,9 @@ fn load_manifest(
     expected_key: &str,
     expected_generation: &str,
 ) -> io::Result<StagedManifest> {
-    let manifest: StagedManifest = bincode::deserialize(&fs::read(path)?)
-        .map_err(|error| invalid_data(format!("invalid staged manifest: {error}")))?;
+    let manifest: StagedManifest =
+        bincode::deserialize(&kernal_api::platform::fs::read_file(path)?)
+            .map_err(|error| invalid_data(format!("invalid staged manifest: {error}")))?;
     if manifest.version != STAGED_MANIFEST_VERSION
         || manifest.key_hex != expected_key
         || manifest.generation_hex != expected_generation
@@ -520,7 +525,7 @@ fn load_manifest(
 }
 
 fn digest_file(path: &Path) -> io::Result<(u64, String)> {
-    let mut file = fs::File::open(path)?;
+    let mut file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let mut hasher = kernal_api::hash::Blake3Hasher::new();
     let mut buffer = [0_u8; 1024 * 1024];
     let mut size = 0_u64;
@@ -547,7 +552,7 @@ fn generation_digest(key_hex: &str, outputs: &[StagedOutput]) -> String {
 }
 
 fn load_pack(artifact_dir: &Path, key_hex: &str) -> io::Result<Option<Vec<u8>>> {
-    match fs::read(artifact_dir.join(format!("{key_hex}.pack"))) {
+    match kernal_api::platform::fs::read_file(artifact_dir.join(format!("{key_hex}.pack"))) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -649,13 +654,13 @@ pub mod fixtures {
     use super::{
         generation_digest, StagedManifest, StagedOutput, STAGED_MANIFEST_VERSION, STAGED_ROOT,
     };
-    use std::fs;
     use std::path::Path;
 
     /// Seed the existing pack encoding for shared layout-conformance tests.
     pub fn seed_pack(artifact_dir: &Path, key: &str, payloads: &[&[u8]]) {
-        fs::create_dir_all(artifact_dir).expect("create pack fixture directory");
-        fs::write(
+        kernal_api::platform::fs::create_dir_all(artifact_dir)
+            .expect("create pack fixture directory");
+        kernal_api::platform::fs::write_file(
             artifact_dir.join(format!("{key}.pack")),
             build_pack(payloads),
         )
@@ -703,10 +708,14 @@ pub mod fixtures {
             .join(STAGED_ROOT)
             .join(key_hex)
             .join(&generation_hex);
-        fs::create_dir_all(&generation_dir).expect("create staged generation dir");
+        kernal_api::platform::fs::create_dir_all(&generation_dir)
+            .expect("create staged generation dir");
         for (index, payload) in payloads.iter().enumerate() {
-            fs::write(generation_dir.join(format!("output-{index}")), payload)
-                .expect("write staged output");
+            kernal_api::platform::fs::write_file(
+                generation_dir.join(format!("output-{index}")),
+                payload,
+            )
+            .expect("write staged output");
         }
         let manifest = StagedManifest {
             version: STAGED_MANIFEST_VERSION,
@@ -714,12 +723,12 @@ pub mod fixtures {
             generation_hex: generation_hex.clone(),
             outputs,
         };
-        fs::write(
+        kernal_api::platform::fs::write_file(
             generation_dir.join("manifest.bin"),
             bincode::serialize(&manifest).expect("serialize staged manifest"),
         )
         .expect("write staged manifest");
-        fs::write(
+        kernal_api::platform::fs::write_file(
             artifact_dir
                 .join(STAGED_ROOT)
                 .join(format!("{key_hex}.current")),
@@ -736,7 +745,9 @@ mod tests {
 
     fn payload_bytes(payload: &ResolvedArtifactPayload) -> Vec<u8> {
         match payload {
-            ResolvedArtifactPayload::File(path) => fs::read(path).expect("read file payload"),
+            ResolvedArtifactPayload::File(path) => {
+                kernal_api::platform::fs::read_file(path).expect("read file payload")
+            }
             ResolvedArtifactPayload::Bytes(bytes) => bytes.as_ref().clone(),
         }
     }
@@ -751,8 +762,12 @@ mod tests {
         let legacy_key = "1".repeat(64);
         let pack_key = "2".repeat(64);
         let staged_key = "3".repeat(64);
-        fs::write(root.path().join(format!("{legacy_key}_0")), b"legacy").expect("write legacy");
-        fs::write(
+        kernal_api::platform::fs::write_file(
+            root.path().join(format!("{legacy_key}_0")),
+            b"legacy",
+        )
+        .expect("write legacy");
+        kernal_api::platform::fs::write_file(
             root.path().join(format!("{pack_key}.pack")),
             build_pack(&[b"packed-a", b"packed-b"]),
         )
@@ -796,7 +811,7 @@ mod tests {
             .expect("second payload");
         assert_eq!(first, second);
         assert_eq!(
-            fs::read(&second[0]).expect("read output"),
+            kernal_api::platform::fs::read_file(&second[0]).expect("read output"),
             b"restart-readable"
         );
     }
@@ -806,7 +821,7 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let key = "b".repeat(64);
         let generation = seed_staged(root.path(), &key, &[b"valid"]);
-        fs::write(
+        kernal_api::platform::fs::write_file(
             root.path()
                 .join(STAGED_ROOT)
                 .join(&key)
@@ -815,7 +830,8 @@ mod tests {
             b"corrupt",
         )
         .expect("corrupt output");
-        fs::write(root.path().join(format!("{key}_0")), b"valid").expect("write legacy");
+        kernal_api::platform::fs::write_file(root.path().join(format!("{key}_0")), b"valid")
+            .expect("write legacy");
 
         let error = resolve_artifact_payloads(root.path(), &key, &[5], true, "test::corrupt")
             .expect_err("corrupt selected generation must be loud");
@@ -826,7 +842,7 @@ mod tests {
     fn rejects_incomplete_or_size_mismatched_pack() {
         let root = tempfile::tempdir().expect("tempdir");
         let key = "c".repeat(64);
-        fs::write(
+        kernal_api::platform::fs::write_file(
             root.path().join(format!("{key}.pack")),
             build_pack(&[b"only-one"]),
         )

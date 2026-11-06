@@ -1,0 +1,11 @@
+# Seeded mechanically from real runs of this lint over the workspace — the host
+# pass plus the Windows and macOS cross-target passes, iterating until a pass
+# reported no findings. One crates/... path per line.
+#
+# File-granular: a file leaves this list only when it names `std::fs` nowhere,
+# including `File` / `OpenOptions` / `Metadata` in signatures and imports. A
+# file whose calls are all on the facade but whose signature still hands out a
+# `std::fs::File` stays here.
+crates/zccache-artifact/src/staged_lock.rs
+crates/zccache-core/src/wait.rs
+crates/zccache-hash/src/native.rs

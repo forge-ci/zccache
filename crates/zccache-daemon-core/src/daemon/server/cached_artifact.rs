@@ -511,14 +511,15 @@ pub(super) fn migrate_meta_files(
     use rayon::prelude::*;
 
     // Collect .meta file paths first.
-    let meta_paths: Vec<NormalizedPath> = match std::fs::read_dir(artifact_dir) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|e| e.path().into())
-            .filter(|p: &NormalizedPath| p.extension().and_then(|e| e.to_str()) == Some("meta"))
-            .collect(),
-        Err(_) => return 0,
-    };
+    let meta_paths: Vec<NormalizedPath> =
+        match kernal_api::platform::fs::read_dir_paths(artifact_dir) {
+            Ok(paths) => paths
+                .into_iter()
+                .map(NormalizedPath::from)
+                .filter(|p: &NormalizedPath| p.extension().and_then(|e| e.to_str()) == Some("meta"))
+                .collect(),
+            Err(_) => return 0,
+        };
 
     if meta_paths.is_empty() {
         return 0;
@@ -529,7 +530,7 @@ pub(super) fn migrate_meta_files(
     let migrated: Vec<(String, CachedArtifact, NormalizedPath)> = meta_paths
         .par_iter()
         .filter_map(|path| {
-            let data = std::fs::read(path).ok()?;
+            let data = kernal_api::platform::fs::read_file(path).ok()?;
             let artifact = bincode::deserialize::<ArtifactData>(&data).ok()?;
             let stem: String = path
                 .file_stem()
@@ -565,7 +566,7 @@ pub(super) fn migrate_meta_files(
     for (stem, cached, meta_path) in migrated {
         store.insert(&stem, &cached.meta);
         artifacts.insert(stem, cached);
-        std::fs::remove_file(&meta_path).ok();
+        kernal_api::platform::fs::remove_file(&meta_path).ok();
     }
 
     if count > 0 {
@@ -598,7 +599,8 @@ mod tests {
         // pre-#1180 ad-hoc path formatting this test predates.
         let key = "1".repeat(64);
         let key = key.as_str();
-        std::fs::write(dir.path().join(format!("{key}_0")), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join(format!("{key}_0")), b"payload")
+            .unwrap();
         let cached = lazy_artifact(7);
         let owned_clone = cached.clone();
 
@@ -613,10 +615,10 @@ mod tests {
     fn provisional_staged_payload_owns_private_files_through_hit_delivery() {
         let dir = tempfile::tempdir().unwrap();
         let root: NormalizedPath = dir.path().join("private").into();
-        std::fs::create_dir_all(&root).unwrap();
+        kernal_api::platform::fs::create_dir_all(&root).unwrap();
         let staged: NormalizedPath = root.join("output.rlib");
         let requested: NormalizedPath = dir.path().join("requested.rlib").into();
-        std::fs::write(&staged, b"staged payload").unwrap();
+        kernal_api::platform::fs::write_file(&staged, b"staged payload").unwrap();
         let plan = Arc::new(StagedCompilePlan::for_test(
             root.clone(),
             vec![StagedOutputPlan {
@@ -651,7 +653,7 @@ mod tests {
             "the payload guard must retain the private plan after its artifact is replaced"
         );
         assert_eq!(
-            std::fs::read(match &payloads[0] {
+            kernal_api::platform::fs::read_file(match &payloads[0] {
                 CachedPayload::File(path) => path,
                 CachedPayload::Bytes(_) => panic!("provisional payload must stay path-backed"),
             })
@@ -715,7 +717,8 @@ mod tests {
         let cached = lazy_artifact(7);
 
         assert!(ensure_payloads_with_staged_policy(&cached, dir.path(), key, false).is_none());
-        std::fs::write(dir.path().join(format!("{key}_0")), b"payload").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join(format!("{key}_0")), b"payload")
+            .unwrap();
         assert!(ensure_payloads_with_staged_policy(&cached, dir.path(), key, false).is_some());
     }
 
@@ -732,7 +735,7 @@ mod tests {
         let artifact_dir = state.artifact_dir.clone();
         let source = dir.path().join("source.rlib");
         let bytes = b"shared staged materialization lock";
-        std::fs::write(&source, bytes).unwrap();
+        kernal_api::platform::fs::write_file(&source, bytes).unwrap();
         let key = "8".repeat(64);
         persist_staged_artifact_paths(&artifact_dir, &key, &[source.into()]).unwrap();
         let cached = lazy_artifact(bytes.len() as u64);
@@ -819,10 +822,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let artifact_dir = dir.path().join("artifacts");
-        std::fs::create_dir_all(&artifact_dir).unwrap();
+        kernal_api::platform::fs::create_dir_all(&artifact_dir).unwrap();
         let source = dir.path().join("source.rlib");
         let bytes = b"staged materialization ownership";
-        std::fs::write(&source, bytes).unwrap();
+        kernal_api::platform::fs::write_file(&source, bytes).unwrap();
         let key = "3".repeat(64);
         persist_staged_artifact_paths(&artifact_dir, &key, &[source.into()]).unwrap();
         let cached = lazy_artifact(bytes.len() as u64);
@@ -862,7 +865,10 @@ mod tests {
             MaterializationMode::Auto,
         )
         .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&destination).unwrap(),
+            bytes
+        );
 
         drop(payloads);
         clear_done_rx
@@ -884,15 +890,15 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let artifact_dir = dir.path().join("artifacts");
-        std::fs::create_dir_all(&artifact_dir).unwrap();
+        kernal_api::platform::fs::create_dir_all(&artifact_dir).unwrap();
         let source = dir.path().join("source.rmeta");
         let bytes = b"snapshot eviction ownership";
-        std::fs::write(&source, bytes).unwrap();
+        kernal_api::platform::fs::write_file(&source, bytes).unwrap();
         let key = "6".repeat(64);
         persist_staged_artifact_paths(&artifact_dir, &key, &[source.into()]).unwrap();
         let cached = lazy_artifact(bytes.len() as u64);
         let payloads = ensure_payloads_for_materialization(&cached, &artifact_dir, &key).unwrap();
-        let generation = std::fs::read_to_string(
+        let generation = kernal_api::platform::fs::read_to_string(
             artifact_dir
                 .join(".staged-v2")
                 .join(format!("{key}.current")),
@@ -925,7 +931,10 @@ mod tests {
             MaterializationMode::Auto,
         )
         .unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(&destination).unwrap(),
+            bytes
+        );
         drop(payloads);
 
         let removed = eviction_done_rx
@@ -940,10 +949,10 @@ mod tests {
     fn non_staged_payloads_do_not_take_the_staged_store_lock() {
         let dir = tempfile::tempdir().unwrap();
         let artifact_dir = dir.path().join("artifacts");
-        std::fs::create_dir_all(&artifact_dir).unwrap();
+        kernal_api::platform::fs::create_dir_all(&artifact_dir).unwrap();
         let key = "4".repeat(64);
         let legacy = artifact_dir.join(format!("{key}_0"));
-        std::fs::write(&legacy, b"legacy").unwrap();
+        kernal_api::platform::fs::write_file(&legacy, b"legacy").unwrap();
         let cached = lazy_artifact(6);
 
         let payloads = ensure_payloads_for_materialization(&cached, &artifact_dir, &key).unwrap();

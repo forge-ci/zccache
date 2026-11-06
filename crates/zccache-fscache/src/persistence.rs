@@ -150,7 +150,7 @@ impl MetadataCache {
             .map_err(|e| std::io::Error::other(format!("bincode serialize: {e}")))?;
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            kernal_api::platform::fs::create_dir_all(parent)?;
         }
         let name = path
             .file_name()
@@ -164,7 +164,7 @@ impl MetadataCache {
 
         let result = write_atomic_durable(&tmp, path, &bytes);
         if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = kernal_api::platform::fs::remove_file(&tmp);
         }
         if result.is_ok() {
             tracing::info!(
@@ -201,7 +201,7 @@ impl MetadataCache {
     /// Any I/O error other than `NotFound` from reading `path`, any
     /// bincode decode failure, or any version mismatch.
     pub fn load_from_disk(path: &Path) -> std::io::Result<Self> {
-        let bytes = match std::fs::read(path) {
+        let bytes = match kernal_api::platform::fs::read_file(path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::info!(
@@ -259,15 +259,13 @@ impl MetadataCache {
 /// the metadata rename itself, which is already atomic.
 fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
-        let mut f = std::fs::File::create(tmp)?;
+        let mut f = kernal_api::platform::fs::create_file(tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(tmp, target)?;
+    kernal_api::platform::fs::rename(tmp, target)?;
     if let Some(parent) = target.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        let _ = kernal_api::platform::fs::sync_directory(parent);
     }
     Ok(())
 }
@@ -294,7 +292,6 @@ impl PersistIter for MetadataCache {
 mod tests {
     use super::super::metadata::Confidence;
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     fn populated_cache() -> MetadataCache {
@@ -397,7 +394,7 @@ mod tests {
     fn load_corrupt_file_returns_err() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("metadata.bin");
-        fs::write(&path, b"this is not bincode").unwrap();
+        kernal_api::platform::fs::write_file(&path, b"this is not bincode").unwrap();
 
         let result = MetadataCache::load_from_disk(&path);
         assert!(result.is_err());
@@ -414,7 +411,7 @@ mod tests {
             entries: vec![],
         };
         let bytes = bincode::serialize(&bad).unwrap();
-        fs::write(&path, &bytes).unwrap();
+        kernal_api::platform::fs::write_file(&path, &bytes).unwrap();
 
         let result = MetadataCache::load_from_disk(&path);
         assert!(result.is_err(), "wrong version must surface as an error");
@@ -428,10 +425,11 @@ mod tests {
         populated_cache().save_to_disk(&path).unwrap();
 
         // Scan the directory: only the final file should be present.
-        let entries: Vec<_> = fs::read_dir(dir.path())
+        let entries: Vec<_> = kernal_api::platform::fs::read_dir_paths(dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
             .collect();
         assert!(entries.iter().any(|n| n == "metadata.bin"));
         assert!(

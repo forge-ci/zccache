@@ -86,7 +86,7 @@ impl ArtifactStoreLegacy {
     ///
     /// Creates the cache directory if it does not exist.
     pub fn open(config: ArtifactStoreConfig) -> zccache_core::Result<Self> {
-        std::fs::create_dir_all(&config.cache_dir)?;
+        zccache_core::config::create_dir_all_private(config.cache_dir.as_path())?;
         Ok(Self { config })
     }
 

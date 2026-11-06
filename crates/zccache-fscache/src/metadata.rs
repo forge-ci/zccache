@@ -363,7 +363,7 @@ impl MetadataCache {
         };
 
         // One stat syscall to verify mtime + size still match.
-        let fs_meta = std::fs::metadata(path).ok()?;
+        let fs_meta = kernal_api::platform::fs::path_metadata(path).ok()?;
         let mtime = fs_meta.modified().ok()?;
         let size = fs_meta.len();
         if mtimes_match(recorded_mtime, mtime) && recorded_size == size {
@@ -520,7 +520,6 @@ mod tests {
     use super::*;
     use kernal_api::platform::fs::{set_file_mtime, FileTime};
     use std::collections::HashSet;
-    use std::fs;
 
     // ── mtime tolerance (issue #469) ─────────────────────────────────────
 
@@ -592,7 +591,7 @@ mod tests {
     fn stat_fast_path_rejects_same_size_fine_grained_mtime_change() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("input.c");
-        fs::write(&file, b"old!").unwrap();
+        kernal_api::platform::fs::write_file(&file, b"old!").unwrap();
 
         let cached_mtime = ts(1_000, 100_000_000);
         let fresh_mtime = ts(1_000, 500_000_000);
@@ -621,7 +620,7 @@ mod tests {
     fn stat_fast_path_accepts_archive_truncated_mtime() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("input.c");
-        fs::write(&file, b"same").unwrap();
+        kernal_api::platform::fs::write_file(&file, b"same").unwrap();
 
         let cached_mtime = ts(1_000, 141_490_982);
         set_file_mtime(&file, FileTime::from_system_time(ts(1_000, 0))).unwrap();

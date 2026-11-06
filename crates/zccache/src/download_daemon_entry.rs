@@ -55,27 +55,40 @@ fn query_daemon_status(endpoint: &str) -> Result<crate::download::DownloadDaemon
         .enable_all()
         .build()
         .map_err(|e| format!("failed to create runtime: {e}"))?;
-    rt.run(async {
-        let mut conn = crate::ipc::connect(endpoint)
-            .await
-            .map_err(|e| format!("download daemon not running at {endpoint}: {e}"))?;
-        let frame = crate::download_protocol::encode_message(&Request::Status)
-            .map_err(|error| format!("failed to encode download status request: {error}"))?;
-        conn.send_opaque_bytes(&frame)
-            .await
-            .map_err(|e| format!("failed to query download daemon: {e}"))?;
-        match conn
-            .recv_opaque_with(crate::download_protocol::decode_message::<Response>)
-            .await
-        {
-            Ok(Some(Response::Status(status))) => Ok(status),
-            Ok(Some(Response::Error { message })) => Err(message),
-            Ok(Some(other)) => Err(format!("unexpected response: {other:?}")),
-            Ok(None) => Err("download daemon closed connection unexpectedly".to_string()),
-            Err(e) => Err(format!("broken connection to download daemon: {e}")),
-        }
-    })
+    // A status roundtrip is a short IPC exchange; an unresponsive endpoint is
+    // reported as "not running" instead of blocking the command (#433).
+    rt.run_within(
+        async {
+            let mut conn = crate::ipc::connect(endpoint)
+                .await
+                .map_err(|e| format!("download daemon not running at {endpoint}: {e}"))?;
+            let frame = crate::download_protocol::encode_message(&Request::Status)
+                .map_err(|error| format!("failed to encode download status request: {error}"))?;
+            conn.send_opaque_bytes(&frame)
+                .await
+                .map_err(|e| format!("failed to query download daemon: {e}"))?;
+            match conn
+                .recv_opaque_with(crate::download_protocol::decode_message::<Response>)
+                .await
+            {
+                Ok(Some(Response::Status(status))) => Ok(status),
+                Ok(Some(Response::Error { message })) => Err(message),
+                Ok(Some(other)) => Err(format!("unexpected response: {other:?}")),
+                Ok(None) => Err("download daemon closed connection unexpectedly".to_string()),
+                Err(e) => Err(format!("broken connection to download daemon: {e}")),
+            }
+        },
+        STATUS_QUERY_WITHIN,
+    )
+    .map_err(|error| format!("download daemon status query expired: {error}"))?
 }
+
+/// One status roundtrip against a live download endpoint (#433).
+const STATUS_QUERY_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The download daemon serves until its supervisor or the host stops it; a
+/// representable finite cap keeps the runtime wait bounded (#433).
+const SERVICE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
 
 fn run_server(args: Args) {
     let endpoint = args.endpoint.unwrap_or_else(daemon_mgmt::default_endpoint);
@@ -92,48 +105,66 @@ fn run_server(args: Args) {
         .enable_all()
         .build()
         .expect("failed to create runtime");
-    rt.run(async move {
-        let bind_endpoint = endpoint.clone();
-        let bind_result = kernal_api::async_engine::launch_blocking(move || {
-            crate::download_daemon::DownloadDaemon::bind(&bind_endpoint)
-        })
-        .await;
-        let mut server = match bind_result {
-            Ok(Ok(server)) => server,
-            Ok(Err(err)) => {
-                eprintln!("failed to bind download daemon at {endpoint}: {err}");
+    // The serve loop is the download daemon's whole lifetime; expiry exits for
+    // a supervisor restart instead of hanging in a wedged loop (#433).
+    let restart_endpoint = endpoint.clone();
+    if rt
+        .run_within(
+            async move {
+                let bind_endpoint = endpoint.clone();
+                let bind_result = kernal_api::async_engine::launch_blocking(move || {
+                    crate::download_daemon::DownloadDaemon::bind(&bind_endpoint)
+                })
+                .await;
+                let mut server = match bind_result {
+                    Ok(Ok(server)) => server,
+                    Ok(Err(err)) => {
+                        eprintln!("failed to bind download daemon at {endpoint}: {err}");
+                        daemon_mgmt::remove_lock_file();
+                        std::process::exit(1);
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "failed to join download daemon bind worker for {endpoint}: {err}"
+                        );
+                        daemon_mgmt::remove_lock_file();
+                        std::process::exit(1);
+                    }
+                };
+                let shutdown = server.shutdown_handle();
+                // `detach` is required, not decoration: unlike `tokio::spawn`, the
+                // facade's `Task` aborts on drop, and this handle is dropped
+                // immediately. Without it the listener dies before it ever sees a
+                // signal.
+                //
+                // `tokio::signal` is the one thing here with no facade equivalent
+                // (kernal-api#69): the facade can await a task, a deadline or a
+                // cancellation token, but not a signal. It is why `tokio` is still a
+                // production dependency of this crate.
+                kernal_api::async_engine::launch(async move {
+                    if let Ok(()) = tokio::signal::ctrl_c().await {
+                        shutdown.notify_waiters();
+                    }
+                })
+                .detach();
+                if let Err(err) = server.run().await {
+                    eprintln!("download daemon error: {err}");
+                    daemon_mgmt::remove_lock_file();
+                    std::process::exit(1);
+                }
                 daemon_mgmt::remove_lock_file();
-                std::process::exit(1);
-            }
-            Err(err) => {
-                eprintln!("failed to join download daemon bind worker for {endpoint}: {err}");
-                daemon_mgmt::remove_lock_file();
-                std::process::exit(1);
-            }
-        };
-        let shutdown = server.shutdown_handle();
-        // `detach` is required, not decoration: unlike `tokio::spawn`, the
-        // facade's `Task` aborts on drop, and this handle is dropped
-        // immediately. Without it the listener dies before it ever sees a
-        // signal.
-        //
-        // `tokio::signal` is the one thing here with no facade equivalent
-        // (kernal-api#69): the facade can await a task, a deadline or a
-        // cancellation token, but not a signal. It is why `tokio` is still a
-        // production dependency of this crate.
-        kernal_api::async_engine::launch(async move {
-            if let Ok(()) = tokio::signal::ctrl_c().await {
-                shutdown.notify_waiters();
-            }
-        })
-        .detach();
-        if let Err(err) = server.run().await {
-            eprintln!("download daemon error: {err}");
-            daemon_mgmt::remove_lock_file();
-            std::process::exit(1);
-        }
+            },
+            SERVICE_LIFETIME,
+        )
+        .is_err()
+    {
+        tracing::error!(
+            endpoint = %restart_endpoint,
+            "download daemon service lifetime expired; exiting for restart"
+        );
         daemon_mgmt::remove_lock_file();
-    });
+        std::process::exit(1);
+    }
 }
 
 fn init_tracing(level: &str) {

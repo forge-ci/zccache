@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, deprecated)]
 use kernal_api::platform::process::{foreground_output as capture, DaemonChild, SpawnedChild};
 fn bypass(command: &mut std::process::Command, daemon: &mut DaemonChild, child: &mut SpawnedChild) {
     let _ = capture(command);

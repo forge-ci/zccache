@@ -31,13 +31,18 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     let dep_graph_contexts_cleared = state.dep_graph.load().stats().context_count as u64;
 
     // Calculate on-disk artifact size before deleting.
-    let mut on_disk_bytes_freed = match std::fs::read_dir(&state.artifact_dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.metadata().ok().map(|m| m.len()))
-            .sum(),
-        Err(_) => 0,
-    };
+    let mut on_disk_bytes_freed =
+        match kernal_api::platform::fs::read_dir_paths(&state.artifact_dir) {
+            Ok(paths) => paths
+                .iter()
+                .filter_map(|path| {
+                    kernal_api::platform::fs::path_metadata(path)
+                        .ok()
+                        .map(|m| m.len())
+                })
+                .sum(),
+            Err(_) => 0,
+        };
     match state
         .exec_store
         .namespace_bytes_async(handle_exec_probe::EXEC_PROBE_NAMESPACE)
@@ -91,11 +96,10 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
         Ok(bytes) => on_disk_bytes_freed = on_disk_bytes_freed.saturating_add(bytes),
         Err(error) => tracing::warn!(%error, "failed to clear staged artifact generations"),
     }
-    if let Ok(entries) = std::fs::read_dir(&state.artifact_dir) {
+    if let Ok(entries) = kernal_api::platform::fs::read_dir_paths(&state.artifact_dir) {
         use rayon::prelude::*;
         let paths: Vec<_> = entries
-            .flatten()
-            .map(|e| e.path())
+            .into_iter()
             .filter(|path| !is_staged_artifact_root(path))
             .collect();
         paths.par_iter().for_each(|p| {
@@ -125,10 +129,11 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
             "metadata cache save during Clear failed: {e}"
         );
     }
-    let _ = std::fs::remove_file(state.metadata_path.as_path());
+    let _ = kernal_api::platform::fs::remove_file(state.metadata_path.as_path());
 
     // Delete on-disk depgraph snapshot.
-    let _ = std::fs::remove_file(depgraph_file_path_for_cache_dir(&state.cache_dir));
+    let _ =
+        kernal_api::platform::fs::remove_file(depgraph_file_path_for_cache_dir(&state.cache_dir));
 
     // Purge the CLI-side meson-configure cache (issue #710). The daemon
     // does not write this directory itself — `zccache meson configure`
@@ -138,7 +143,7 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     // on the next configure-cache hit. Best-effort: silently skip if the
     // directory does not exist.
     if let Some(cache_root) = state.artifact_dir.parent() {
-        let _ = std::fs::remove_dir_all(cache_root.join("meson-configure"));
+        let _ = kernal_api::platform::fs::remove_dir_all(cache_root.join("meson-configure"));
     }
 
     tracing::info!(

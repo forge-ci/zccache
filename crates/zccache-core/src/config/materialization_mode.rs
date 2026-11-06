@@ -128,7 +128,7 @@ impl MaterializationMode {
         destination: &std::path::Path,
     ) -> std::io::Result<u64> {
         if self != Self::Copy {
-            return std::fs::copy(source, destination);
+            return kernal_api::platform::fs::copy(source, destination);
         }
         byte_copy(source, destination)
     }
@@ -136,41 +136,33 @@ impl MaterializationMode {
 
 /// COPY's copy tier: every byte through userspace, no `copy_file_range`.
 fn byte_copy(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<u64> {
-    let mut reader = std::fs::File::open(source)?;
-    let metadata = reader.metadata()?;
-    let writer = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
-    // Only a file this call created is removed on failure.
-    let result = fill(&mut reader, writer, &metadata, destination);
-    if result.is_err() {
-        let _ = std::fs::remove_file(destination);
-    }
-    result
-}
-
-fn fill(
-    reader: &mut std::fs::File,
-    mut writer: std::fs::File,
-    metadata: &std::fs::Metadata,
-    destination: &std::path::Path,
-) -> std::io::Result<u64> {
     use std::io::{Read, Write};
+
+    let mut reader = kernal_api::platform::fs::open_read_regular_file(source)?;
+    let metadata = reader.metadata()?;
+    // `create_private_file` is create-new: only a file this call created is
+    // removed on failure. The source's permissions are applied below, so the
+    // private creation mode never survives a successful copy.
+    let mut writer = kernal_api::platform::fs::create_private_file(destination)?;
     let mut buffer = vec![0_u8; 256 * 1024];
     let mut copied = 0_u64;
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
+    let result = (|| -> std::io::Result<()> {
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            writer.write_all(&buffer[..read])?;
+            copied += read as u64;
         }
-        writer.write_all(&buffer[..read])?;
-        copied += read as u64;
-    }
-    writer.flush()?;
+        writer.flush()?;
+        kernal_api::platform::fs::set_permissions(destination, metadata.permissions())
+    })();
     drop(writer);
-    std::fs::set_permissions(destination, metadata.permissions())?;
-    Ok(copied)
+    if result.is_err() {
+        let _ = kernal_api::platform::fs::remove_file(destination);
+    }
+    result.map(|()| copied)
 }
 
 impl fmt::Display for MaterializationMode {

@@ -33,8 +33,11 @@ pub(super) fn cache_staged_directory_link(
             return materialize_directory_plan_observed(state, plan, None);
         }
     };
-    let bytes = match std::fs::read(plan.archive_path()) {
-        Ok(bytes) => bytes,
+    let bytes = match kernal_api::platform::fs::read_context_regular_file_bounded(
+        plan.archive_path(),
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    ) {
+        Ok(observation) => observation.bytes,
         Err(error) => {
             tracing::warn!(%error, "failed to read staged directory bundle");
             return materialize_directory_plan_observed(state, plan, None);

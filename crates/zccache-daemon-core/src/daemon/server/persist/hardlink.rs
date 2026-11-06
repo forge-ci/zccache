@@ -26,7 +26,7 @@ pub(in crate::daemon::server) fn remove_output_file(path: &Path) -> std::io::Res
             ));
         }
     }
-    std::fs::remove_file(path)
+    kernal_api::platform::fs::remove_file(path)
 }
 
 fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -42,7 +42,7 @@ fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
             ));
         }
     }
-    std::fs::rename(from, to)
+    kernal_api::platform::fs::rename(from, to)
 }
 
 #[cfg(test)]
@@ -66,7 +66,7 @@ pub(in crate::daemon::server) fn fail_detach_rename_for_test(path: &Path) {
 pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
     path: &Path,
 ) -> std::io::Result<()> {
-    match std::fs::metadata(path) {
+    match kernal_api::platform::fs::path_metadata(path) {
         Ok(meta) if meta.is_file() => {}
         Ok(_) => return Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -95,17 +95,14 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
             ".zccache-detach-{pid}-{nonce}-{attempt}-{file_name}"
         ));
         let copy_result = (|| {
-            let mut src = std::fs::File::open(path)?;
-            let mut dst = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp_path)?;
+            let mut src = kernal_api::platform::fs::open_read_regular_file(path)?;
+            let mut dst = kernal_api::platform::fs::create_private_file(&tmp_path)?;
             std::io::copy(&mut src, &mut dst)?;
             // No sync: this private copy replaces a build output that the
             // compiler or tool rewrites next, and compilers never fsync their
             // outputs. The rename below is what readers must not observe torn.
             let permissions = src.metadata()?.permissions();
-            std::fs::set_permissions(&tmp_path, permissions)?;
+            kernal_api::platform::fs::set_permissions(&tmp_path, permissions)?;
             Ok::<(), std::io::Error>(())
         })();
 
@@ -113,7 +110,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
             Ok(()) => {
                 let registration = prepare_registered_detach(path);
                 if let Err(error) = crate::platform::fs::permissions::make_writable(path) {
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(error);
                 }
                 if let Err(e) = remove_output_file(path) {
@@ -123,7 +120,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                             readonly_enabled(),
                         );
                     }
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(e);
                 }
                 if let Err(e) = rename_detached_output(&tmp_path, path) {
@@ -134,7 +131,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                         );
                         commit_registered_detach(*id, path);
                     }
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                     return Err(e);
                 }
                 if let Some((id, _)) = &registration {
@@ -153,7 +150,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
                 last_err = Some(e);
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp_path);
+                let _ = kernal_api::platform::fs::remove_file(&tmp_path);
                 return Err(e);
             }
         }

@@ -11,7 +11,7 @@ description = "Download engine and shared download types for zccache"
 publish = false
 
 [dependencies]
-kernal-api = { workspace = true }
+kernal-api = { workspace = true, features = ["fs"] }
 zccache-core = { workspace = true }
 
 reqwest = { workspace = true }

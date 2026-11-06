@@ -36,6 +36,10 @@ fn select_endpoint(file_path: String, pipe_name: String) -> String {
     }
 }
 
+/// Largest lock file body the PID read will allocate: a decimal `u32` plus
+/// whitespace is far smaller, and the facade refuses an unbounded context read.
+const LOCK_FILE_MAX_BYTES: usize = 4 * 1024;
+
 /// Path to the daemon PID lock file.
 pub fn lock_file_path() -> NormalizedPath {
     zccache_core::config::daemon_state_dir().join("download-daemon.lock")
@@ -45,21 +49,28 @@ pub fn lock_file_path() -> NormalizedPath {
 pub fn write_lock_file(pid: u32) -> Result<(), std::io::Error> {
     let path = lock_file_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, pid.to_string())
+    kernal_api::platform::fs::write_file(path.as_path(), pid.to_string().as_bytes())
 }
 
 /// Remove the daemon lock file (best-effort).
 pub fn remove_lock_file() {
-    let _ = std::fs::remove_file(lock_file_path());
+    let _ = kernal_api::platform::fs::remove_file(lock_file_path().as_path());
 }
 
 /// Read the PID stored in the daemon lock file, if it exists and is valid.
 pub fn read_lock_file_pid() -> Option<u32> {
-    std::fs::read_to_string(lock_file_path())
+    let observation = kernal_api::platform::fs::read_context_regular_file_bounded(
+        lock_file_path().as_path(),
+        LOCK_FILE_MAX_BYTES,
+    )
+    .ok()?;
+    std::str::from_utf8(observation.bytes.as_slice())
+        .ok()?
+        .trim()
+        .parse::<u32>()
         .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
 }
 
 #[cfg(test)]

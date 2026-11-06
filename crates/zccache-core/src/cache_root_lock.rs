@@ -44,13 +44,9 @@ impl CacheRootWriterLock {
     pub fn acquire(cache_dir: &Path) -> std::io::Result<Self> {
         use std::io::Write;
 
-        std::fs::create_dir_all(cache_dir)?;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(cache_dir.join(CACHE_ROOT_WRITER_LOCK_FILE))?;
+        crate::config::create_dir_all_private(cache_dir)?;
+        let file =
+            kernal_api::platform::fs::open_lock_file(&cache_dir.join(CACHE_ROOT_WRITER_LOCK_FILE))?;
         let Ok(lock) = kernal_api::platform::fs::try_lock_exclusive_owned(file) else {
             crate::lifecycle::write_event_in_cache_root(
                 cache_dir,

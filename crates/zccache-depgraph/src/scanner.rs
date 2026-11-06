@@ -92,15 +92,22 @@ impl RecursiveScanCache {
     /// Returns `None` if the file cannot be read (any stale entry is removed).
     fn get_or_scan(&self, file: &Path) -> Option<Arc<Vec<IncludeDirective>>> {
         let key = NormalizedPath::from(file);
-        let meta = match std::fs::metadata(file) {
-            Ok(meta) => meta,
+        let observed = match kernal_api::platform::fs::context_path_metadata_no_follow(file) {
+            Ok(observed) => observed,
             Err(_) => {
                 self.directives.remove(&key);
                 return None;
             }
         };
-        let size = meta.len();
-        let mtime = meta.modified().ok();
+        let (Some(size), Some(mtime)) = (observed.len, observed.modified) else {
+            // A link or non-regular entry has no length of its own, and a
+            // filesystem may report no modification time. Neither gives a
+            // stable validation key, so parse fresh and store nothing rather
+            // than serving a cache entry that can never be revalidated.
+            self.directives.remove(&key);
+            return scan_includes(file).ok().map(Arc::new);
+        };
+        let mtime = Some(mtime);
         if let Some(entry) = self.directives.get(&key) {
             if entry.size == size && entry.mtime == mtime {
                 return Some(Arc::clone(&entry.directives));
@@ -176,7 +183,14 @@ pub fn scan_includes_str(source: &str) -> Vec<IncludeDirective> {
 ///
 /// Returns an error if the file cannot be read.
 pub fn scan_includes(path: &Path) -> std::io::Result<Vec<IncludeDirective>> {
-    let source = std::fs::read_to_string(path)?;
+    let source = kernal_api::platform::fs::read_context_regular_file_bounded(
+        path,
+        kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+    )
+    .and_then(|observed| {
+        String::from_utf8(observed.bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })?;
     Ok(scan_includes_str(&source))
 }
 

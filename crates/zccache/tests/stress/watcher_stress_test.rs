@@ -255,10 +255,15 @@ fn stress_settle_buffer_high_throughput() {
         // Collect all settled batches.
         let mut total_changed = 0;
         let mut batch_count = 0;
-        while let Some(event) = settled_rx.recv().await {
-            if let SettledEvent::Batch { changed, .. } = event {
-                total_changed += changed.len();
-                batch_count += 1;
+        loop {
+            match settled_rx.recv_within(Duration::from_secs(5)).await {
+                Ok(SettledEvent::Batch { changed, .. }) => {
+                    total_changed += changed.len();
+                    batch_count += 1;
+                }
+                Ok(_) => {}
+                Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+                Err(error) => panic!("settle stream stalled: {error}"),
             }
         }
 
@@ -580,10 +585,10 @@ fn integration_full_pipeline() {
         fs::write(&path_a, "file a modified").unwrap();
 
         // Wait for settled event (with timeout).
-        let settled = tokio::time::timeout(Duration::from_secs(5), settled_rx.recv()).await;
+        let settled = settled_rx.recv_within(Duration::from_secs(5)).await;
 
         match settled {
-            Ok(Some(SettledEvent::Batch { changed, removed })) => {
+            Ok(SettledEvent::Batch { changed, removed }) => {
                 // The batch should contain our modified file.
                 let changed_names: Vec<String> = changed
                     .iter()
@@ -608,13 +613,15 @@ fn integration_full_pipeline() {
                 let result_b = cache.lookup_since(&path_b, c).unwrap();
                 assert_eq!(result_b.hash, zccache::hash::hash_bytes(b"file b"));
             }
-            Ok(Some(SettledEvent::Overflow)) => {
+            Ok(SettledEvent::Overflow) => {
                 // Overflow is acceptable — just verify cache still works.
                 cache.apply_overflow();
                 let result = cache.lookup_since(&path_a, Clock::ZERO).unwrap();
                 assert_eq!(result.hash, zccache::hash::hash_bytes(b"file a modified"));
             }
-            Ok(None) => panic!("settle channel closed unexpectedly"),
+            Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => {
+                panic!("settle channel closed unexpectedly")
+            }
             Err(_) => {
                 // Timeout — watcher may not have picked up the change.
                 // This can happen on some CI environments. Mark as soft failure.

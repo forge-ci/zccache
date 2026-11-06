@@ -53,9 +53,9 @@ pub enum SideEffectScan {
 }
 
 fn stable_file_entry(path: &Path) -> std::io::Result<FileEntry> {
-    let before = std::fs::metadata(path)?;
+    let before = kernal_api::platform::fs::path_metadata(path)?;
     let content_hash = hash_file(path)?;
-    let after = std::fs::metadata(path)?;
+    let after = kernal_api::platform::fs::path_metadata(path)?;
     let before_modified = before.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let after_modified = after.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     if before.len() != after.len() || before_modified != after_modified {
@@ -89,20 +89,20 @@ pub fn snapshot_directory_excluding(
     excluded_names: &HashSet<std::ffi::OsString>,
 ) -> std::io::Result<DirSnapshot> {
     let mut snap = DirSnapshot::default();
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match kernal_api::platform::fs::read_dir_paths(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(snap),
         Err(error) => return Err(error),
     };
-    for entry in entries {
-        let entry = entry?;
-        if excluded_names.contains(&entry.file_name()) {
+    for path in entries {
+        let Some(name) = path.file_name().map(std::ffi::OsStr::to_os_string) else {
+            continue;
+        };
+        if excluded_names.contains(&name) {
             continue;
         }
-        if entry.metadata()?.is_file() {
-            let path = entry.path();
-            snap.entries
-                .insert(entry.file_name(), stable_file_entry(&path)?);
+        if kernal_api::platform::fs::path_metadata(&path)?.is_file() {
+            snap.entries.insert(name, stable_file_entry(&path)?);
         }
     }
     Ok(snap)
@@ -118,19 +118,19 @@ pub fn detect_side_effects(
 ) -> std::io::Result<SideEffectScan> {
     let mut results = Vec::new();
 
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for path in kernal_api::platform::fs::read_dir_paths(dir)? {
+        let Some(name) = path.file_name().map(std::ffi::OsStr::to_os_string) else {
+            continue;
+        };
 
         // Skip the primary output and already-captured secondaries.
         if name == primary_name || already_captured.contains(&name) {
             continue;
         }
 
-        if !entry.metadata()?.is_file() {
+        if !kernal_api::platform::fs::path_metadata(&path)?.is_file() {
             continue;
         }
-        let path = entry.path();
         let current = stable_file_entry(&path)?;
 
         // Strong content identity catches same-size changes on filesystems
@@ -172,7 +172,6 @@ pub fn detect_side_effects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     fn snapshot(dir: &Path) -> DirSnapshot {
@@ -194,7 +193,8 @@ mod tests {
         let snap = snapshot(dir.path());
 
         // Simulate linker deploying a DLL after the snapshot.
-        fs::write(dir.path().join("asan_runtime.dll"), b"fake dll").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("asan_runtime.dll"), b"fake dll")
+            .unwrap();
 
         let found = complete(
             detect_side_effects(&snap, dir.path(), OsStr::new("app.exe"), &HashSet::new()).unwrap(),
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn preexisting_dll_not_detected() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("existing.dll"), b"old dll").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("existing.dll"), b"old dll").unwrap();
 
         let snap = snapshot(dir.path());
 
@@ -224,7 +224,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let snap = snapshot(dir.path());
 
-        fs::write(dir.path().join("app.dll"), b"primary").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("app.dll"), b"primary").unwrap();
 
         let found = complete(
             detect_side_effects(&snap, dir.path(), OsStr::new("app.dll"), &HashSet::new()).unwrap(),
@@ -238,7 +238,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let snap = snapshot(dir.path());
 
-        fs::write(dir.path().join("foo.dll"), b"secondary").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("foo.dll"), b"secondary").unwrap();
 
         let mut captured = HashSet::new();
         captured.insert(std::ffi::OsString::from("foo.dll"));
@@ -254,12 +254,12 @@ mod tests {
     fn declared_sibling_input_is_excluded_from_both_scans() {
         let dir = TempDir::new().unwrap();
         let input = dir.path().join("input.o");
-        fs::write(&input, b"old input").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"old input").unwrap();
         let ignored = HashSet::from([std::ffi::OsString::from("input.o")]);
         let snap = snapshot_directory_excluding(dir.path(), &ignored).unwrap();
 
-        fs::write(&input, b"new input").unwrap();
-        fs::write(dir.path().join("runtime.dll"), b"runtime").unwrap();
+        kernal_api::platform::fs::write_file(&input, b"new input").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("runtime.dll"), b"runtime").unwrap();
 
         let found = complete(
             detect_side_effects(&snap, dir.path(), OsStr::new("app.exe"), &ignored).unwrap(),
@@ -273,9 +273,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let snap = snapshot(dir.path());
 
-        fs::write(dir.path().join("debug.pdb"), b"pdb data").unwrap();
-        fs::write(dir.path().join("build.log"), b"log data").unwrap();
-        fs::write(dir.path().join("output.obj"), b"obj data").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("debug.pdb"), b"pdb data").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("build.log"), b"log data").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("output.obj"), b"obj data").unwrap();
 
         let found = complete(
             detect_side_effects(&snap, dir.path(), OsStr::new("app.exe"), &HashSet::new()).unwrap(),
@@ -295,7 +295,7 @@ mod tests {
 
         // Create a file exceeding MAX_SIDE_EFFECT_SIZE (use sparse-like approach).
         let big_path = dir.path().join("huge.dll");
-        let f = fs::File::create(&big_path).unwrap();
+        let f = kernal_api::platform::fs::create_file(&big_path).unwrap();
         f.set_len(MAX_SIDE_EFFECT_SIZE + 1).unwrap();
 
         let found =
@@ -310,7 +310,8 @@ mod tests {
         let snap = snapshot(dir.path());
 
         for i in 0..15 {
-            fs::write(dir.path().join(format!("lib{i}.dll")), b"dll").unwrap();
+            kernal_api::platform::fs::write_file(dir.path().join(format!("lib{i}.dll")), b"dll")
+                .unwrap();
         }
 
         let found =
@@ -328,12 +329,13 @@ mod tests {
     #[test]
     fn changed_dll_detected() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("runtime.dll"), b"v1").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("runtime.dll"), b"v1").unwrap();
 
         let snap = snapshot(dir.path());
 
         // Overwrite with different content (different size → detected).
-        fs::write(dir.path().join("runtime.dll"), b"version2-longer").unwrap();
+        kernal_api::platform::fs::write_file(dir.path().join("runtime.dll"), b"version2-longer")
+            .unwrap();
 
         let found = complete(
             detect_side_effects(&snap, dir.path(), OsStr::new("app.exe"), &HashSet::new()).unwrap(),
@@ -347,12 +349,12 @@ mod tests {
     fn same_size_same_mtime_rewrite_is_detected() {
         let dir = TempDir::new().unwrap();
         let runtime = dir.path().join("runtime.dll");
-        fs::write(&runtime, b"v1").unwrap();
+        kernal_api::platform::fs::write_file(&runtime, b"v1").unwrap();
         let fixed_mtime = kernal_api::platform::fs::FileTime::from_unix_time(1_700_000_000, 0);
         kernal_api::platform::fs::set_file_mtime(&runtime, fixed_mtime).unwrap();
         let snap = snapshot(dir.path());
 
-        fs::write(&runtime, b"v2").unwrap();
+        kernal_api::platform::fs::write_file(&runtime, b"v2").unwrap();
         kernal_api::platform::fs::set_file_mtime(&runtime, fixed_mtime).unwrap();
 
         let found = complete(

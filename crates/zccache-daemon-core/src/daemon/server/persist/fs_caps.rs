@@ -186,7 +186,7 @@ fn probe_caps(src: &Path, dst: &Path) -> VolumeCaps {
     let Some(parent) = dst.parent() else {
         return VolumeCaps::copy_only();
     };
-    if std::fs::create_dir_all(parent).is_err() {
+    if kernal_api::platform::fs::create_dir_all(parent).is_err() {
         return VolumeCaps::copy_only();
     }
     let nonce = format!(
@@ -197,9 +197,9 @@ fn probe_caps(src: &Path, dst: &Path) -> VolumeCaps {
     let reflink_probe = parent.join(format!(".zccache-reflink-probe-{nonce}"));
     let hardlink_probe = parent.join(format!(".zccache-hardlink-probe-{nonce}"));
     let reflink = kernal_api::platform::fs::reflink_file(src, &reflink_probe).is_ok();
-    let _ = std::fs::remove_file(&reflink_probe);
-    let hardlink = std::fs::hard_link(src, &hardlink_probe).is_ok();
-    let _ = std::fs::remove_file(&hardlink_probe);
+    let _ = kernal_api::platform::fs::remove_file(&reflink_probe);
+    let hardlink = kernal_api::platform::fs::hard_link(src, &hardlink_probe).is_ok();
+    let _ = kernal_api::platform::fs::remove_file(&hardlink_probe);
     VolumeCaps {
         reflink,
         hardlink,

@@ -5,7 +5,6 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
@@ -295,11 +294,7 @@ pub(in crate::daemon::server) mod perf_counters;
 fn sync_file(path: &Path) -> io::Result<()> {
     #[cfg(test)]
     perf_counters::record_file_sync();
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?
-        .sync_data()
+    kernal_api::platform::fs::open_read_write_file(path)?.sync_data()
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
@@ -311,17 +306,14 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = temporary_path(path, "tmp");
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
+        let mut file = kernal_api::platform::fs::create_private_file(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         replace_staged_path(&temporary, path)
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = kernal_api::platform::fs::remove_file(&temporary);
     }
     result
 }
@@ -335,7 +327,7 @@ fn rename_staged_generation(source: &Path, destination: &Path) -> io::Result<()>
 }
 
 fn remove_uncommitted_generation(pointer: &Path, generation_hex: &str, generation: &Path) {
-    let pointer_committed = fs::read_to_string(pointer)
+    let pointer_committed = kernal_api::platform::fs::read_to_string(pointer)
         .ok()
         .is_some_and(|value| value.trim() == generation_hex);
     if !pointer_committed {
@@ -356,7 +348,7 @@ fn remove_uncommitted_generation(pointer: &Path, generation_hex: &str, generatio
 fn digest_file(path: &Path) -> io::Result<(u64, String, [u8; 32])> {
     #[cfg(test)]
     perf_counters::record_hash();
-    let mut file = File::open(path)?;
+    let mut file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let mut hasher = kernal_api::hash::Blake3Hasher::new();
     let mut buffer = [0_u8; 1024 * 1024];
     let mut size = 0_u64;
@@ -389,12 +381,13 @@ fn load_manifest(
     expected_key: &str,
     expected_generation: &str,
 ) -> io::Result<StagedManifest> {
-    let manifest: StagedManifest = bincode::deserialize(&fs::read(path)?).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid staged manifest: {error}"),
-        )
-    })?;
+    let manifest: StagedManifest =
+        bincode::deserialize(&kernal_api::platform::fs::read_file(path)?).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid staged manifest: {error}"),
+            )
+        })?;
     if manifest.version != STAGED_MANIFEST_VERSION
         || manifest.key_hex != expected_key
         || manifest.generation_hex != expected_generation
@@ -431,7 +424,7 @@ fn validate_staged_generation(
         }
         seen[output.index] = true;
         let path = output_path(&generation, output.index);
-        if fs::metadata(&path)?.len() != output.size {
+        if kernal_api::platform::fs::path_metadata(&path)?.len() != output.size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "staged output size does not match its manifest",
@@ -513,14 +506,9 @@ fn persist_staged_generation(
     #[cfg(test)]
     hook::pause(artifact_dir, StagedHookPoint::PublicationStoreLocked);
     let key_root = root.join(key_hex);
-    fs::create_dir_all(&key_root)
+    kernal_api::platform::fs::create_dir_all(&key_root)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    let publish_lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(key_root.join(PUBLISH_LOCK))
+    let publish_lock = kernal_api::platform::fs::open_lock_file(&key_root.join(PUBLISH_LOCK))
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
     let _publish_lock_guard =
         crate::core::wait::lock_exclusive_for(&publish_lock, crate::core::wait::PROBE)
@@ -533,7 +521,7 @@ fn persist_staged_generation(
     #[cfg(test)]
     fault::inject(artifact_dir, StagedFaultPoint::GenerationCreate)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    fs::create_dir(&temporary_generation)
+    kernal_api::platform::fs::create_dir(&temporary_generation)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
 
     let result = (|| {
@@ -642,7 +630,7 @@ fn persist_staged_generation(
         validate_generation(&generation_hex)?;
         let pointer = pointer_path(artifact_dir, key_hex);
         let mut invalid_generation_to_remove = None;
-        if let Ok(previous_value) = fs::read_to_string(&pointer) {
+        if let Ok(previous_value) = kernal_api::platform::fs::read_to_string(&pointer) {
             let previous = previous_value.trim();
             if !previous.is_empty() && previous != generation_hex {
                 if validate_staged_generation(artifact_dir, key_hex, previous).is_ok() {
@@ -740,15 +728,17 @@ fn persist_staged_generation(
         #[cfg(test)]
         fault::inject(artifact_dir, StagedFaultPoint::ManifestWrite)
             .map_err(|error| publish_error(StagedPublishFailure::Manifest, error))?;
-        fs::write(&temporary_manifest, manifest_bytes).map_err(|error| {
-            publish_error(
-                StagedPublishFailure::Manifest,
-                io::Error::new(
-                    error.kind(),
-                    format!("staged manifest write failed: {error}"),
-                ),
-            )
-        })?;
+        kernal_api::platform::fs::write_file(&temporary_manifest, manifest_bytes).map_err(
+            |error| {
+                publish_error(
+                    StagedPublishFailure::Manifest,
+                    io::Error::new(
+                        error.kind(),
+                        format!("staged manifest write failed: {error}"),
+                    ),
+                )
+            },
+        )?;
         #[cfg(test)]
         fault::inject(artifact_dir, StagedFaultPoint::ManifestSync)
             .map_err(|error| publish_error(StagedPublishFailure::Manifest, error))?;
@@ -782,7 +772,7 @@ fn persist_staged_generation(
             Ok(()) => generation_renamed = true,
             Err(error) if final_generation.exists() => {
                 let _ = error;
-                let _ = fs::remove_dir_all(&temporary_generation);
+                let _ = kernal_api::platform::fs::remove_dir_all(&temporary_generation);
             }
             Err(error) => {
                 return Err(publish_error(
@@ -870,7 +860,7 @@ fn persist_staged_generation(
     })();
 
     if result.is_err() {
-        let _ = fs::remove_dir_all(&temporary_generation);
+        let _ = kernal_api::platform::fs::remove_dir_all(&temporary_generation);
     }
     result
 }
@@ -916,17 +906,16 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
     let store_lock = open_store_lock(&root)?;
     let _store_lock_guard =
         crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
-    let entries = fs::read_dir(&root)?;
+    let entries = kernal_api::platform::fs::read_dir_paths(&root)?;
     let mut removed = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if path.is_file()
             && path.file_name().is_some_and(|name| {
                 let name = name.to_string_lossy();
                 name.starts_with(".") && name != STORE_LOCK
             })
         {
-            fs::remove_file(path)?;
+            kernal_api::platform::fs::remove_file(path)?;
             removed += 1;
             continue;
         }
@@ -937,11 +926,13 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
             let current = key
                 .as_deref()
                 .and_then(|key| {
-                    fs::read_to_string(root.join(format!("{key}.current")).as_path()).ok()
+                    kernal_api::platform::fs::read_to_string(
+                        root.join(format!("{key}.current")).as_path(),
+                    )
+                    .ok()
                 })
                 .map(|value| value.trim().to_string());
-            for child in fs::read_dir(&path)?.flatten() {
-                let child_path = child.path();
+            for child_path in kernal_api::platform::fs::read_dir_paths(&path)? {
                 let child_name = child_path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
@@ -952,9 +943,9 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
                             && current.as_deref() != Some(child_name.as_str())));
                 if remove {
                     if child_path.is_dir() {
-                        fs::remove_dir_all(child_path)?;
+                        kernal_api::platform::fs::remove_dir_all(child_path)?;
                     } else {
-                        fs::remove_file(child_path)?;
+                        kernal_api::platform::fs::remove_file(child_path)?;
                     }
                     removed += 1;
                 }

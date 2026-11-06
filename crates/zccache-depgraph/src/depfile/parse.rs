@@ -76,7 +76,14 @@ pub fn parse_depfile_path(
     source: &Path,
     cwd: &Path,
 ) -> Result<ScanResult, DepfileError> {
-    let content = std::fs::read_to_string(path)?;
+    let content = String::from_utf8_lossy(
+        &kernal_api::platform::fs::read_context_regular_file_bounded(
+            path,
+            kernal_api::platform::fs::MAX_CONTEXT_REGULAR_FILE_BYTES,
+        )?
+        .bytes,
+    )
+    .into_owned();
     parse_depfile(&content, source, cwd)
 }
 

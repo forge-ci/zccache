@@ -79,8 +79,8 @@ fn sidecar(primary: &Path, name: &str) -> NormalizedPath {
 #[must_use]
 pub fn quarantine(primary: &Path, dest: &NormalizedPath) -> Option<NormalizedPath> {
     // Windows `rename` does not overwrite an existing destination.
-    let _ = std::fs::remove_file(dest.as_path());
-    match std::fs::rename(primary, dest.as_path()) {
+    let _ = kernal_api::platform::fs::remove_file(dest.as_path());
+    match kernal_api::platform::fs::rename(primary, dest.as_path()) {
         Ok(()) => Some(dest.clone()),
         Err(_) => None,
     }
@@ -122,19 +122,22 @@ pub fn prune(primary: &Path) -> usize {
     let Some(dir) = primary.parent() else {
         return 0;
     };
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(paths) = kernal_api::platform::fs::read_dir_paths(dir) else {
         return 0;
     };
-    let mut candidates: Vec<(std::time::SystemTime, NormalizedPath)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
+    let mut candidates: Vec<(std::time::SystemTime, NormalizedPath)> = paths
+        .into_iter()
+        .filter_map(|path| {
+            let name = path.file_name()?;
             let version = quarantined_version(name.to_str()?)?;
             if version == DEPGRAPH_VERSION {
                 return None;
             }
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, NormalizedPath::new(entry.path())))
+            let modified = kernal_api::platform::fs::symlink_metadata(&path)
+                .ok()?
+                .modified()
+                .ok()?;
+            Some((modified, NormalizedPath::new(path)))
         })
         .collect();
     if candidates.len() <= MAX_QUARANTINED_SNAPSHOTS {
@@ -144,7 +147,7 @@ pub fn prune(primary: &Path) -> usize {
     candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     let mut removed = 0;
     for (_, path) in candidates.drain(MAX_QUARANTINED_SNAPSHOTS..) {
-        if std::fs::remove_file(path.as_path()).is_ok() {
+        if kernal_api::platform::fs::remove_file(path.as_path()).is_ok() {
             removed += 1;
         }
     }
@@ -159,9 +162,9 @@ mod tests {
         let graph = crate::graph::DepGraph::new();
         super::super::save_to_file(&graph, path).unwrap();
         if version != DEPGRAPH_VERSION {
-            let mut bytes = std::fs::read(path).unwrap();
+            let mut bytes = kernal_api::platform::fs::read_file(path).unwrap();
             bytes[4..8].copy_from_slice(&version.to_le_bytes());
-            std::fs::write(path, &bytes).unwrap();
+            kernal_api::platform::fs::write_file(path, &bytes).unwrap();
         }
     }
 
@@ -170,7 +173,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let primary = tmp.path().join("depgraph.bin");
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION + 1);
-        let original = std::fs::read(&primary).unwrap();
+        let original = kernal_api::platform::fs::read_file(&primary).unwrap();
 
         let dest = quarantine_path(&primary, DEPGRAPH_VERSION + 1);
         let moved = quarantine(&primary, &dest).expect("quarantine must succeed");
@@ -181,7 +184,7 @@ mod tests {
              place is what let the next graceful shutdown destroy it"
         );
         assert_eq!(
-            std::fs::read(moved.as_path()).unwrap(),
+            kernal_api::platform::fs::read_file(moved.as_path()).unwrap(),
             original,
             "the quarantined bytes must be preserved verbatim so a future \
              migration has something to migrate"
@@ -193,13 +196,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let primary = tmp.path().join("depgraph.bin");
         let dest = quarantine_path(&primary, DEPGRAPH_VERSION + 1);
-        std::fs::write(dest.as_path(), b"stale").unwrap();
+        kernal_api::platform::fs::write_file(dest.as_path(), b"stale").unwrap();
 
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION + 1);
-        let fresh = std::fs::read(&primary).unwrap();
+        let fresh = kernal_api::platform::fs::read_file(&primary).unwrap();
         quarantine(&primary, &dest).expect("quarantine must replace the stale sidecar");
 
-        assert_eq!(std::fs::read(dest.as_path()).unwrap(), fresh);
+        assert_eq!(
+            kernal_api::platform::fs::read_file(dest.as_path()).unwrap(),
+            fresh
+        );
     }
 
     #[test]
@@ -216,7 +222,7 @@ mod tests {
         // is the exact byte-reinterpretation that would risk a wrong hit.
         let foreign = quarantine_path(&primary, DEPGRAPH_VERSION);
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION + 1);
-        std::fs::rename(&primary, foreign.as_path()).unwrap();
+        kernal_api::platform::fs::rename(&primary, foreign.as_path()).unwrap();
         assert!(
             recover(&primary).is_none(),
             "a sidecar whose embedded version tag is foreign must be rejected \
@@ -224,12 +230,12 @@ mod tests {
         );
 
         // A truncated sidecar fails payload validation and is dropped.
-        std::fs::write(foreign.as_path(), b"ZCDG").unwrap();
+        kernal_api::platform::fs::write_file(foreign.as_path(), b"ZCDG").unwrap();
         assert!(recover(&primary).is_none());
 
         // The real thing round-trips.
         write_snapshot_with_version(&primary, DEPGRAPH_VERSION);
-        std::fs::rename(&primary, foreign.as_path()).unwrap();
+        kernal_api::platform::fs::rename(&primary, foreign.as_path()).unwrap();
         let (_graph, from) = recover(&primary).expect("a valid same-version sidecar must load");
         assert_eq!(from.as_path(), foreign.as_path());
     }
@@ -240,11 +246,11 @@ mod tests {
         let primary = tmp.path().join("depgraph.bin");
 
         let mine = quarantine_path(&primary, DEPGRAPH_VERSION);
-        std::fs::write(mine.as_path(), b"mine").unwrap();
+        kernal_api::platform::fs::write_file(mine.as_path(), b"mine").unwrap();
         let mut foreign = Vec::new();
         for offset in 1..=4u32 {
             let path = quarantine_path(&primary, DEPGRAPH_VERSION + offset);
-            std::fs::write(path.as_path(), b"foreign").unwrap();
+            kernal_api::platform::fs::write_file(path.as_path(), b"foreign").unwrap();
             // Distinct mtimes so "oldest first" is well-defined on filesystems
             // with coarse timestamps.
             kernal_api::platform::fs::set_file_mtime(

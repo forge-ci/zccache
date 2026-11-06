@@ -572,7 +572,7 @@ fn try_write_to_path(
     extra: &serde_json::Value,
 ) -> std::io::Result<()> {
     if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        kernal_api::platform::fs::create_dir_all(parent)?;
     }
 
     // Soft-cap rotation. We have no long-lived file handle to juggle
@@ -603,18 +603,10 @@ fn try_write_to_path(
     let mut line = serde_json::to_string(&serde_json::Value::Object(envelope))?;
     line.push('\n');
 
-    let mut file = open_append(log_path)?;
+    let mut file = kernal_api::platform::fs::open_shared_append(log_path)?;
     file.write_all(line.as_bytes())?;
     file.flush()?;
     Ok(())
-}
-
-/// Open a file in append mode with sharing flags that allow deletion
-/// on Windows. Mirrors the compile journal's `log_io::open_append`;
-/// duplicated here so `zccache-core` doesn't need to depend on the
-/// daemon crate.
-fn open_append(path: &Path) -> std::io::Result<std::fs::File> {
-    kernal_api::platform::fs::open_shared_append(path)
 }
 
 /// Absolute path to the live lifecycle log file.
@@ -635,7 +627,7 @@ pub fn log_file_path_in(log_dir: &NormalizedPath) -> NormalizedPath {
 /// (replacing any existing archive). No-op if the file is missing or
 /// under the threshold.
 fn rotate_if_oversized(log_path: &std::path::Path) -> std::io::Result<()> {
-    let size = match std::fs::metadata(log_path) {
+    let size = match kernal_api::platform::fs::path_metadata(log_path) {
         Ok(m) => m.len(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
@@ -644,7 +636,7 @@ fn rotate_if_oversized(log_path: &std::path::Path) -> std::io::Result<()> {
         return Ok(());
     }
     let archive = archive_path(log_path);
-    std::fs::rename(log_path, &archive)
+    kernal_api::platform::fs::rename(log_path, &archive)
 }
 
 fn archive_path(log_path: &std::path::Path) -> PathBuf {
@@ -741,7 +733,8 @@ mod tests {
         let dedicated = crate::config::log_dir()
             .as_path()
             .join(TERMINATION_LOG_FILENAME);
-        let contents = std::fs::read_to_string(&dedicated).expect("dedicated log written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&dedicated).expect("dedicated log written");
         let mine: Vec<serde_json::Value> = contents
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("line parses"))
@@ -757,7 +750,7 @@ mod tests {
         // The whole point is that this is a *separate* stream: writing here
         // must not append to the interleaved lifecycle log.
         let lifecycle = log_file_path().as_path().to_path_buf();
-        let lifecycle_has_ours = std::fs::read_to_string(&lifecycle)
+        let lifecycle_has_ours = kernal_api::platform::fs::read_to_string(&lifecycle)
             .unwrap_or_default()
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -783,7 +776,8 @@ mod tests {
         );
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         // Concurrent tests elsewhere in the crate legitimately emit their
         // own lifecycle events while this test's cache-dir override is
         // active: `write_event` reads the env at call time, and async
@@ -870,22 +864,32 @@ mod tests {
 
         let log_path = log_file_path().as_path().to_path_buf();
         let archive = log_file_path().as_path().with_extension("log.1");
-        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        kernal_api::platform::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
 
         let padding = vec![b'x'; (MAX_LOG_SIZE + 1024) as usize];
-        std::fs::write(&log_path, &padding).expect("seed oversized log");
-        assert!(std::fs::metadata(&log_path).unwrap().len() > MAX_LOG_SIZE);
+        kernal_api::platform::fs::write_file(&log_path, &padding).expect("seed oversized log");
+        assert!(
+            kernal_api::platform::fs::path_metadata(&log_path)
+                .unwrap()
+                .len()
+                > MAX_LOG_SIZE
+        );
 
         write_event(EVENT_SPAWN, serde_json::json!({"first": true}));
 
-        let live = std::fs::read_to_string(&log_path).expect("live log readable");
+        let live = kernal_api::platform::fs::read_to_string(&log_path).expect("live log readable");
         assert_eq!(live.lines().count(), 1, "live log should hold new event");
         let v: serde_json::Value = serde_json::from_str(live.trim()).expect("jsonl parses");
         assert_eq!(v["first"], true);
         assert!(archive.exists(), "archive should exist");
-        assert!(std::fs::metadata(&archive).unwrap().len() > MAX_LOG_SIZE);
+        assert!(
+            kernal_api::platform::fs::path_metadata(&archive)
+                .unwrap()
+                .len()
+                > MAX_LOG_SIZE
+        );
 
-        std::fs::write(&log_path, &padding).expect("re-seed oversized log");
+        kernal_api::platform::fs::write_file(&log_path, &padding).expect("re-seed oversized log");
         write_event(EVENT_DIED_IDLE, serde_json::json!({"second": true}));
 
         assert!(archive.exists(), "archive still present");
@@ -1006,7 +1010,8 @@ mod tests {
         );
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         let v: serde_json::Value =
             serde_json::from_str(contents.trim()).expect("jsonl line parses");
 
@@ -1037,7 +1042,8 @@ mod tests {
         emit_takeover_lifecycle_events(1111, 2222, "9.9.9", "\\\\.\\pipe\\test");
 
         let log_path = log_file_path().as_path().to_path_buf();
-        let contents = std::fs::read_to_string(&log_path).expect("log file written");
+        let contents =
+            kernal_api::platform::fs::read_to_string(&log_path).expect("log file written");
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "expected daemon-died + pipe-handover");
 
@@ -1083,7 +1089,7 @@ mod tests {
 
         assert!(log_path.exists());
         assert!(!archive.exists());
-        let contents = std::fs::read_to_string(&log_path).unwrap();
+        let contents = kernal_api::platform::fs::read_to_string(&log_path).unwrap();
         assert_eq!(contents.lines().count(), 2);
     }
 }

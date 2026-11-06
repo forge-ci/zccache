@@ -22,7 +22,7 @@
 //! compiling, keep passing their own tests, and silently stop excluding each
 //! other the moment either side changed a name.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 use zccache_core::NormalizedPath;
@@ -56,7 +56,7 @@ pub fn is_staged_link_or_reparse(path: &Path) -> bool {
 /// something we refuse to treat as the staged root (a link/reparse point, or
 /// not a directory).
 pub fn validate_staged_root_path(root: &Path) -> io::Result<bool> {
-    let metadata = match fs::symlink_metadata(root) {
+    let metadata = match kernal_api::platform::fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
@@ -85,7 +85,7 @@ pub fn validate_staged_root_path(root: &Path) -> io::Result<bool> {
 /// Open (creating if needed) the store lock file for an already-validated root.
 pub fn open_store_lock(root: &Path) -> io::Result<File> {
     if !validate_staged_root_path(root)? {
-        fs::create_dir_all(root)?;
+        kernal_api::platform::fs::create_dir_all(root)?;
         if !validate_staged_root_path(root)? {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn an_existing_staged_root_yields_a_guard() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
         let guard = StagedReadGuard::acquire_if_present(dir.path()).unwrap();
 
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn two_readers_hold_the_lock_at_once() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(staged_root(dir.path()).as_path()).unwrap();
 
         let first = StagedReadGuard::acquire(dir.path()).unwrap();
         let second = StagedReadGuard::acquire(dir.path()).unwrap();
@@ -191,10 +191,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let root = staged_root(dir.path());
-        fs::create_dir_all(root.as_path()).unwrap();
+        kernal_api::platform::fs::create_dir_all(root.as_path()).unwrap();
 
-        let exclusive = kernal_api::platform::fs::lock_exclusive_owned(
+        let exclusive = kernal_api::platform::fs::lock_exclusive_owned_for(
             open_store_lock(root.as_path()).unwrap(),
+            std::time::Duration::from_secs(5),
         )
         .unwrap();
 

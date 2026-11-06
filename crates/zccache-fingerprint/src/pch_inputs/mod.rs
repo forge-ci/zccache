@@ -98,12 +98,12 @@ pub fn parse_pch_inputs(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputs
 ///
 /// `Ok(None)` means the file is not a clang PCH (for example a GCC `.gch`).
 pub fn read_pch_inputs(path: &Path) -> Result<Option<Vec<PchInput>>, PchInputsError> {
-    let file = std::fs::File::open(path)?;
+    let file = kernal_api::platform::fs::open_read_regular_file(path)?;
     let mut head = Vec::new();
     file.take(INITIAL_READ_BYTES).read_to_end(&mut head)?;
     match bitstream::parse(&head) {
         Err(PchInputsError::Truncated) if head.len() as u64 == INITIAL_READ_BYTES => {
-            bitstream::parse(&std::fs::read(path)?)
+            bitstream::parse(&kernal_api::platform::fs::read_file(path)?)
         }
         other => other,
     }
@@ -214,8 +214,8 @@ impl PchServePlan {
         let hash = input
             .content_xxh3
             .ok_or_else(|| refuse(input, PchRefusalReason::MtimeUnverifiable))?;
-        let metadata =
-            std::fs::metadata(path).map_err(|_| refuse(input, PchRefusalReason::Missing))?;
+        let metadata = kernal_api::platform::fs::path_metadata(path)
+            .map_err(|_| refuse(input, PchRefusalReason::Missing))?;
         if !metadata.is_file() || metadata.len() != input.size {
             return Err(refuse(
                 input,
@@ -239,7 +239,7 @@ impl PchServePlan {
         self.replays.push(PendingReplay {
             path,
             recorded_secs: input.mtime_secs,
-            current_secs: mtime_secs(&metadata),
+            current_secs: mtime_secs(metadata.modified().unwrap_or(std::time::UNIX_EPOCH)),
             size: input.size,
             content_xxh3: Some(hash),
         });
@@ -266,12 +266,15 @@ fn refuse(input: &PchInput, reason: PchRefusalReason) -> PchRefusal {
     }
 }
 
-fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
-    FileTime::from_last_modification_time(meta).unix_seconds()
+fn mtime_secs(modified: std::time::SystemTime) -> i64 {
+    FileTime::from_system_time(modified).unix_seconds()
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (
+        kernal_api::platform::fs::canonical_context_path(a),
+        kernal_api::platform::fs::canonical_context_path(b),
+    ) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -307,7 +310,7 @@ pub fn plan_pch_serve(
         if !path.is_absolute() {
             return Err(refuse(input, PchRefusalReason::RelativePath));
         }
-        let meta = match std::fs::metadata(path) {
+        let meta = match kernal_api::platform::fs::path_metadata(path) {
             Ok(meta) if meta.is_file() => meta,
             _ => return Err(refuse(input, PchRefusalReason::Missing)),
         };
@@ -322,14 +325,18 @@ pub fn plan_pch_serve(
         }
         let xxh3_matches = match input.content_xxh3 {
             Some(recorded) => {
-                let bytes = std::fs::read(path).map_err(|error| {
+                let bytes = kernal_api::platform::fs::read_file(path).map_err(|error| {
                     refuse(input, PchRefusalReason::Unreadable(error.to_string()))
                 })?;
                 Some(content_xxh3(&bytes) == recorded)
             }
             None => None,
         };
-        checked.push((input, mtime_secs(&meta), xxh3_matches));
+        checked.push((
+            input,
+            mtime_secs(meta.modified().unwrap_or(std::time::UNIX_EPOCH)),
+            xxh3_matches,
+        ));
     }
     // Pass 2: decide each input.
     let mut plan = PchServePlan {
@@ -381,11 +388,15 @@ pub fn inputs_stat_match(inputs: &[PchInput]) -> bool {
         .iter()
         .filter(|input| !input.overridden && !input.transient)
         .all(|input| {
-            std::fs::metadata(&input.path).is_ok_and(|meta| {
+            kernal_api::platform::fs::path_metadata(&input.path).is_ok_and(|meta| {
                 meta.is_file()
                     && meta.len() == input.size
                     && (input.mtime_secs == 0
-                        || u64::try_from(mtime_secs(&meta)).ok() == Some(input.mtime_secs))
+                        || u64::try_from(mtime_secs(
+                            meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                        ))
+                        .ok()
+                            == Some(input.mtime_secs))
             })
         })
 }
