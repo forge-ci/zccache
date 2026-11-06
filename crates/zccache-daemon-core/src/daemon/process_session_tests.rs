@@ -449,171 +449,202 @@ fn an_unavailable_session_sample_falls_back_to_the_tick_sample() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn descendant_cpu_counts_a_busy_compiler_child_of_a_waiting_driver() {
+#[test]
+fn descendant_cpu_counts_a_busy_compiler_child_of_a_waiting_driver() {
+    let mut driver = spawn_busy_compiler_driver(70);
+    let mut fixture = BusyCompilerGuard {
+        driver: &mut driver,
+    };
+    let pid = fixture.driver.id();
+    let compiler = fixture.compiler_pid();
     use crate::platform::process::inspect::{cpu_ticks, descendant_cpu_ticks};
-    use std::os::unix::process::CommandExt;
-
-    // The trailing `exit 0` keeps the shell waiting, as gcc waits on cc1plus.
-    // The busy child runs a CPU-intensive loop (bounded by the test's overall timeout).
-    let driver = std::process::Command::new("sh")
-        .args(["-c", "sh -c 'while :; do :; done'; exit 0"])
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let pid = driver.id();
-
-    // Use Arc<Mutex<>> to share the driver with the async block while
-    // retaining ownership for cleanup on drop/panic.
-    let driver = std::sync::Arc::new(std::sync::Mutex::new(Some(driver)));
-    let driver_clone = driver.clone();
-
-    // Wait for the busy compiler child to appear (bounded).
-    let compiler = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-                .unwrap_or_default();
-            if let Some(child) = children.split_whitespace().next() {
-                return child.parse::<u32>().unwrap();
-            }
-            // Check the driver hasn't exited unexpectedly.
-            let exited = driver_clone
-                .lock()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .try_wait()
-                .unwrap()
-                .is_some();
-            assert!(!exited, "the driver exited before the compiler appeared");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let start = descendant_cpu_ticks(pid).expect("descendant CPU is readable");
+    let compiler_start = cpu_ticks(compiler).expect("compiler CPU is readable");
+    // Wait for the compiler's own CPU to advance, within a bounded budget.
+    // The driver's total already includes `compiler_start`, so it must have
+    // advanced past `start` too.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let ticks = cpu_ticks(compiler).expect("busy compiler exited before making progress");
+        if ticks > compiler_start {
+            break;
         }
-    })
-    .await
-    .expect("compiler child appears within startup deadline");
-
-    let start = descendant_cpu_ticks(pid);
-    let compiler_start = cpu_ticks(compiler);
-
-    // Wait for the compiler's CPU to advance (bounded).
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            let now_compiler = cpu_ticks(compiler);
-            if now_compiler > compiler_start {
-                return;
-            }
-            // Check the driver hasn't exited unexpectedly.
-            let exited = driver
-                .lock()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .try_wait()
-                .unwrap()
-                .is_some();
-            assert!(!exited, "the driver exited before compiler CPU advanced");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("compiler CPU advances within deadline");
-
-    let now = descendant_cpu_ticks(pid);
-
-    // Clean up the process group.
-    if let Some(mut child) = driver.lock().unwrap().take() {
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .status();
-        let _ = child.wait();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "CPU progress deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
-
+    let now = descendant_cpu_ticks(pid).expect("descendant CPU is still readable");
     assert!(
-        matches!((start, now), (Some(start), Some(now)) if now > start),
+        now > start,
         "the busy child's CPU must count as the driver's progress: {start:?} -> {now:?}"
     );
 }
 
-/// Regression test for #1926: verifies that a panic during the fixture setup
-/// does not leak the process group. The test deliberately unwinds after
-/// starting the fixture and asserts the process tree is cleaned up.
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn descendant_cpu_fixture_cleans_up_on_panic() {
+fn spawn_busy_compiler_driver(lifetime_secs: u32) -> std::process::Child {
     use std::os::unix::process::CommandExt;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-
-    // Spawn a session and deliberately panic before normal cleanup.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let driver = std::process::Command::new("sh")
-                    .args(["-c", "sh -c 'while :; do :; done'; exit 0"])
-                    .process_group(0)
-                    .spawn()
-                    .expect("driver spawns");
-
-                // Use Arc<Mutex<>> to share the driver with the async block while
-                // retaining ownership for cleanup on drop/panic.
-                let driver = Arc::new(Mutex::new(Some(driver)));
-
-                // Wait for the busy compiler child to appear (bounded).
-                let pid = driver.lock().unwrap().as_ref().unwrap().id();
-                tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    loop {
-                        let children =
-                            std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-                                .unwrap_or_default();
-                        if children.split_whitespace().next().is_some() {
-                            return;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    }
-                })
-                .await
-                .expect("compiler child appears within startup deadline");
-
-                // Verify the process group exists.
-                let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-                    .unwrap_or_default();
-                assert!(!children.trim().is_empty(), "compiler child should exist");
-
-                // Deliberate panic - the driver's Drop with process_group(0) +
-                // explicit kill in the test's unwinding should clean up the process group.
-                panic!("deliberate panic to test cleanup");
-            });
-    }));
-
-    // The panic should be caught.
-    assert!(result.is_err(), "test should have panicked");
-
-    // Give the OS a moment to reap the process group.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Verify the process group is gone by checking that a fresh spawn with the
-    // same pattern doesn't find orphaned processes from the previous run.
-    let mut driver = std::process::Command::new("sh")
-        .args(["-c", "sh -c 'sleep 1'; exit 0"])
+    // The trailing `exit` keeps the shell waiting, as gcc waits on cc1plus.
+    std::process::Command::new("sh")
+        .args([
+            "-c",
+            // The busy child owns its deadline: even SIGKILL of the test
+            // runner cannot leave an infinite workload behind (#1926).
+            "bash -c 'deadline=$((SECONDS + $1)); while (( SECONDS < deadline )); do :; done' busy-compiler \"$1\"; exit 0",
+            "busy-driver",
+            &lifetime_secs.to_string(),
+        ])
         .process_group(0)
         .spawn()
-        .expect("cleanup verification session starts");
+        .expect("busy compiler driver starts")
+}
 
+#[cfg(target_os = "linux")]
+struct BusyCompilerGuard<'a> {
+    driver: &'a mut std::process::Child,
+}
+
+#[cfg(target_os = "linux")]
+impl BusyCompilerGuard<'_> {
+    fn compiler_pid(&mut self) -> u32 {
+        let pid = self.driver.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+                .expect("driver children are readable");
+            if let Some(child) = children.split_whitespace().next() {
+                return child.parse::<u32>().expect("child pid");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child startup deadline"
+            );
+            assert!(self.driver.try_wait().unwrap().is_none(), "driver exited");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kill_busy_compiler_group(pid: u32) -> std::io::Result<std::process::ExitStatus> {
+    // Use the shell builtin; minimal Linux images need not ship /usr/bin/kill.
+    std::process::Command::new("sh")
+        .args([
+            "-c",
+            "kill -KILL -\"$1\"",
+            "fixture-cleanup",
+            &pid.to_string(),
+        ])
+        .status()
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for BusyCompilerGuard<'_> {
+    fn drop(&mut self) {
+        // Never panic during unwinding. Kill the whole group before reaping
+        // its leader; killing just the waiting driver orphans the busy child.
+        if !kill_busy_compiler_group(self.driver.id()).is_ok_and(|status| status.success()) {
+            let _ = self.driver.kill();
+        }
+        let _ = self.driver.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn busy_child_fixture_cleans_up_after_panic() {
+    assert_busy_child_fixture_cleanup(true);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn busy_child_fixture_cleans_up_after_normal_return() {
+    assert_busy_child_fixture_cleanup(false);
+}
+
+#[cfg(target_os = "linux")]
+fn assert_busy_child_fixture_cleanup(unwind: bool) {
+    use crate::platform::process::inspect::is_alive;
+    let mut driver = spawn_busy_compiler_driver(10);
     let pid = driver.id();
-    let children =
-        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
-    // The new session's child should be the only one.
-    let child_count = children.split_whitespace().count();
-    assert!(
-        child_count <= 1,
-        "no orphaned processes from previous panic: {children}"
-    );
-
-    let _ = std::process::Command::new("kill")
-        .args(["-KILL", "--", &format!("-{}", pid)])
-        .status();
+    // Keep the handle outside catch_unwind so RED can reap its leaked driver.
+    let mut compiler = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut fixture = BusyCompilerGuard {
+            driver: &mut driver,
+        };
+        compiler = Some(fixture.compiler_pid());
+        if unwind {
+            panic!("intentional fixture unwind");
+        }
+    }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while compiler.is_some_and(is_alive) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let cleaned_up = !is_alive(pid) && compiler.is_some_and(|pid| !is_alive(pid));
+    let driver_reaped = !std::path::Path::new(&format!("/proc/{pid}")).exists();
+    // A failing regression must not leave the CPU burner behind itself.
+    if !cleaned_up {
+        kill_busy_compiler_group(pid).expect("fallback group cleanup runs");
+    }
     let _ = driver.wait();
+    assert_eq!(result.is_err(), unwind, "expected fixture exit path");
+    assert!(compiler.is_some(), "the busy child must have started");
+    assert!(
+        cleaned_up,
+        "fixture leaked driver {pid} or child {compiler:?} (unwind={unwind})"
+    );
+    assert!(
+        driver_reaped,
+        "fixture must reap its driver before fallback cleanup"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn busy_child_fixture_expires_after_owner_exit() {
+    const PID_FILE_ENV: &str = "ZCCACHE_BUSY_FIXTURE_PID_FILE";
+    if let Some(path) = std::env::var_os(PID_FILE_ENV) {
+        let mut driver = spawn_busy_compiler_driver(1);
+        let mut fixture = BusyCompilerGuard {
+            driver: &mut driver,
+        };
+        let compiler = fixture.compiler_pid();
+        std::fs::write(path, format!("{} {compiler}", fixture.driver.id())).unwrap();
+        // Exit the owner without running any Rust destructor, just as a
+        // terminated test runner bypasses the fixture's cleanup guard.
+        std::process::exit(0);
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("fixture-pids");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "daemon::process::session_tests::busy_child_fixture_expires_after_owner_exit",
+        ])
+        .env(PID_FILE_ENV, &pid_file)
+        .status()
+        .expect("fixture owner starts");
+    assert!(
+        status.success(),
+        "fixture owner must exit without unwinding"
+    );
+    let pids = std::fs::read_to_string(pid_file).unwrap();
+    let pids: Vec<u32> = pids
+        .split_whitespace()
+        .map(|pid| pid.parse().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 2, "driver and busy child pids");
+    use crate::platform::process::inspect::is_alive;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while pids.iter().any(|&pid| is_alive(pid)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let expired = pids.iter().all(|&pid| !is_alive(pid));
+    if !expired {
+        let _ = kill_busy_compiler_group(pids[0]);
+    }
+    assert!(expired, "owner exit left a live fixture: {pids:?}");
 }
