@@ -9,6 +9,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from ci.soldr import cargo_command
+
 ROOT = Path(__file__).parent.parent.resolve()
 RUST_PUBLISH_ORDER = [
     "zccache",
@@ -55,7 +57,7 @@ def read_workspace_version() -> str:
 
 def read_workspace_metadata() -> dict[str, Any]:
     result = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cargo_command("metadata", "--no-deps", "--format-version", "1"),
         cwd=ROOT,
         capture_output=True,
         text=True,

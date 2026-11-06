@@ -32,6 +32,7 @@ from ci.release_checks import (
     stamp_internal_dependency_versions,
     validate_release_metadata,
 )
+from ci.soldr import cargo_command
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
@@ -562,7 +563,7 @@ def verify_rust_crates_locally() -> None:
     log("  Prepared crates/zccache as a self-contained crates.io package")
 
     for crate in RUST_PUBLISH_ORDER:
-        run(["cargo", "package", "--allow-dirty", "-p", crate], cwd=ROOT)
+        run(cargo_command("package", "--allow-dirty", "-p", crate), cwd=ROOT)
 
 
 def verify_crate_visible(crate: str, version: str) -> None:
@@ -592,7 +593,7 @@ def publish_rust_crates(version: str, existing_crates: set[str] | None = None) -
         if crate in existing_crates:
             log(f"  Skipping {crate} {version}; already published")
             continue
-        run(["cargo", "publish", "--allow-dirty", "-p", crate], cwd=ROOT)
+        run(cargo_command("publish", "--allow-dirty", "-p", crate), cwd=ROOT)
         verify_crate_visible(crate, version)
 
 
@@ -761,11 +762,65 @@ def command_verify_pypi(args: argparse.Namespace) -> None:
     )
 
 
+def command_resolve_release(_args: argparse.Namespace) -> None:
+    """Resolve the build revision and tolerate absent or malformed release lookups."""
+    version = read_workspace_version()
+    tag = os.environ.get("RAW_TAG", "").removeprefix("refs/tags/")
+    is_tag = os.environ.get("GITHUB_REF_TYPE") == "tag"
+    if is_tag:
+        tag = os.environ["GITHUB_REF_NAME"].removeprefix("refs/tags/")
+    normalized = (tag or version).removeprefix("v")
+    if normalized != version:
+        print(f"Tag {tag} does not match workspace version {version}", file=sys.stderr)
+        raise SystemExit(1)
+
+    checkout_ref = os.environ.get("GITHUB_SHA", "")
+    if is_tag:
+        checkout_ref = tag
+    elif not tag and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        tag = version
+    else:
+        for candidate in ([tag] if tag else [version, f"v{version}"]):
+            result = subprocess.run(
+                ["git", "rev-parse", "-q", "--verify", f"refs/tags/{candidate}"],
+                capture_output=True, check=False,
+            )
+            if result.returncode == 0:
+                tag = checkout_ref = candidate
+                break
+    tag = tag or version
+    exists = False
+    for candidate in dict.fromkeys([tag, normalized, f"v{normalized}"]):
+        result = subprocess.run(
+            ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{candidate}"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            continue
+        try:
+            data = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("published_at"):
+            exists = True
+            log(f"Release {candidate} is already published at {data['published_at']}; release job will update it")
+            break
+    write_github_output({
+        "checkout_ref": checkout_ref,
+        "release_tag": tag,
+        "version": version,
+        "github_release_exists": str(exists).lower(),
+    })
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Workflow-only release helpers for zccache."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    resolve_parser = subparsers.add_parser("resolve-release", help="Resolve release metadata.")
+    resolve_parser.set_defaults(func=command_resolve_release)
 
     check_parser = subparsers.add_parser(
         "check-registries",

@@ -372,9 +372,20 @@ def test_build_target_forces_msvc_host_toolchain_for_windows() -> None:
     action = _repo_text(".github/actions/build-target/action.yml")
 
     assert "1.95.0-x86_64-pc-windows-msvc" in action
-    assert 'rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV' in action
+    assert 'info="$(soldr rustc -vV)"' in action
+    assert "HOST_TARGET=$(soldr rustc -vV" in action
     assert "Windows release builds must use the MSVC host toolchain" in action
-    assert 'rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc' in action
+    assert 'rustup run "$RELEASE_RUST_TOOLCHAIN" rustc' not in action
+
+
+def test_build_target_wrapper_smoke_routes_compiler_through_soldr() -> None:
+    action = _repo_text(".github/actions/build-target/action.yml")
+
+    assert 'rustc_bin="$smoke_root/rustc"' in action
+    assert 'exec env ZCCACHE_DISABLE=1 soldr rustc "$@"' in action
+    assert 'chmod +x "$rustc_bin"' in action
+    assert 'probe="$(staging/zccache${{ inputs.binary_ext }} "$rustc_bin" -vV)"' in action
+    assert 'rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc' not in action
 
 
 def test_build_target_smoke_requires_valid_version_output() -> None:

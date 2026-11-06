@@ -362,3 +362,24 @@ cleanup; label before/after host samples instead of claiming kill-time load.
 ## Daemon death attribution (#2064)
 
 A cgroup OOM kill count does not identify the daemon as the victim. In a 1 GiB three-PCH probe, cc1plus failed while the daemon stayed responsive. Pair a parent-owned daemon exit status with kernel victim identity and simultaneous daemon/compiler memory. Also compare fatal paths against the deployed tag: current main sync_watchdog does not exist in 1.15.5.
+
+## Queue observers must share watched-job prerequisites (2026-11-04)
+
+A workflow's wall-clock age is not hosted-runner queue age. In run 41760074116,
+the cache barrier finished after the observer's lifetime, and GitHub only then
+created the watched job. Start the observer alongside its watched jobs by
+matching their needs and condition; test that contract for every caller. Keep
+visible queued-job starvation and missing-identity failures loud.
+
+
+## Rustc `-o` is an output-family rule (2026-11-04)
+
+Count distinct implicit emits, excluding kind-specific destinations, before
+adapting `-o`. A single metadata emit writes exactly that filename; guessing
+`lib<crate>.rmeta` creates a nonexistent required output or captures stale data.
+Keep primary naming, required outputs and fallback capture on one rule.
+
+Repeated `--emit` flags merge distinct kinds, but the last option for each kind
+wins. A later implicit kind clears its old explicit destination. Normalize
+that policy while parsing; retaining historical paths makes stale files look
+like required compiler products.
