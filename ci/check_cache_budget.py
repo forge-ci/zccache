@@ -30,8 +30,8 @@ TOP = 10
 # Main-ref key prefix of each budgeted family (ci.yml's `[cache.family]`
 # shapes, docs/ci-toml.md "Family resolution table").
 FAMILY_PREFIXES: dict[str, tuple[str, ...]] = {
-    "cook-base": ("cook-base-v2-",),
-    "build-cache": ("setup-soldr-buildcache-v2-",),
+    "cook-base": ("cook-base-v2-", "cook-base-v3-"),
+    "build-cache": ("setup-soldr-buildcache-v2-", "setup-soldr-buildcache-v3-"),
     "cargo-registry": ("setup-soldr-cargoregistry-",),
     "dylint-output": ("setup-soldr-dylint-output-v2-",),
     "dylint": ("setup-soldr-dylint-v2-",),

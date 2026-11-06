@@ -15,10 +15,10 @@ const RETIRED_MAIN_PATTERNS = [
   // Cook bases run on Linux only (zackees/ci.yml#5, RUST-010; zccache#1758).
   // The macOS and Windows generations (~3 GB) pushed a full lock-transition
   // re-seed past the target, so the pre-prune failed closed on every push.
-  /^cook-base-v2-(?:macos|windows)-/i,
+  /^cook-base-v[23]-(?:macos|windows)-/i,
   // #1852: the #1838 test-deps cook runs on Linux x64 only; the arm64 leg
   // (277 MB) pushed the transition forecast over the target and is retired.
-  /^cook-base-v2-linux-arm64-glibc-rustc[0-9.]+-f6cafa616-l[0-9a-f]{16}-soldrv?[0-9.]+$/i,
+  /^cook-base-v[23]-linux-arm64-glibc-rustc[0-9.]+-f6cafa616-l[0-9a-f]{16}-soldrv?[0-9.]+$/i,
   /^cook-base-v2-windows-x64-msvc-rustc1\.95\.0-f9e7e4902-l[0-9a-f]{16}-soldrv0\.9\.23$/i,
   /^cook-base-v2-linux-x64-glibc-rustc1\.95\.0-f9e7e4902-l[0-9a-f]{16}-soldrv0\.9\.23-xdylint$/i,
   // Auto-Release builds save nothing (2026-10-02: 3.41 GB of cross-target
@@ -169,25 +169,33 @@ function cargoLockHashes(contents) {
 
 function parseCookBaseKey(key) {
   // Treat every dimension around the Cargo.lock hash as opaque profile data.
-  // The regex is intentionally strict about the known v2 layout; unknown key
+  // The regexes are intentionally strict about the known layouts; unknown key
   // formats stay protected until their restore semantics are reviewed.
   // The in-action cook writes `-soldrv0.9.25`; the standalone
   // `setup-soldr/cook` sub-action writes `-soldr0.9.25` (no `v`). Both name the
   // same release, so `v` is optional and the captured version excludes it.
-  const match =
+  // setup-soldr#627 (v3) moved the soldr segment after the optional `-x<suffix>`
+  // so a soldr release restores across versions; the dimensions are unchanged.
+  const v2 =
     /^cook-base-v2-(linux|macos|windows)-(x64|arm64)-([a-z0-9]+)-rustc([0-9.]+)-f([a-z0-9]+)-l([0-9a-f]{16})-soldrv?([0-9.]+)(?:-([a-z0-9][a-z0-9._-]*))?$/i.exec(
       key,
     );
+  const v3 = v2 ? null :
+    /^cook-base-v3-(linux|macos|windows)-(x64|arm64)-([a-z0-9]+)-rustc([0-9.]+)-f([a-z0-9]+)-l([0-9a-f]{16})(?:-(x[a-z0-9][a-z0-9._-]*?))?-soldrv?([0-9.]+)$/i.exec(
+      key,
+    );
+  const match = v2 || v3;
   if (!match) return null;
   return {
+    format: v2 ? 2 : 3,
     os: match[1].toLowerCase(),
     arch: match[2].toLowerCase(),
     libc: match[3].toLowerCase(),
     rustc: match[4],
     flags: match[5].toLowerCase(),
     lockHash: match[6].toLowerCase(),
-    soldr: match[7],
-    suffix: match[8] || "",
+    soldr: v2 ? match[7] : match[8],
+    suffix: (v2 ? match[8] : match[7]) || "",
   };
 }
 
@@ -247,17 +255,20 @@ function setupSoldrCargoRegistryKeyParts(key) {
 function setupSoldrBuildCacheKeyParts(key) {
   // The suffix is optional but remains part of the restore shape. The final
   // 16-hex component is the Cargo.lock identity; unknown formats stay held.
+  // setup-soldr#627 (v3) moved the soldr identity out of the toolchain digest
+  // into a trailing `-s<digest>`, so the lock is the last component before it.
   const match =
-    /^setup-soldr-buildcache-v2-(linux|macos|windows)-(x64|arm64)-([0-9a-f]{16})(?:-(.+?))?-([0-9a-f]{16})$/i.exec(
+    /^setup-soldr-buildcache-(?:v2-(linux|macos|windows)-(x64|arm64)-([0-9a-f]{16})(?:-(.+?))?-([0-9a-f]{16})|v3-(linux|macos|windows)-(x64|arm64)-([0-9a-f]{16})(?:-(.+?))?-([0-9a-f]{16})-s[0-9a-f]{16})$/i.exec(
       key,
     );
   if (!match) return null;
+  const at = match[1] ? 1 : 6;
   return {
-    os: match[1].toLowerCase(),
-    arch: match[2].toLowerCase(),
-    digest: match[3].toLowerCase(),
-    suffix: match[4] || "",
-    lockHash: match[5].toLowerCase(),
+    os: match[at].toLowerCase(),
+    arch: match[at + 1].toLowerCase(),
+    digest: match[at + 2].toLowerCase(),
+    suffix: match[at + 3] || "",
+    lockHash: match[at + 4].toLowerCase(),
   };
 }
 
@@ -310,10 +321,16 @@ function compareDotted(a, b) {
   return 0;
 }
 
+function compareCookGeneration(a, b) {
+  return (a.format - b.format) || compareDotted(a.rustc, b.rustc) || compareDotted(a.soldr, b.soldr);
+}
+
 // #1850: main cook bases whose (os, arch, libc, flags, suffix) family also has
 // a strictly newer (rustc, soldr) generation. Producers write the newest
 // toolchain only, so a superseded generation is never re-seeded: it is dead
 // weight that neither needs a forecast reserve nor a forecast to be deleted.
+// A key format bump outranks versions: producers write only the newest format
+// and its restore prefix cannot match an older one.
 function supersededCookBaseIds(caches) {
   const families = new Map();
   const rows = [];
@@ -324,16 +341,12 @@ function supersededCookBaseIds(caches) {
     const family = [parts.os, parts.arch, parts.libc, parts.flags, parts.suffix].join("\u0000");
     rows.push({ cache, parts, family });
     const best = families.get(family);
-    if (!best || compareDotted(parts.rustc, best.rustc) > 0 ||
-        (compareDotted(parts.rustc, best.rustc) === 0 && compareDotted(parts.soldr, best.soldr) > 0)) {
-      families.set(family, { rustc: parts.rustc, soldr: parts.soldr });
-    }
+    if (!best || compareCookGeneration(parts, best) > 0) families.set(family, parts);
   }
   const superseded = new Set();
   for (const { cache, parts, family } of rows) {
     const best = families.get(family);
-    const cmp = compareDotted(parts.rustc, best.rustc) || compareDotted(parts.soldr, best.soldr);
-    if (cmp < 0) superseded.add(cache.id);
+    if (compareCookGeneration(parts, best) < 0) superseded.add(cache.id);
   }
   return superseded;
 }
@@ -602,7 +615,7 @@ function planLockTransitionPrePruneOnce(
 
   const mainRows = caches.filter((cache) => cache.ref === "refs/heads/main" && typeof cache.key === "string");
   for (const cache of mainRows) {
-    if (cache.key.startsWith("cook-base-v2-") && !parseCookBaseKey(cache.key)) {
+    if (/^cook-base-v[23]-/.test(cache.key) && !parseCookBaseKey(cache.key)) {
       return fail(`unknown cook-base key format: ${cache.key}`);
     }
     if (cache.key.startsWith("setup-soldr-cargoregistry-") && !setupSoldrCargoRegistryKeyParts(cache.key)) {
@@ -687,7 +700,7 @@ function planLockTransitionPrePruneOnce(
   ])].sort((a, b) => a - b);
   const cookEstimate = profileBytes(
     mainRows.filter((cache) =>
-      cache.key.startsWith("cook-base-v2-") && !isRetiredMainKey(cache.key) &&
+      parseCookBaseKey(cache.key) && !isRetiredMainKey(cache.key) &&
       !supersededCooks.has(cache.id)),
     parseCookBaseKey,
     currentHashes,
