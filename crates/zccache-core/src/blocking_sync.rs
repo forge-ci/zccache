@@ -420,35 +420,104 @@ mod handoff_latency_tests {
     use super::*;
     use std::sync::Arc;
 
+    const ROUNDS: usize = 31;
+    /// Long enough for the waiter to reach its park or backoff sleep.
+    const HOLD: Duration = Duration::from_millis(8);
+    /// Median latency the lock may add over an ideal condvar wake. A timer
+    /// poll with a sleep cap of `P` adds about `P / 2`, so the old 5 ms cap
+    /// costs 2.5 ms here and anything polling at 2 ms or slower fails.
+    const MAX_EXCESS: Duration = Duration::from_millis(1);
+
+    /// One release-to-wake sample through a bare condvar, the fastest wake the
+    /// same scheduler can deliver at this moment.
+    fn control_round() -> Duration {
+        let slot = Arc::new((std::sync::Mutex::new(None::<Instant>), Condvar::new()));
+        let waiter = {
+            let slot = Arc::clone(&slot);
+            std::thread::spawn(move || {
+                let mut released = slot.0.lock().unwrap();
+                while released.is_none() {
+                    released = slot.1.wait(released).unwrap();
+                }
+                released.expect("holder stamps release").elapsed()
+            })
+        };
+        std::thread::sleep(HOLD);
+        *slot.0.lock().unwrap() = Some(Instant::now());
+        slot.1.notify_all();
+        waiter.join().unwrap()
+    }
+
+    fn mutex_round() -> Duration {
+        let mutex = Arc::new(Mutex::new(None::<Instant>));
+        let mut guard = mutex.lock_for(Duration::from_secs(5)).unwrap();
+        let waiter = {
+            let mutex = Arc::clone(&mutex);
+            std::thread::spawn(move || {
+                let released = mutex.lock_for(Duration::from_secs(5)).unwrap();
+                released.expect("holder stamps release").elapsed()
+            })
+        };
+        std::thread::sleep(HOLD);
+        *guard = Some(Instant::now());
+        drop(guard);
+        waiter.join().unwrap()
+    }
+
+    fn rwlock_writer_round() -> Duration {
+        let lock = Arc::new(RwLock::new(None::<Instant>));
+        let mut guard = lock.write_for(Duration::from_secs(5)).unwrap();
+        let waiter = {
+            let lock = Arc::clone(&lock);
+            std::thread::spawn(move || {
+                let released = lock.write_for(Duration::from_secs(5)).unwrap();
+                released.expect("holder stamps release").elapsed()
+            })
+        };
+        std::thread::sleep(HOLD);
+        *guard = Some(Instant::now());
+        drop(guard);
+        waiter.join().unwrap()
+    }
+
+    fn median(samples: &mut [Duration]) -> Duration {
+        samples.sort_unstable();
+        samples[samples.len() / 2]
+    }
+
+    /// Host load delays any wake, so a single worst sample or a fixed absolute
+    /// bound measures the scheduler (#2059). Interleaving lock and control
+    /// rounds cancels that delay, and the median ignores individual stalls,
+    /// while a sleep-timer wake shifts the whole lock distribution.
+    fn assert_handoff_tracks_control(label: &str, lock_round: fn() -> Duration) {
+        let mut lock = Vec::with_capacity(ROUNDS);
+        let mut control = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            lock.push(lock_round());
+            control.push(control_round());
+        }
+        let lock = median(&mut lock);
+        let control = median(&mut control);
+        eprintln!(
+            "{label} handoff: median {} ns, control median {} ns",
+            lock.as_nanos(),
+            control.as_nanos()
+        );
+        assert!(
+            lock.saturating_sub(control) < MAX_EXCESS,
+            "contended {label} handoff median {} ns exceeds control median {} ns by the \
+             {} ns budget: waiters are sleeping through releases (#1972)",
+            lock.as_nanos(),
+            control.as_nanos(),
+            MAX_EXCESS.as_nanos()
+        );
+    }
+
     /// Perf guard for the #1972 regression: a contended waiter must observe a
     /// release promptly instead of sleeping through a multi-ms backoff step.
     #[test]
     fn contended_mutex_handoff_is_sub_millisecond() {
-        const ROUNDS: usize = 20;
-        let mut worst = Duration::ZERO;
-        for _ in 0..ROUNDS {
-            let mutex = Arc::new(Mutex::new(None::<Instant>));
-            let guard = mutex.lock_for(Duration::from_secs(5)).unwrap();
-            let waiter = {
-                let mutex = Arc::clone(&mutex);
-                std::thread::spawn(move || {
-                    let released = mutex.lock_for(Duration::from_secs(5)).unwrap();
-                    released.expect("holder stamps release").elapsed()
-                })
-            };
-            // Hold long enough for the waiter to reach its backoff sleeps.
-            std::thread::sleep(Duration::from_millis(8));
-            let mut guard = guard;
-            *guard = Some(Instant::now());
-            drop(guard);
-            worst = worst.max(waiter.join().unwrap());
-        }
-        // Old 5 ms sleep cap put the median handoff at multiple ms.
-        assert!(
-            worst < Duration::from_millis(2),
-            "contended handoff took {} ns",
-            worst.as_nanos()
-        );
+        assert_handoff_tracks_control("mutex", mutex_round);
     }
 
     /// The regression shape: parallel materializers each take the
@@ -456,28 +525,7 @@ mod handoff_latency_tests {
     /// wake on release rather than on a sleep timer.
     #[test]
     fn contended_rwlock_writer_handoff_is_sub_millisecond() {
-        let mut worst = Duration::ZERO;
-        for _ in 0..20 {
-            let lock = Arc::new(RwLock::new(None::<Instant>));
-            let guard = lock.write_for(Duration::from_secs(5)).unwrap();
-            let waiter = {
-                let lock = Arc::clone(&lock);
-                std::thread::spawn(move || {
-                    let released = lock.write_for(Duration::from_secs(5)).unwrap();
-                    released.expect("holder stamps release").elapsed()
-                })
-            };
-            std::thread::sleep(Duration::from_millis(8));
-            let mut guard = guard;
-            *guard = Some(Instant::now());
-            drop(guard);
-            worst = worst.max(waiter.join().unwrap());
-        }
-        assert!(
-            worst < Duration::from_millis(2),
-            "contended writer handoff took {} ns",
-            worst.as_nanos()
-        );
+        assert_handoff_tracks_control("rwlock writer", rwlock_writer_round);
     }
 
     /// A reader held back only by writer intent must be woken when that

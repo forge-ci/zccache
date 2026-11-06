@@ -39,7 +39,7 @@ use kernal_api::broker_client::{BackendRoute, BrokerClientError, RefusalKind};
 // The raw-socket reachability probe used by the `RUNNING_PROCESS_FAKE_BACKEND`
 // seam lives in `ipc::probe` (extracted from the removed `broker_v2` module,
 // issue #1001).
-use super::probe::probe_local_socket;
+use super::probe::probe_local_socket_with_deadline;
 
 use super::error::IpcError;
 use super::{connect, running_process_disabled, ClientConnection};
@@ -168,9 +168,14 @@ async fn resolve_fake_backend_seam_async(seam_endpoint: String) -> Option<(Strin
         })
 }
 
+/// Bound on the seam's reachability dial. An absent listener fails at once, so
+/// this only has to outlast a scheduler stall: at the probe's default 250 ms, a
+/// loaded host turned a healthy seam into a silent Direct route (#2059).
+const SEAM_PROBE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Dial the upstream TEST-ONLY fake-backend seam endpoint directly.
 fn resolve_fake_backend_seam(seam_endpoint: &str) -> Option<(String, BackendRoute)> {
-    match probe_local_socket(seam_endpoint) {
+    match probe_local_socket_with_deadline(seam_endpoint, SEAM_PROBE_DEADLINE) {
         Ok(()) => Some((to_zccache_endpoint(seam_endpoint), BackendRoute::HelloSkip)),
         Err(err) => {
             tracing::warn!(
