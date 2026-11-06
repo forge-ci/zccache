@@ -1,5 +1,137 @@
 [
   {
+    "kind": "warm-floor-provenance",
+    "benchmark": "cpp-inline",
+    "scenario": "Multi-file, Warm",
+    "source_run_url": "https://github.com/forge-ci/zccache/actions/runs/42176721996",
+    "classification": "runner-dependent ratio floor, not warm-path regression",
+    "policy": "ceil(max(all recorded attempt medians) * 1.2 / 100000) * 100000 ns",
+    "budget_ns": 18500000,
+    "n_attempts": 17,
+    "n_runs": 11,
+    "samples": [
+      {
+        "run_id": 41919923220,
+        "attempt": 1,
+        "zccache_duration_ns": 14085351,
+        "bare_duration_ns": 9919099359,
+        "sccache_duration_ns": 9929481518
+      },
+      {
+        "run_id": 41930287150,
+        "attempt": 1,
+        "zccache_duration_ns": 7972172,
+        "bare_duration_ns": 5255094112,
+        "sccache_duration_ns": 5238191582
+      },
+      {
+        "run_id": 41969887525,
+        "attempt": 1,
+        "zccache_duration_ns": 11596168,
+        "bare_duration_ns": 7698154710,
+        "sccache_duration_ns": 7727419120
+      },
+      {
+        "run_id": 42057153997,
+        "attempt": 1,
+        "zccache_duration_ns": 10662530,
+        "bare_duration_ns": 6533518788,
+        "sccache_duration_ns": 6504578457
+      },
+      {
+        "run_id": 42090506977,
+        "attempt": 1,
+        "zccache_duration_ns": 15413149,
+        "bare_duration_ns": 10065247356,
+        "sccache_duration_ns": 10088148374
+      },
+      {
+        "run_id": 42158476571,
+        "attempt": 1,
+        "zccache_duration_ns": 10880588,
+        "bare_duration_ns": 6743616478,
+        "sccache_duration_ns": 6653737413
+      },
+      {
+        "run_id": 42167805410,
+        "attempt": 1,
+        "zccache_duration_ns": 8690266,
+        "bare_duration_ns": 4823877130,
+        "sccache_duration_ns": 5155172568
+      },
+      {
+        "run_id": 42167805410,
+        "attempt": 2,
+        "zccache_duration_ns": 9368379,
+        "bare_duration_ns": 4916053189,
+        "sccache_duration_ns": 4932931653
+      },
+      {
+        "run_id": 42167805410,
+        "attempt": 3,
+        "zccache_duration_ns": 9591437,
+        "bare_duration_ns": 4895460547,
+        "sccache_duration_ns": 4838929862
+      },
+      {
+        "run_id": 42168157761,
+        "attempt": 1,
+        "zccache_duration_ns": 9960514,
+        "bare_duration_ns": 4635181492,
+        "sccache_duration_ns": 4691419729
+      },
+      {
+        "run_id": 42168157761,
+        "attempt": 2,
+        "zccache_duration_ns": 9541695,
+        "bare_duration_ns": 4711199887,
+        "sccache_duration_ns": 4646313932
+      },
+      {
+        "run_id": 42168157761,
+        "attempt": 3,
+        "zccache_duration_ns": 8928802,
+        "bare_duration_ns": 4586727476,
+        "sccache_duration_ns": 4664265189
+      },
+      {
+        "run_id": 42171585124,
+        "attempt": 1,
+        "zccache_duration_ns": 15278895,
+        "bare_duration_ns": 10201316119,
+        "sccache_duration_ns": 10107443396
+      },
+      {
+        "run_id": 42176721996,
+        "attempt": 1,
+        "zccache_duration_ns": 10885868,
+        "bare_duration_ns": 4951865782,
+        "sccache_duration_ns": 5233554511
+      },
+      {
+        "run_id": 42176721996,
+        "attempt": 2,
+        "zccache_duration_ns": 9149641,
+        "bare_duration_ns": 5174362516,
+        "sccache_duration_ns": 4945305744
+      },
+      {
+        "run_id": 42176721996,
+        "attempt": 3,
+        "zccache_duration_ns": 9114327,
+        "bare_duration_ns": 4956046949,
+        "sccache_duration_ns": 4759042475
+      },
+      {
+        "run_id": 42177199683,
+        "attempt": 1,
+        "zccache_duration_ns": 14945226,
+        "bare_duration_ns": 9688577978,
+        "sccache_duration_ns": 9837181536
+      }
+    ]
+  },
+  {
     "issue": 1807,
     "kind": "warm-floor-provenance",
     "rows": [

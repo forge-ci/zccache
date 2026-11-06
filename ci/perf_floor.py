@@ -108,8 +108,6 @@ def effective_floor(
 WARM_RATIO_FLOORS: dict[tuple[str, str, str], float] = {
     ("c-inline", "Single-file, Warm", "bare"): 24.35,
     ("c-inline", "Single-file, Warm", "sccache"): 2.85,
-    ("cpp-inline", "Multi-file, Warm", "bare"): 581.3,
-    ("cpp-inline", "Multi-file, Warm", "sccache"): 577.2,
     ("cpp-inline", "Single-file, Warm", "bare"): 104.3,
     ("cpp-inline", "Single-file, Warm", "sccache"): 3.06,
     ("cpp-response-file", "Multi-file RSP, Warm", "bare"): 339.1,
@@ -161,14 +159,23 @@ def warm_ratio_floor(benchmark: str, scenario: str, baseline: str) -> float | No
 # Provenance: ci/perf_threshold_history.json.
 #
 # (benchmark, scenario) -> max zccache warm-hit seconds.
+# C++ batched warm: the compiler baseline varies 4.6-10.2 s while hits stay
+# 7.97-15.42 ms. The old 581.3x/577.2x floors reject faster hits on faster
+# runners. Reuse the absolute-budget policy, using ALL 17 retained attempts
+# from 11 consecutive completed main runs (including failures), not best tries.
+# Budget = ceil(max(hit_ns) * 1.2 / 100_000) * 100_000 ns = 18.5 ms.
+# Same 20% calibration margin as the ratio ratchet; provenance and exact ns
+# samples live in ci/perf_threshold_history.json. A 20 ms hit fails regardless
+# of compiler speed. Each sample is already the median of five warm trials.
 WARM_HIT_BUDGET_SECONDS: dict[tuple[str, str], float] = {
     ("c-static-library-link", "Static archive, Warm"): 0.0009,
     ("cpp-driver-link", "Driver link, Warm"): 0.0009,
+    ("cpp-inline", "Multi-file, Warm"): 0.0185,
 }
 
 
 def warm_hit_budget_seconds(benchmark: str, scenario: str) -> float | None:
-    """Absolute warm-hit budget for a sub-millisecond row, or None if ratio-gated."""
+    """Absolute warm-hit budget for a calibrated row, or None if ratio-gated."""
     return WARM_HIT_BUDGET_SECONDS.get((benchmark, scenario))
 
 

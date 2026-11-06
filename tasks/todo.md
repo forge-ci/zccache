@@ -1665,3 +1665,13 @@ one existing success; both argument parsers now share effective-option merging.
 - [x] Confirm gh missing-release stdout and failing run.
 - [x] Move metadata resolution into a tested release helper.
 - [ ] Run pinned local gate and submit PR to merge queue.
+
+
+## C++ warm Perf Guard runner calibration
+
+- [x] Trace the original three-run ratio calibration and five-trial warm medians.
+- [x] Retain every attempt from 11 consecutive completed main runs, including failures.
+- [x] Reuse absolute warm-hit budgets with the existing 20% calibration margin.
+- [x] Add failing-then-passing CI policy regression tests.
+- [ ] Run local Docker diagnostic/matrix, local gate, review, and hosted Perf Guard.
+- [ ] Merge through the existing queue with CI summary unchanged.
