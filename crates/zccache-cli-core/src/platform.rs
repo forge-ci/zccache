@@ -4,10 +4,12 @@
 //! the standalone platform crate is removed. Neutral capabilities are direct
 //! re-exports, so their type identity and behavior remain kernal-api's.
 
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "download-client"))]
 pub(crate) mod executable {
+    #[cfg(feature = "cli")]
+    pub(crate) use kernal_api::platform::executable::stem_matches;
     pub(crate) use kernal_api::platform::executable::{
-        current_image, file_name_os as native_name, find_on_path, stem_matches,
+        current_image, file_name_os as native_name, find_on_path,
     };
 }
 
