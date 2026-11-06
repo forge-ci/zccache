@@ -23,6 +23,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use zccache_download::http;
 
 use crate::download::{DownloadOptions, DownloadPhase};
 use crate::download_client::ArchiveFormat;
@@ -155,48 +156,45 @@ fn save_record(store: &zccache_artifact::kv::KvStore, url: &str, record: &UrlRec
 /// download — revalidation is an optimization and must never be the reason a
 /// fetch fails.
 async fn is_still_fresh(url: &str, record: &UrlRecord) -> bool {
-    let Some(client) = reqwest::Client::builder()
-        .user_agent(format!("zccache-fetch/{}", zccache_core::VERSION))
-        .https_only(true)
-        .build()
-        .ok()
-    else {
+    let Some(client) = revalidation_client() else {
         return false;
     };
-    let mut request = client.get(url);
-    if let Some(etag) = &record.etag {
-        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    let request = client.get(url, http::CONTROL);
+    let request = if let Some(etag) = &record.etag {
+        request.header(http::header::IF_NONE_MATCH, etag)
     } else if let Some(modified) = &record.last_modified {
-        request = request.header(reqwest::header::IF_MODIFIED_SINCE, modified);
+        request.header(http::header::IF_MODIFIED_SINCE, modified)
     } else {
         return false;
-    }
-    matches!(request.send().await, Ok(response) if response.status() == reqwest::StatusCode::NOT_MODIFIED)
+    };
+    matches!(request.send(&http::uncancelled()).await, Ok(response) if response.status() == http::StatusCode::NOT_MODIFIED)
+}
+
+fn revalidation_client() -> Option<http::HttpClient> {
+    http::HttpClient::new(
+        &format!("zccache-fetch/{}", zccache_core::VERSION),
+        true,
+        http::CONNECT_BUDGET,
+    )
+    .ok()
 }
 
 /// Read the validators an origin offers, for the next revalidation.
 async fn read_validators(url: &str) -> (Option<String>, Option<String>) {
-    let Some(client) = reqwest::Client::builder()
-        .user_agent(format!("zccache-fetch/{}", zccache_core::VERSION))
-        .https_only(true)
-        .build()
-        .ok()
+    let Some(client) = revalidation_client() else {
+        return (None, None);
+    };
+    let Ok(response) = client
+        .head(url, http::CONTROL)
+        .send(&http::uncancelled())
+        .await
     else {
         return (None, None);
     };
-    let Ok(response) = client.head(url).send().await else {
-        return (None, None);
-    };
-    let header = |name: reqwest::header::HeaderName| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned)
-    };
+    let header = |name| response.header(name).map(str::to_owned);
     (
-        header(reqwest::header::ETAG),
-        header(reqwest::header::LAST_MODIFIED),
+        header(http::header::ETAG),
+        header(http::header::LAST_MODIFIED),
     )
 }
 

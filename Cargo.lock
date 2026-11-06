@@ -4001,7 +4001,6 @@ dependencies = [
  "prost",
  "rayon",
  "regex",
- "reqwest",
  "ruzstd",
  "serde",
  "serde_json",
@@ -4200,11 +4199,13 @@ dependencies = [
 name = "zccache-gha"
 version = "1.15.14"
 dependencies = [
- "reqwest",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "tokio",
  "tracing",
+ "zccache-download",
 ]
 
 [[package]]

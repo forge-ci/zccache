@@ -1,0 +1,22 @@
+[package]
+name = "ban_raw_network_access"
+version = "0.1.0"
+description = "Confine HTTP transports to the budgeted boundary (#1968)"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Match the dylint_linting pin used by the sibling dylints — same toolchain
+# (rust-toolchain.toml here), same upstream commit.
+dylint_linting = "=6.2.0"
+
+[dev-dependencies]
+dylint_testing = "=6.2.0"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]

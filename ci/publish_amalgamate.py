@@ -103,7 +103,7 @@ INTERNAL_FEATURE_ADDITIONS: dict[str, tuple[str, ...]] = {
         "dep:sha2",
         "dep:zip",
     ),
-    "gha": ("dep:reqwest", "dep:sha2"),
+    "gha": ("download", "dep:sha2"),
 }
 
 
