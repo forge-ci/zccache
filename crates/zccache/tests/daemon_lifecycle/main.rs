@@ -15,6 +15,7 @@ mod daemon_crash_minidump_test;
 mod daemon_cwd_release;
 mod daemon_endpoint_scoped_lock_test;
 mod daemon_exe_overwrite;
+mod daemon_exit_window_respawn_test;
 mod daemon_idle_cpu_budget_test;
 mod daemon_integration_test;
 mod daemon_lockfile_ownership_test;

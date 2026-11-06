@@ -367,12 +367,44 @@ fn run_server(args: Args) {
         let mut lock_file = crate::daemon::lock_file_guard::LockFileGuard::new(
             crate::ipc::lock_file_path_for(&endpoint),
         );
-        let bind_endpoint = endpoint.clone();
-        let bind_result = kernal_api::async_engine::launch_blocking(move || {
-            crate::daemon::DaemonServer::bind(&bind_endpoint)
-        })
-        .detach_on_drop()
-        .await;
+        // #2106: a loss may only mean the previous daemon is still exiting. If
+        // this process gave up then, no daemon would remain once that one left
+        // and the client that spawned us would fail, so retry until a healthy
+        // winner appears, the bind succeeds or the budget ends.
+        let bind_deadline = std::time::Instant::now() + EXIT_WINDOW_BIND_BUDGET;
+        let bind_result = loop {
+            let bind_endpoint = endpoint.clone();
+            let result = kernal_api::async_engine::launch_blocking(move || {
+                crate::daemon::DaemonServer::bind(&bind_endpoint)
+            })
+            .detach_on_drop()
+            .await;
+            let lost_to = match &result {
+                Ok(Err(crate::ipc::IpcError::Io(error)))
+                    if !kernal_api::platform::host::target_is_windows() =>
+                {
+                    error.kind()
+                }
+                _ => break result,
+            };
+            let may_be_exit_window = matches!(
+                lost_to,
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::WouldBlock
+            );
+            if !may_be_exit_window || std::time::Instant::now() >= bind_deadline {
+                break result;
+            }
+            if lost_to == std::io::ErrorKind::AddrInUse
+                && crate::ipc::probe_existing_daemon(
+                    &endpoint,
+                    std::time::Duration::from_millis(500),
+                )
+                .await
+            {
+                break result;
+            }
+            kernal_api::async_engine::sleep(EXIT_WINDOW_BIND_PAUSE).await;
+        };
         let server = match bind_result {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -475,11 +507,10 @@ fn run_server(args: Args) {
                 // of reporting a successful start.
                 tracing::error!(%endpoint, %error, "failed to write lock file — refusing to serve");
                 crate::daemon::startup_lockfile::report_unrecorded(&endpoint, &error);
-                // The endpoint is ours (we won the bind), so retire it. The
-                // lock file is NOT ours to remove: we never wrote one, and
-                // the removal above only unlinks a provably unparseable
-                // remnant — see #1905.
-                let _ = crate::ipc::retire_endpoint(&endpoint);
+                // Exiting releases the bind lock, so the next bind reclaims the
+                // socket file (#2106). The lock file is NOT ours to remove: we
+                // never wrote one, and the removal above only unlinks a provably
+                // unparseable remnant — see #1905.
                 std::process::exit(1);
             }
         }
@@ -654,6 +685,11 @@ fn run_server(args: Args) {
         load_handle.cancel();
     });
 }
+
+/// Shorter than the client's 10 s no-daemon grace, so a retry that wins still
+/// has a client waiting for it.
+const EXIT_WINDOW_BIND_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
+const EXIT_WINDOW_BIND_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn init_tracing(level: &str) {
     use tracing_subscriber::EnvFilter;

@@ -59,6 +59,32 @@ PID from one endpoint's lock with an identity from that same endpoint's sidecar,
 so every lifecycle helper takes the endpoint it was asked about. See
 [runtime.md § Endpoint-scoped ownership record](runtime.md#endpoint-scoped-ownership-record-1904).
 
+## Unix bind exclusion (#2106)
+
+A socket path can be replaced only by a process holding `<socket>.bind-lock`. A
+listener takes this advisory lock before it looks at the path and holds it for
+life, so the kernel releases it on any exit, including a crash.
+
+- **Lock held elsewhere:** bind fails with `AddrInUse` after at most 100 ms, and
+  `retire_endpoint` leaves the socket in place and reports success.
+- **Lock acquired:** no locking listener is alive. A socket file still present is
+  probed once, so a live daemon from a build without the lock is refused rather
+  than unlinked. A refused connect means stale, and the file is reclaimed.
+
+A compile daemon that loses the bind, or the cache-root writer lock, retries for
+up to 8 s, because the loser may be the replacement for a daemon still exiting.
+It defers with exit 0 as soon as a daemon on its endpoint is reachable, and when
+the budget ends. A writer-lock loss still exits 1, now after that wait.
+The lock file is never deleted: a holder of a deleted file excludes nobody. Only
+bind and retire touch the lock or the probe, so the compile path gains no
+roundtrip. Windows named pipes are unchanged, since the OS already refuses a
+second first-instance.
+
+**Remaining gaps:** an older build with no lock can still unlink a live socket,
+and its bind can land between the probe and the unlink. Deleting the lock file
+along with its directory while a listener is alive also voids the exclusion, but
+that deletes the socket path too.
+
 ## Endpoint Access Control (#1171)
 
 The connectable `Request` surface is process execution as the daemon user, so

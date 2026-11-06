@@ -126,3 +126,84 @@ fn an_unreachable_download_daemon_on_a_custom_endpoint_is_replaced() {
     );
     assert!(!stderr.contains("not accepting connections"), "{stderr}");
 }
+
+/// #2106, with real processes: a second daemon on a live endpoint exits without
+/// orphaning the first, and a SIGKILLed daemon's socket is reclaimed.
+#[cfg(unix)]
+#[test]
+fn a_second_download_daemon_cannot_orphan_a_live_one_and_a_crash_is_reclaimed() {
+    use std::path::Path;
+    use std::process::Child;
+    use std::time::{Duration, Instant};
+
+    const BUDGET: Duration = Duration::from_secs(30);
+
+    fn serving(deployed: &Path, endpoint: &Path, cache: &Path) -> bool {
+        let output = Command::new(deployed)
+            .arg("--endpoint")
+            .arg(endpoint)
+            .env("ZCCACHE_CACHE_DIR", cache)
+            .output()
+            .expect("query status");
+        String::from_utf8_lossy(&output.stdout).contains("status:     running")
+    }
+
+    struct Daemon(Child);
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = temp.path().join("cache");
+    let endpoint = temp.path().join("dl.sock");
+    let deployed = temp.path().join("zccache-download-daemon");
+    std::fs::copy(env!("CARGO_BIN_EXE_zccache"), &deployed).expect("deploy");
+    let spawn = || {
+        Daemon(
+            Command::new(&deployed)
+                .args(["--foreground", "--endpoint"])
+                .arg(&endpoint)
+                .env("ZCCACHE_CACHE_DIR", &cache)
+                .spawn()
+                .expect("spawn daemon"),
+        )
+    };
+    let wait_serving = || {
+        let deadline = Instant::now() + BUDGET;
+        while !serving(&deployed, &endpoint, &cache) {
+            assert!(Instant::now() < deadline, "daemon never served");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+
+    let mut first = spawn();
+    wait_serving();
+    let inode = |path: &Path| {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(path).expect("socket").ino()
+    };
+    let first_socket = inode(&endpoint);
+
+    let mut second = spawn();
+    let deadline = Instant::now() + BUDGET;
+    let status = loop {
+        if let Some(status) = second.0.try_wait().expect("poll second") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the second daemon kept running");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(!status.success(), "the loser must report the failed bind");
+    assert_eq!(inode(&endpoint), first_socket, "the socket was replaced");
+    assert!(first.0.try_wait().expect("poll first").is_none());
+    assert!(serving(&deployed, &endpoint, &cache), "first was orphaned");
+
+    first.0.kill().expect("SIGKILL");
+    first.0.wait().expect("reap");
+    assert!(endpoint.exists(), "the crash must leave a stale socket");
+    let _third = spawn();
+    wait_serving();
+}

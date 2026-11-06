@@ -4,6 +4,20 @@
 //! vocabulary are product policy. The transport objects remain the canonical
 //! protected kernal-api socket/pipe capabilities.
 
+// Keep host selection for Unix-only transport tests inside this boundary.
+#[cfg(all(test, unix))]
+macro_rules! unix_transport_tests {
+    ($($item:tt)*) => { $($item)* };
+}
+
+#[cfg(all(test, not(unix)))]
+macro_rules! unix_transport_tests {
+    ($($item:tt)*) => {};
+}
+
+#[cfg(test)]
+pub(crate) use unix_transport_tests;
+
 pub(crate) mod host {
     pub(crate) fn runtime_dir() -> Option<String> {
         (!kernal_api::platform::host::target_is_windows())
@@ -52,6 +66,86 @@ pub(crate) mod ipc {
 
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+    /// Who may replace a Unix socket path (#2106).
+    ///
+    /// A listener holds an advisory lock on `<socket>.bind-lock` for its whole
+    /// life, so the kernel releases it on any exit, including a crash. Holding
+    /// the lock therefore proves no locking listener is alive: there is no
+    /// check-then-unlink window between processes using it. The lock file is
+    /// never deleted, because a holder of a deleted file excludes nobody.
+    #[cfg(unix)]
+    mod bind_lock {
+        use std::io;
+        use std::time::{Duration, Instant};
+
+        use kernal_api::platform::fs::{self, OwnedFileLock};
+
+        use super::Endpoint;
+
+        /// Outlasts a concurrent retire or a failing bind, which hold the lock
+        /// for microseconds. A live listener outlasts it and means "in use".
+        const CONTENTION_BUDGET: Duration = Duration::from_millis(100);
+        const CONTENTION_PAUSE: Duration = Duration::from_millis(5);
+        /// A probe that gets no answer here is treated as live.
+        const PROBE_BUDGET: Duration = Duration::from_secs(1);
+
+        pub(super) fn try_acquire(endpoint: &Endpoint) -> io::Result<OwnedFileLock> {
+            let mut path = std::ffi::OsString::from(endpoint.as_str());
+            path.push(".bind-lock");
+            fs::try_lock_exclusive_owned(fs::open_lock_file(std::path::Path::new(&path))?)
+        }
+
+        pub(super) fn acquire(endpoint: &Endpoint) -> io::Result<OwnedFileLock> {
+            let deadline = Instant::now() + CONTENTION_BUDGET;
+            loop {
+                match try_acquire(endpoint) {
+                    Err(error) if fs::is_lock_conflict(&error) => {
+                        if Instant::now() >= deadline {
+                            return Err(in_use(endpoint));
+                        }
+                        std::thread::sleep(CONTENTION_PAUSE);
+                    }
+                    result => return result,
+                }
+            }
+        }
+
+        /// A daemon from a build without the bind lock leaves the lock free
+        /// while it serves, and only a connect can see it. This runs at bind
+        /// and only when a socket file is present, never on a compile request.
+        pub(super) fn refuse_unlocked_live_listener(endpoint: &Endpoint) -> io::Result<()> {
+            use std::os::unix::fs::FileTypeExt as _;
+            // Only a socket can have a listener. Hosts differ on what a connect
+            // to anything else reports (Linux refuses it, macOS does not), and
+            // the retire that follows refuses a non-socket on every host.
+            let is_socket = std::fs::symlink_metadata(endpoint.as_str())
+                .is_ok_and(|metadata| metadata.file_type().is_socket());
+            if !is_socket {
+                return Ok(());
+            }
+            match crate::probe::probe_local_socket_with_deadline(endpoint.as_str(), PROBE_BUDGET) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    Ok(())
+                }
+                // Any other outcome leaves it open whether something is
+                // listening, and that is no licence to unlink the path.
+                _ => Err(in_use(endpoint)),
+            }
+        }
+
+        fn in_use(endpoint: &Endpoint) -> io::Error {
+            io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("a live listener already owns {endpoint}"),
+            )
+        }
+    }
+
     static TEST_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 
     /// Product-owned endpoint spelling. Transport validation occurs at bind or
@@ -68,7 +162,27 @@ pub(crate) mod ipc {
             &self.0
         }
 
+        /// Remove a stale endpoint. A socket whose listener holds the bind lock
+        /// is not stale, so it stays and this reports success (#2106).
         pub(crate) fn retire(&self) -> io::Result<()> {
+            #[cfg(unix)]
+            {
+                if std::fs::symlink_metadata(&self.0).is_err() {
+                    return self.retire_unguarded();
+                }
+                match bind_lock::try_acquire(self) {
+                    Ok(_lock) => self.retire_unguarded(),
+                    Err(error) if kernal_api::platform::fs::is_lock_conflict(&error) => Ok(()),
+                    Err(error) => Err(error),
+                }
+            }
+            #[cfg(windows)]
+            {
+                self.retire_unguarded()
+            }
+        }
+
+        fn retire_unguarded(&self) -> io::Result<()> {
             kernal_api::platform::ipc::retire_socket_endpoint(std::path::Path::new(&self.0))
         }
 
@@ -286,6 +400,9 @@ pub(crate) mod ipc {
         inner: kernal_api::platform::ipc::LocalSocketListener,
         #[cfg(unix)]
         tightened_parent: bool,
+        /// Declared after `inner`: the socket closes before the path is released.
+        #[cfg(unix)]
+        _bind_lock: kernal_api::platform::fs::OwnedFileLock,
         #[cfg(windows)]
         endpoint: String,
         #[cfg(windows)]
@@ -296,7 +413,6 @@ pub(crate) mod ipc {
         pub(crate) fn bind(endpoint: &Endpoint) -> io::Result<Self> {
             #[cfg(unix)]
             {
-                endpoint.retire()?;
                 let mut tightened_parent = false;
                 if let Some(parent) = std::path::Path::new(endpoint.as_str()).parent() {
                     kernal_api::platform::fs::create_dir_all_private(parent)?;
@@ -308,11 +424,17 @@ pub(crate) mod ipc {
                             )
                         })?;
                 }
+                // The lock comes before any look at the path and lasts as long
+                // as the listener, so no bind or retire can unlink it (#2106).
+                let bind_lock = bind_lock::acquire(endpoint)?;
+                bind_lock::refuse_unlocked_live_listener(endpoint)?;
+                endpoint.retire_unguarded()?;
                 Ok(Self {
                     inner: kernal_api::platform::ipc::LocalSocketListener::bind_owner_only(
                         std::path::Path::new(endpoint.as_str()),
                     )?,
                     tightened_parent,
+                    _bind_lock: bind_lock,
                 })
             }
             #[cfg(windows)]
