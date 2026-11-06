@@ -36,28 +36,56 @@ fn select_endpoint(file_path: String, pipe_name: String) -> String {
     }
 }
 
-/// Path to the daemon PID lock file.
+/// Path to the default endpoint's daemon PID lock file.
 pub fn lock_file_path() -> NormalizedPath {
-    zccache_core::config::daemon_state_dir().join("download-daemon.lock")
+    lock_file_path_for(&default_endpoint())
 }
 
-/// Write the daemon PID to the lock file.
+/// Path to the PID lock file of the daemon serving `endpoint` (#2090). The
+/// default endpoint keeps the historical name. A shared name let a custom-endpoint
+/// daemon overwrite, and on exit delete, the default daemon's record.
+pub fn lock_file_path_for(endpoint: &str) -> NormalizedPath {
+    let name = if endpoint == default_endpoint() {
+        "download-daemon.lock".to_owned()
+    } else {
+        let scope = zccache_core::stable_path_id(std::path::Path::new(endpoint));
+        format!("download-daemon-{scope}.lock")
+    };
+    zccache_core::config::daemon_state_dir().join(name)
+}
+
+/// Write the default endpoint's daemon PID to its lock file.
 pub fn write_lock_file(pid: u32) -> Result<(), std::io::Error> {
-    let path = lock_file_path();
+    write_lock_file_for(&default_endpoint(), pid)
+}
+
+/// Endpoint-scoped counterpart of [`write_lock_file`] (#2090).
+pub fn write_lock_file_for(endpoint: &str, pid: u32) -> Result<(), std::io::Error> {
+    let path = lock_file_path_for(endpoint);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, pid.to_string())
 }
 
-/// Remove the daemon lock file (best-effort).
+/// Remove the default endpoint's lock file (best-effort).
 pub fn remove_lock_file() {
-    let _ = std::fs::remove_file(lock_file_path());
+    remove_lock_file_for(&default_endpoint());
 }
 
-/// Read the PID stored in the daemon lock file, if it exists and is valid.
+/// Endpoint-scoped counterpart of [`remove_lock_file`] (#2090).
+pub fn remove_lock_file_for(endpoint: &str) {
+    let _ = std::fs::remove_file(lock_file_path_for(endpoint));
+}
+
+/// Read the PID in the default endpoint's lock file, if present and valid.
 pub fn read_lock_file_pid() -> Option<u32> {
-    std::fs::read_to_string(lock_file_path())
+    read_lock_file_pid_for(&default_endpoint())
+}
+
+/// Endpoint-scoped counterpart of [`read_lock_file_pid`] (#2090).
+pub fn read_lock_file_pid_for(endpoint: &str) -> Option<u32> {
+    std::fs::read_to_string(lock_file_path_for(endpoint))
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
 }

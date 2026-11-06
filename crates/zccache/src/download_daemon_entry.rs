@@ -38,7 +38,10 @@ fn print_status(args: &Args) {
     println!("zccache-download-daemon v{}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("  endpoint:   {endpoint}");
-    println!("  lock file:  {}", daemon_mgmt::lock_file_path().display());
+    println!(
+        "  lock file:  {}",
+        daemon_mgmt::lock_file_path_for(&endpoint).display()
+    );
     match query_daemon_status(&endpoint) {
         Ok(status) => {
             println!("  status:     running");
@@ -79,11 +82,6 @@ fn query_daemon_status(endpoint: &str) -> Result<crate::download::DownloadDaemon
 
 fn run_server(args: Args) {
     let endpoint = args.endpoint.unwrap_or_else(daemon_mgmt::default_endpoint);
-    let pid = std::process::id();
-    if let Err(err) = daemon_mgmt::write_lock_file(pid) {
-        tracing::warn!("failed to write download daemon lock file: {err}");
-    }
-
     #[expect(
         clippy::expect_used,
         reason = "multi-thread runtime construction with enable_all only fails on OS resource exhaustion (timer/IO driver registration); download daemon cannot proceed by any other means at that point"
@@ -95,19 +93,19 @@ fn run_server(args: Args) {
     rt.run(async move {
         let bind_endpoint = endpoint.clone();
         let bind_result = kernal_api::async_engine::launch_blocking(move || {
-            crate::download_daemon::DownloadDaemon::bind(&bind_endpoint)
+            let server = crate::download_daemon::DownloadDaemon::bind(&bind_endpoint)?;
+            record_instance(&bind_endpoint);
+            Ok::<_, crate::ipc::IpcError>(server)
         })
         .await;
         let mut server = match bind_result {
             Ok(Ok(server)) => server,
             Ok(Err(err)) => {
                 eprintln!("failed to bind download daemon at {endpoint}: {err}");
-                daemon_mgmt::remove_lock_file();
                 std::process::exit(1);
             }
             Err(err) => {
                 eprintln!("failed to join download daemon bind worker for {endpoint}: {err}");
-                daemon_mgmt::remove_lock_file();
                 std::process::exit(1);
             }
         };
@@ -129,11 +127,34 @@ fn run_server(args: Args) {
         .detach();
         if let Err(err) = server.run().await {
             eprintln!("download daemon error: {err}");
-            daemon_mgmt::remove_lock_file();
+            remove_instance_records(&endpoint);
             std::process::exit(1);
         }
-        daemon_mgmt::remove_lock_file();
+        remove_instance_records(&endpoint);
     });
+}
+
+/// Record this instance for `endpoint` (#2090). Written after the bind, identity
+/// first: a client that sees the lock may conclude that a missing endpoint is not
+/// a slow start, and may then rely on the identity to stop this process. A failed
+/// bind writes nothing, so it cannot disturb the records of the daemon that won.
+fn record_instance(endpoint: &str) {
+    match crate::ipc::current_backend_identity(endpoint) {
+        Ok(identity) => {
+            if let Err(err) = crate::ipc::write_backend_identity_for(endpoint, &identity) {
+                tracing::warn!("failed to write download daemon identity: {err}");
+            }
+        }
+        Err(err) => tracing::warn!("failed to capture download daemon identity: {err}"),
+    }
+    if let Err(err) = daemon_mgmt::write_lock_file_for(endpoint, std::process::id()) {
+        tracing::warn!("failed to write download daemon lock file: {err}");
+    }
+}
+
+fn remove_instance_records(endpoint: &str) {
+    daemon_mgmt::remove_lock_file_for(endpoint);
+    crate::ipc::remove_backend_identity_for(endpoint);
 }
 
 fn init_tracing(level: &str) {
