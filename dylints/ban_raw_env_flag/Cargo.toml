@@ -1,0 +1,22 @@
+[package]
+name = "ban_raw_env_flag"
+version = "0.1.0"
+description = "Ban hand-rolled environment boolean parsing outside the policy owner (#1969)"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Match the dylint_linting pin used by the sibling dylints — same toolchain
+# (rust-toolchain.toml here), same upstream commit.
+dylint_linting = "=6.2.0"
+
+[dev-dependencies]
+dylint_testing = "=6.2.0"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]
