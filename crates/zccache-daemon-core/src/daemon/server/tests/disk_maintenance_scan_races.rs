@@ -2,6 +2,8 @@
 //! maintenance scan walks it, so an entry can vanish between being listed and
 //! being stat'ed. That entry is simply gone; only `NotFound` on an individual
 //! entry is tolerated, and a missing root or any other error still surfaces.
+//! Windows can report the same race as access denied, so that is retried until
+//! the entry resolves, but it never counts as vanished by itself.
 
 use super::*;
 use crate::daemon::server::persist::{
@@ -184,4 +186,158 @@ fn accounting_walk_surfaces_errors_other_than_not_found() {
     let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
     let error = add_file(&file.join("child"), &mut artifact, &mut HashSet::new()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+}
+
+fn denied() -> io::Error {
+    io::ErrorKind::PermissionDenied.into()
+}
+
+fn denied_is_transient(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+}
+
+#[test]
+fn denied_entry_counts_as_vanished_only_once_really_gone() {
+    use crate::daemon::server::persist::listed_entry_with;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("deleting");
+    std::fs::write(&path, b"x").unwrap();
+    let mut attempts = 0;
+    let result = listed_entry_with(
+        &path,
+        |entry| {
+            attempts += 1;
+            if attempts == 1 {
+                std::fs::remove_file(entry)?;
+                return Err(denied());
+            }
+            std::fs::symlink_metadata(entry)
+        },
+        denied_is_transient,
+    );
+    assert!(result.unwrap().is_none());
+    assert_eq!(attempts, 2);
+}
+
+#[test]
+fn denied_entry_that_recovers_is_still_scanned() {
+    use crate::daemon::server::persist::listed_entry_with;
+    let root = tempfile::tempdir().unwrap();
+    let mut attempts = 0;
+    let result = listed_entry_with(
+        root.path(),
+        |entry| {
+            attempts += 1;
+            if attempts == 1 {
+                return Err(denied());
+            }
+            std::fs::symlink_metadata(entry)
+        },
+        denied_is_transient,
+    );
+    assert!(result.unwrap().is_some());
+}
+
+#[test]
+fn retry_never_applies_to_errors_outside_the_classifier() {
+    use crate::daemon::server::persist::listed_entry_with;
+    let mut attempts = 0;
+    let error = listed_entry_with(
+        Path::new("unused"),
+        |_| -> io::Result<()> {
+            attempts += 1;
+            Err(denied())
+        },
+        |_| false,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(attempts, 1);
+}
+
+/// Owner-unreadable directory, restored on drop so the tempdir can be removed.
+#[cfg(unix)]
+struct UnreadableDir<'a>(&'a Path);
+
+#[cfg(unix)]
+impl<'a> UnreadableDir<'a> {
+    /// `None` when this user ignores the mode bits (root), which proves nothing.
+    fn new(path: &'a Path) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let guard = Self(path);
+        std::fs::read_dir(path).is_err().then_some(guard)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnreadableDir<'_> {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+/// A directory that stays denied exhausts the retries and fails the walk: it
+/// is present, so reporting it as vanished would hide a partial tree (#2092).
+#[cfg(unix)]
+#[test]
+fn persistently_unreadable_directory_is_not_treated_as_vanished() {
+    use crate::daemon::server::persist::listed_entry_with;
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    let Some(_unreadable) = UnreadableDir::new(&tree) else {
+        return;
+    };
+
+    let mut attempts = 0;
+    let error = listed_entry_with(
+        &tree,
+        |entry| {
+            attempts += 1;
+            std::fs::read_dir(entry)
+        },
+        denied_is_transient,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(attempts, 5, "the initial attempt plus four retries");
+    assert!(error.to_string().contains("tree"), "{error}");
+
+    let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
+    let error = add_tree(&tree, &mut artifact, &mut HashSet::new()).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+/// The production classifier against a real ACL: `ERROR_ACCESS_DENIED` that
+/// never clears must surface after the ladder, not read as a vanished entry.
+#[cfg(windows)]
+#[test]
+fn persistently_denied_directory_is_not_treated_as_vanished() {
+    struct DenyGuard<'a>(&'a Path);
+    impl Drop for DenyGuard<'_> {
+        fn drop(&mut self) {
+            let _ = icacls(self.0, &["/remove:d", "*S-1-1-0"]);
+        }
+    }
+    fn icacls(path: &Path, args: &[&str]) -> std::process::ExitStatus {
+        std::process::Command::new("icacls")
+            .arg(path)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap()
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    assert!(icacls(&tree, &["/deny", "*S-1-1-0:(RD)"]).success());
+    let _guard = DenyGuard(&tree);
+
+    let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
+    let error = add_tree(&tree, &mut artifact, &mut HashSet::new()).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("tree"), "{error}");
 }

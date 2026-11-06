@@ -416,7 +416,10 @@ or full pass against that same root; it does not broaden ownership.
 Scans walk the live store while publishers rename and remove temporaries, so an
 entry that vanishes between listing and stat is skipped. Only `NotFound` on an
 individual entry is tolerated: a missing root and every other I/O error fail the
-pass.
+pass. Windows can report that race as access denied or a sharing violation, so a
+stat or open of a listed entry retries those on a bounded ladder (under one
+second): the entry counts as vanished only if it then reports `NotFound`, and one
+that stays denied fails the pass naming its path.
 
 ## Corruption Detection
 

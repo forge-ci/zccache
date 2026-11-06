@@ -453,7 +453,7 @@ fn add_file(
     artifact: &mut DiskArtifact,
     seen: &mut HashSet<crate::platform::fs::FileIdentity>,
 ) -> io::Result<()> {
-    match entry_if_present(std::fs::symlink_metadata(path))? {
+    match listed_entry(path, |entry| std::fs::symlink_metadata(entry))? {
         Some(metadata) => {
             add_file_metadata(path, &metadata, artifact, seen);
             Ok(())
@@ -526,7 +526,7 @@ fn add_tree(
     if !root.is_dir() {
         return Ok(());
     }
-    let Some(entries) = entry_if_present(std::fs::read_dir(root))? else {
+    let Some(entries) = listed_entry(root, |entry| std::fs::read_dir(entry))? else {
         return Ok(());
     };
     for entry in entries {
@@ -536,7 +536,7 @@ fn add_tree(
         let path = entry.path();
         #[cfg(test)]
         staged_hook_pause(&path, StagedHookPoint::ScanEntryListed);
-        let Some(metadata) = entry_if_present(std::fs::symlink_metadata(&path))? else {
+        let Some(metadata) = listed_entry(&path, |entry| std::fs::symlink_metadata(entry))? else {
             continue;
         };
         if crate::platform::fs::links::classify(&path)
@@ -591,7 +591,7 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
         };
         // Stat before creating the group: a group for a vanished file would
         // carry a UNIX_EPOCH last_access and be planned for age expiry.
-        let Some(metadata) = entry_if_present(std::fs::symlink_metadata(&path))? else {
+        let Some(metadata) = listed_entry(&path, |entry| std::fs::symlink_metadata(entry))? else {
             continue;
         };
         if let Some(output_index) = output_index {

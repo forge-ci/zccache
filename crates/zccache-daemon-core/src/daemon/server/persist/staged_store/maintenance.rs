@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub(crate) struct StagedDiskArtifact {
     pub(crate) key: String,
@@ -23,7 +23,8 @@ pub(crate) struct StagedDiskArtifact {
 /// Classifies one operation on a single listed scan entry: `NotFound` means a
 /// concurrent publisher renamed or removed that entry after it was listed, so
 /// it yields `None`. Every other error still fails the scan. Apply this only
-/// to individual entries, never to the root being scanned.
+/// to individual entries, never to the root being scanned; a stat or open of an
+/// entry goes through [`listed_entry`], which also rides out Windows denials.
 pub(in crate::daemon::server) fn entry_if_present<T>(
     result: io::Result<T>,
 ) -> io::Result<Option<T>> {
@@ -34,11 +35,61 @@ pub(in crate::daemon::server) fn entry_if_present<T>(
     }
 }
 
+/// Runs one stat or open on a listed scan entry, classifying a vanished entry
+/// as `None`.
+///
+/// On Windows such a call can return `ERROR_ACCESS_DENIED` or
+/// `ERROR_SHARING_VIOLATION` instead of `NotFound` while a concurrent publisher
+/// or scanner holds the entry mid-delete. That says nothing about whether the
+/// entry is gone, so the call is repeated on the #1757 ladder (50, 100, 250 and
+/// 500 ms): it only counts as vanished once it really reports `NotFound`, and
+/// an entry that stays denied fails the scan naming its path. The classifier is
+/// always `false` on Linux and macOS, so there a denial fails on first attempt.
+pub(in crate::daemon::server) fn listed_entry<T>(
+    path: &Path,
+    op: impl FnMut(&Path) -> io::Result<T>,
+) -> io::Result<Option<T>> {
+    listed_entry_with(path, op, crate::platform::fs::is_transient_share_error)
+}
+
+/// [`listed_entry`] with the classifier injected, so the retry contract is
+/// testable off Windows.
+pub(in crate::daemon::server) fn listed_entry_with<T>(
+    path: &Path,
+    mut op: impl FnMut(&Path) -> io::Result<T>,
+    is_transient: impl Fn(&io::Error) -> bool,
+) -> io::Result<Option<T>> {
+    const DELAYS: [Duration; 4] = [
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        Duration::from_millis(250),
+        Duration::from_millis(500),
+    ];
+    let mut delays = DELAYS.iter();
+    loop {
+        match op(path) {
+            Err(error) if is_transient(&error) => match delays.next() {
+                Some(delay) => std::thread::sleep(*delay),
+                None => {
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!(
+                            "listed entry stayed inaccessible: {}: {error}",
+                            path.display()
+                        ),
+                    ));
+                }
+            },
+            result => return entry_if_present(result),
+        }
+    }
+}
+
 /// Returns `None` when `path` vanished during the walk.
 fn staged_tree_stats(path: &Path) -> io::Result<Option<(u64, SystemTime)>> {
     #[cfg(test)]
     super::hook::pause(path, super::StagedHookPoint::ScanEntryListed);
-    let Some(metadata) = entry_if_present(fs::symlink_metadata(path))? else {
+    let Some(metadata) = listed_entry(path, |entry| fs::symlink_metadata(entry))? else {
         return Ok(None);
     };
     if is_staged_link_or_reparse(path) {
@@ -53,7 +104,7 @@ fn staged_tree_stats(path: &Path) -> io::Result<Option<(u64, SystemTime)>> {
     let mut size = metadata.len();
     let mut mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     if metadata.is_dir() {
-        let Some(entries) = entry_if_present(fs::read_dir(path))? else {
+        let Some(entries) = listed_entry(path, |entry| fs::read_dir(entry))? else {
             return Ok(None);
         };
         for entry in entries {
@@ -94,7 +145,8 @@ fn scan_staged_disk_artifacts_locked(
         let key_root = entry.path();
         #[cfg(test)]
         super::hook::pause(&key_root, super::StagedHookPoint::ScanEntryListed);
-        let Some(key_metadata) = entry_if_present(fs::symlink_metadata(&key_root))? else {
+        let Some(key_metadata) = listed_entry(&key_root, |entry| fs::symlink_metadata(entry))?
+        else {
             continue;
         };
         if is_staged_link_or_reparse(&key_root) {
