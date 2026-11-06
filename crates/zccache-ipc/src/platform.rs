@@ -18,6 +18,19 @@ pub(crate) mod host {
             std::env::var("USER").ok()
         }
     }
+
+    /// This process's PID namespace, on hosts that have them (#2035).
+    pub(crate) fn pid_namespace() -> Option<String> {
+        parse_pid_namespace(&kernal_api::platform::host::namespace_id()?)
+    }
+
+    /// The `pid:[inode]` part of the facade's `<mnt ns>:<pid ns>` text. Only
+    /// the PID namespace scopes a PID: containers sharing one can have
+    /// different mount namespaces and still see the same processes.
+    pub(crate) fn parse_pid_namespace(namespace_id: &str) -> Option<String> {
+        let start = namespace_id.rfind("pid:[")?;
+        Some(namespace_id[start..].to_string())
+    }
 }
 
 pub(crate) mod process {

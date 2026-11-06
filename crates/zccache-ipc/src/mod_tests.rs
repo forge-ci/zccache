@@ -11,6 +11,8 @@ use std::sync::MutexGuard;
 mod endpoint_scope;
 #[path = "mod_tests/identity.rs"]
 mod identity;
+#[path = "mod_tests/pid_namespace.rs"]
+mod pid_namespace;
 
 struct EnvGuard {
     _lock: MutexGuard<'static, ()>,
