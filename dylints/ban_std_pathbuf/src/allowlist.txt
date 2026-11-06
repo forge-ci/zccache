@@ -19,6 +19,7 @@ crates/zccache/src/bin/zccache.rs
 crates/zccache/src/bin/zccache-stamp.rs
 crates/zccache-cli/src/lib.rs
 crates/zccache-cli-core/src/cli/snapshot_fp.rs
+crates/zccache-cli-core/src/cli/snapshot_fp/tests.rs
 crates/zccache-cli-core/src/cli/commands/args/mod.rs
 crates/zccache-cli-core/src/cli/commands/cache_ops.rs
 crates/zccache-cli-core/src/cli/commands/symbols.rs
