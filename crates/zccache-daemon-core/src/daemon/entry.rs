@@ -475,11 +475,10 @@ fn run_server(args: Args) {
                 // of reporting a successful start.
                 tracing::error!(%endpoint, %error, "failed to write lock file — refusing to serve");
                 crate::daemon::startup_lockfile::report_unrecorded(&endpoint, &error);
-                // The endpoint is ours (we won the bind), so retire it. The
-                // lock file is NOT ours to remove: we never wrote one, and
-                // the removal above only unlinks a provably unparseable
-                // remnant — see #1905.
-                let _ = crate::ipc::retire_endpoint(&endpoint);
+                // Exiting releases the bind lock, so the next bind reclaims the
+                // socket file (#2106). The lock file is NOT ours to remove: we
+                // never wrote one, and the removal above only unlinks a provably
+                // unparseable remnant — see #1905.
                 std::process::exit(1);
             }
         }

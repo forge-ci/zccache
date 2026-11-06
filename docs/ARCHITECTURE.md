@@ -34,6 +34,7 @@ failed cache-root audit retain its diagnostic JSONL evidence.
 - **Explicit Rustc host policy** → [data-flow.md](architecture/data-flow.md#explicit-rustc-host-policy)
 - **CLI↔daemon communication** → [ipc.md](architecture/ipc.md)
 - **Compile queue visibility, progress-based wedge detection** → [ipc.md § Compile progress heartbeats](architecture/ipc.md#compile-progress-heartbeats-issue-1216)
+- **Unix socket bind exclusion, stale-socket reclaim** → [ipc.md § Unix bind exclusion](architecture/ipc.md#unix-bind-exclusion-2106)
 - **File change detection** → [metadata-cache.md](architecture/metadata-cache.md)
 - **Disk cache & eviction** → [artifact-store.md](architecture/artifact-store.md)
 - **Private compiler staging root** → [portability.md](architecture/portability.md#path-handling)
