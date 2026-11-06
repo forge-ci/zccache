@@ -1675,3 +1675,13 @@ one existing success; both argument parsers now share effective-option merging.
 - [x] Add failing-then-passing CI policy regression tests.
 - [ ] Run local Docker diagnostic/matrix, local gate, review, and hosted Perf Guard.
 - [ ] Merge through the existing queue with CI summary unchanged.
+
+# macOS staged planner environment race
+
+- [x] Reproduce the precise-reason assertion under `ZCCACHE_STAGED_ARTIFACTS=rust` in isolation (original line 731, exit 101).
+- [x] Hold the existing staged environment fixture across planner assertions, including the Rust output-byte comparison.
+- [x] Verify all 26 planner tests under `rust`, `off`, `unrecognized`, `c-cpp`, and `all` (130 passes, no skips).
+- [ ] Run the repository local gate on the committed tree.
+- [ ] Review, open a PR, and land through the required merge queue.
+
+Validation evidence: original test failed at line 731 under `rust`; fixed module passed all five inherited policies. `./lint` currently stops before Rust validation because the baseline release publish order lists the non-publishable `zccache` crate. Run the prescribed local gate and workspace Clippy separately.

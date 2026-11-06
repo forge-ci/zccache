@@ -392,3 +392,10 @@ Compare absolute hit times across passing and failing runs before loosening a
 ratio floor. A faster compiler baseline can fail a faster cache hit. Calibrate
 fixed-overhead warm rows from retained nanosecond attempt medians, including
 failed runs, and verify an injected latency regression on both runner classes.
+
+## Planner tests must own staged-lane policy (2026-11-06)
+
+An environment variable being present does not enable every staged compiler lane.
+A one-time lane check also races with later planner reads. Tests asserting planner
+behavior must install the existing staged environment guard for their complete
+assertion scope, enabling all lanes when a test covers Rust, C/C++, and archives.
