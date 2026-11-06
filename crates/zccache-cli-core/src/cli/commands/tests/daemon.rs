@@ -216,7 +216,7 @@ static CACHE_ROOT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Pin `ZCCACHE_CACHE_DIR` / `ZCCACHE_DAEMON_NAMESPACE` to an isolated root so
 /// the default-endpoint ownership records these tests read and write are the
 /// tempdir's, never the developer's real daemon's. Restored on drop.
-struct IsolatedCacheRoot {
+pub(crate) struct IsolatedCacheRoot {
     _tmp: tempfile::TempDir,
     _serialized: std::sync::MutexGuard<'static, ()>,
     previous_cache_dir: Option<String>,
@@ -226,7 +226,12 @@ struct IsolatedCacheRoot {
 impl IsolatedCacheRoot {
     const NAMESPACE: &str = "stop-endpoint-scope";
 
-    fn set() -> Self {
+    #[cfg(feature = "download-daemon")]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        self._tmp.path()
+    }
+
+    pub(crate) fn set() -> Self {
         let serialized = CACHE_ROOT_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

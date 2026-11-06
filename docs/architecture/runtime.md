@@ -874,6 +874,19 @@ Semantics:
   guard keeps every subcommand's cache semantics but turns lazy daemon
   spawns into hard errors.
 
+### Download daemon ownership and recovery (#2090)
+
+The download daemon keeps its lock (`download-daemon[-<endpoint id>].lock`) and
+identity record per endpoint, written after the bind with the identity first.
+`download_client::check_running_daemon_for` reads and retires only its own
+endpoint, and applies the #2035 record rules when a record names the PID.
+
+A live PID whose endpoint stays unreachable for 2 s is force-killed and replaced
+only if `verified_daemon_instance_for` proves it, and never under
+`ZCCACHE_NO_SPAWN`. An unproven PID is left running and the call fails with a
+message naming it: a successor's Unix bind would unlink any socket at that path,
+and two daemons could write one destination.
+
 ### Persistent writes — exhaustive table
 
 Every persistent write the daemon and CLI perform lands under the resolved

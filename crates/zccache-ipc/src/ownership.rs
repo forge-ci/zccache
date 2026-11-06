@@ -140,7 +140,8 @@ pub(crate) fn verify_error_proves_foreign(
 ///
 /// A missing record, or one naming another PID, is no verdict: legacy/direct
 /// daemons run without one, and a starting daemon writes its lock first.
-pub(crate) fn daemon_record_is_stale(endpoint: &str, pid: u32) -> bool {
+#[must_use]
+pub fn daemon_record_is_stale(endpoint: &str, pid: u32) -> bool {
     let Some(identity) = read_backend_identity_for(endpoint) else {
         return false;
     };

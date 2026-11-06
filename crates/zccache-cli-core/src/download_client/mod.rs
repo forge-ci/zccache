@@ -18,21 +18,83 @@ pub use artifact::{
 
 type ClientConn = crate::download_ipc::DownloadIpcConnection;
 
+use crate::download_protocol::daemon_mgmt;
 pub use crate::download_protocol::daemon_mgmt::{
     default_endpoint, lock_file_path, read_lock_file_pid, remove_lock_file, write_lock_file,
 };
 
 pub fn check_running_daemon() -> Option<u32> {
-    let pid = read_lock_file_pid()?;
-    // Verify the PID actually points at the download daemon. A bare
-    // is_process_alive check would falsely accept a recycled PID inherited
-    // from a restored CI cache (see issue #132).
-    if crate::ipc::verify_pid_exe_stem(pid, "zccache-download-daemon") {
-        Some(pid)
-    } else {
-        remove_lock_file();
-        let _ = crate::ipc::retire_endpoint(&default_endpoint());
-        None
+    check_running_daemon_for(&default_endpoint())
+}
+
+/// The live PID of `endpoint`'s download daemon, retiring the record and the
+/// endpoint when that PID is dead or provably another process (#2090).
+///
+/// Only `endpoint`'s own lock and record are read, and only `endpoint` is
+/// retired: a custom-endpoint client must not touch the default daemon's socket.
+pub fn check_running_daemon_for(endpoint: &str) -> Option<u32> {
+    let pid = daemon_mgmt::read_lock_file_pid_for(endpoint)?;
+    if lock_pid_is_the_daemon(endpoint, pid) {
+        return Some(pid);
+    }
+    crate::ipc::remove_backend_identity_for(endpoint);
+    daemon_mgmt::remove_lock_file_for(endpoint);
+    let _ = crate::ipc::retire_endpoint(endpoint);
+    None
+}
+
+/// A record naming `pid` decides, with the #2035 rules shared with the compile
+/// daemon: another PID namespace or a different process disproves it, a replaced
+/// binary does not. Without one, only the executable name is left (issue #132).
+fn lock_pid_is_the_daemon(endpoint: &str, pid: u32) -> bool {
+    if !crate::ipc::is_process_alive(pid) {
+        return false;
+    }
+    if crate::ipc::read_backend_identity_for(endpoint).is_some_and(|record| record.pid() == pid) {
+        return !crate::ipc::daemon_record_is_stale(endpoint, pid);
+    }
+    crate::ipc::verify_pid_exe_stem(pid, "zccache-download-daemon")
+}
+
+/// Why no download daemon could be made available.
+#[derive(Debug, thiserror::Error)]
+enum EnsureDaemonError {
+    /// Nothing proves this live PID is the daemon, so it is not safe to stop.
+    #[error(
+        "download daemon process {pid} is alive but not accepting connections at {endpoint}, \
+         and its record does not prove it is safe to stop; stop that process, then retry"
+    )]
+    UnprovenInstance { pid: u32, endpoint: String },
+    /// The record proves the instance, but it would not die.
+    #[error("download daemon process {pid} is not accepting connections and could not be stopped: {reason}")]
+    StopFailed { pid: u32, reason: String },
+    #[error("{0}")]
+    Other(String),
+}
+
+/// Stop the instance behind an unreachable endpoint, only if its record proves it.
+/// The daemon binds before writing its lock, so a lock with a live PID and no
+/// endpoint is not a slow start. The successor's bind replaces any stale socket and
+/// its records replace these, so nothing is removed here that a concurrent client's
+/// successor could already own.
+fn stop_unreachable_instance(endpoint: &str, pid: u32) -> Result<(), EnsureDaemonError> {
+    if crate::core::config::daemon_spawn_disabled() {
+        return Err(EnsureDaemonError::Other(
+            crate::core::config::no_spawn_error("zccache-download-daemon"),
+        ));
+    }
+    if crate::ipc::verified_daemon_instance_for(endpoint, pid).is_none() {
+        return Err(EnsureDaemonError::UnprovenInstance {
+            pid,
+            endpoint: endpoint.to_owned(),
+        });
+    }
+    match crate::ipc::force_kill_verified_daemon_for(endpoint, pid) {
+        Err(error) if crate::ipc::is_process_alive(pid) => Err(EnsureDaemonError::StopFailed {
+            pid,
+            reason: error.to_string(),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -184,6 +246,15 @@ fn spawn_daemon(bin: &Path, endpoint: &str) -> Result<(), String> {
     }
     let mut cmd = std::process::Command::new(bin);
     cmd.args(["--foreground", "--endpoint", endpoint]);
+    // The baseline below drops the caller's environment. Without its `ZCCACHE_*`
+    // configuration the daemon records itself under another cache root, where this
+    // client can never find it (#2090). Same rule as the compile daemon's
+    // `zccache_config_env_from`, which is behind the `cli` feature.
+    for (key, value) in std::env::vars_os() {
+        if key.to_str().is_some_and(|key| key.starts_with("ZCCACHE_")) {
+            cmd.env(key, value);
+        }
+    }
     // Canonical daemon launch owns null standard streams and sanitized native
     // handles. This is ordinary inherited placement, not independent spawning;
     // the existing no-spawn guard and readiness loop remain authoritative.
@@ -201,37 +272,73 @@ fn spawn_daemon(bin: &Path, endpoint: &str) -> Result<(), String> {
 }
 
 async fn ensure_daemon(endpoint: &str) -> Result<(), String> {
+    ensure_daemon_with(endpoint, || {
+        let bin = find_daemon_binary()?.ok_or("cannot find zccache-download-daemon binary")?;
+        spawn_daemon(&bin, endpoint)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+async fn wait_out_unreachable_instance(endpoint: &str, pid: u32) -> Result<(), EnsureDaemonError> {
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if connect_client(endpoint).await.is_ok() {
+            return Ok(());
+        }
+        if !crate::ipc::is_process_alive(pid) {
+            break;
+        }
+    }
+    match check_running_daemon_for(endpoint) {
+        Some(current) if current == pid => stop_unreachable_instance(endpoint, pid),
+        // Another client's replacement holds the lock, and locks follow the bind.
+        // Spawning here would unlink its socket.
+        Some(current) if connect_client(endpoint).await.is_err() => {
+            Err(EnsureDaemonError::UnprovenInstance {
+                pid: current,
+                endpoint: endpoint.to_owned(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+async fn ensure_daemon_with(
+    endpoint: &str,
+    spawn: impl FnOnce() -> Result<(), String>,
+) -> Result<(), EnsureDaemonError> {
     if connect_client(endpoint).await.is_ok() {
         return Ok(());
     }
-    if let Some(pid) = check_running_daemon() {
-        for _ in 0..20 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if connect_client(endpoint).await.is_ok() {
-                return Ok(());
-            }
+    if let Some(pid) = check_running_daemon_for(endpoint) {
+        wait_out_unreachable_instance(endpoint, pid).await?;
+        if connect_client(endpoint).await.is_ok() {
+            return Ok(());
         }
-        return Err(format!(
-            "download daemon process {pid} exists but is not accepting connections"
-        ));
     }
     // Issue #982: refuse before binary resolution so the guard's message
     // wins over "cannot find zccache-download-daemon binary".
     if crate::core::config::daemon_spawn_disabled() {
-        return Err(crate::core::config::no_spawn_error(
-            "zccache-download-daemon",
+        return Err(EnsureDaemonError::Other(
+            crate::core::config::no_spawn_error("zccache-download-daemon"),
         ));
     }
-    let bin = find_daemon_binary()?.ok_or("cannot find zccache-download-daemon binary")?;
-    spawn_daemon(&bin, endpoint)?;
+    spawn().map_err(EnsureDaemonError::Other)?;
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         if connect_client(endpoint).await.is_ok() {
             return Ok(());
         }
     }
-    Err("download daemon started but did not accept connections after 10s".to_string())
+    Err(EnsureDaemonError::Other(
+        "download daemon started but did not accept connections after 10s".to_string(),
+    ))
 }
+
+#[cfg(all(test, feature = "cli", feature = "download-daemon"))]
+#[path = "liveness_tests.rs"]
+mod liveness_tests;
 
 #[derive(Clone)]
 pub struct DownloadClient {

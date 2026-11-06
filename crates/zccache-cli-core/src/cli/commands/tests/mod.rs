@@ -5,7 +5,7 @@
 mod analyze;
 mod args_parsing;
 mod cache_ops;
-mod daemon;
+pub(crate) mod daemon;
 mod engine_profile;
 mod exit_code;
 mod mtime;

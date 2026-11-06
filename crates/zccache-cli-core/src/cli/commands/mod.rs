@@ -611,4 +611,4 @@ fn dispatch(command: Commands, global_overrides: wrap::WrapperOverrides) -> Exit
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
