@@ -977,15 +977,12 @@ pub(crate) fn snapshot_bytes_walk(
     prune_incremental: bool,
     prune_build_script_out: bool,
 ) -> std::io::Result<u64> {
-    use std::sync::Mutex;
-
     if !target.exists() {
         return Ok(0);
     }
 
     // Dedup by (dev, inode) so hardlinked files don't double-count.
-    let seen: Mutex<std::collections::HashSet<crate::platform::fs::identity::FileIdentity>> =
-        Mutex::new(Default::default());
+    let mut seen = std::collections::HashSet::<crate::platform::fs::identity::FileIdentity>::new();
 
     // The facade asks about each candidate directory instead of handing us a
     // parent's children, so `parent_path.parent()` (the grandparent of the
@@ -1034,8 +1031,7 @@ pub(crate) fn snapshot_bytes_walk(
             Err(_) => continue,
         };
         if let Ok(key) = crate::platform::fs::identity::file_identity(entry.path()) {
-            let mut seen_guard = seen.lock().unwrap_or_else(|p| p.into_inner());
-            if !seen_guard.insert(key) {
+            if !seen.insert(key) {
                 continue;
             }
         }

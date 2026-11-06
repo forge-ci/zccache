@@ -9,6 +9,35 @@ pub(crate) mod executable {
     pub(crate) use kernal_api::platform::executable::{current_image, unlock_for_replacement};
 }
 
+#[cfg(feature = "daemon-entry")]
+pub(crate) mod signals {
+    use kernal_api::async_engine::Notify;
+    use std::sync::Arc;
+
+    /// Route SIGTERM into the graceful shutdown path. The task lives for the
+    /// daemon process; Windows has no SIGTERM, so this is a no-op there.
+    #[cfg(unix)]
+    pub(crate) fn drain_on_sigterm(shutdown: Arc<Notify>) {
+        kernal_api::async_engine::launch(async move {
+            let mut sigterm = match kernal_api::async_engine::TerminationSignal::new() {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!("could not install SIGTERM handler: {error}");
+                    return;
+                }
+            };
+            if sigterm.recv().await.is_some() {
+                tracing::info!("received SIGTERM — shutting down");
+                shutdown.notify_waiters();
+            }
+        })
+        .detach();
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn drain_on_sigterm(_shutdown: Arc<Notify>) {}
+}
+
 pub(crate) mod fs {
     pub(crate) use kernal_api::platform::fs::FileChangeMarker as ChangeMarker;
 

@@ -646,24 +646,7 @@ fn run_server(args: Args) {
         // reapers) speak SIGTERM; before this it fell through to the default
         // disposition — immediate death — losing up to a full save interval
         // of depgraph registrations on every routine daemon displacement.
-        #[cfg(unix)]
-        {
-            let shutdown = server.shutdown_handle();
-            kernal_api::async_engine::launch(async move {
-                let mut sigterm = match kernal_api::async_engine::TerminationSignal::new() {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        tracing::warn!("could not install SIGTERM handler: {error}");
-                        return;
-                    }
-                };
-                if sigterm.recv().await.is_some() {
-                    tracing::info!("received SIGTERM — shutting down");
-                    shutdown.notify_waiters();
-                }
-            })
-            .detach();
-        }
+        crate::platform::signals::drain_on_sigterm(server.shutdown_handle());
 
         tracing::info!(%endpoint, "listening for connections");
 
