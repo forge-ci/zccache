@@ -7,9 +7,7 @@
 //! the per-daemon-version subdir layout (issues #761 / #762 Phase 0).
 
 use super::namespace::home_dir_short_hash;
-use super::{
-    CACHE_DIR_ENV, COLOCATE_ENV, DAEMON_NAMESPACE_ENV, DAEMON_STATE_DIR_ENV, STAGING_DIR_ENV,
-};
+use super::{CACHE_DIR_ENV, DAEMON_NAMESPACE_ENV, DAEMON_STATE_DIR_ENV, STAGING_DIR_ENV};
 use crate::NormalizedPath;
 use std::ffi::OsString;
 use std::path::Path;
@@ -294,11 +292,9 @@ pub fn prune_stale_version_dirs_in(top_level: &std::path::Path, keep: &str) -> P
     report
 }
 
-/// True when `ZCCACHE_COLOCATE` is set to a non-empty, non-"0" value.
+/// True when `ZCCACHE_COLOCATE` is `1` or case-insensitive `true`.
 pub(super) fn colocate_enabled() -> bool {
-    std::env::var(COLOCATE_ENV)
-        .ok()
-        .is_some_and(|v| !v.is_empty() && v != "0")
+    super::env_policy::colocate_requested()
 }
 
 /// If the current working directory is on a different volume than the

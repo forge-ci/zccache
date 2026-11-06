@@ -33,6 +33,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | kernal-api migration baseline (`zccache#1519`) | [kernal-api-migration.md](architecture/kernal-api-migration.md) — capability ownership, characterization, and comparable build evidence |
 | Generic tool exec (`zccache exec`, issue #272) | [runtime.md § Generic tool exec](architecture/runtime.md#generic-tool-exec-zccache-exec) — `handle_exec.rs` + `cli/commands/exec.rs` |
 | External tool fetch (`zccache fetch`, issue #1469) | [runtime.md § External tool fetch](architecture/runtime.md#external-tool-fetch-zccache-fetch-issue-1469) — `cli/commands/fetch.rs`, blob + extraction CAS |
+| Environment boolean grammar and parsing ban (#1969) | `crates/zccache-core/src/config/env_policy.rs`, `dylints/ban_raw_env_flag/README.md` |
 | Small-tool stderr retention and null-sink ban (#1970) | `crates/zccache-core/README.md` (`small_tool`), `dylints/ban_swallowed_child_stdio/README.md` |
 | Platform-specific issues | [portability.md](architecture/portability.md) |
 | Python `exec_cached` caller-owned results | [runtime.md](architecture/runtime.md#python-caller-owned-exec_cached), [ipc.md](architecture/ipc.md#wire-selection) |

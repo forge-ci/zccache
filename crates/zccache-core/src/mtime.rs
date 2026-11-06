@@ -239,11 +239,7 @@ pub fn apply_batch_policy_with<'a>(
 pub fn mtime_floor_disabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        std::env::var("ZCCACHE_DISABLE_MTIME_FLOOR")
-            .ok()
-            .is_some_and(|v| !v.is_empty() && v != "0")
-    })
+    *CACHED.get_or_init(crate::config::mtime_floor_disable_requested)
 }
 
 /// The newest sibling-artifact mtime in `path`'s directory when it exceeds

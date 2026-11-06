@@ -5,6 +5,10 @@
 //! opt-out. Foreign variables retain their own parsing semantics.
 
 use std::ffi::OsStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::COLOCATE_ENV;
+use crate::defender::QUIET_ENV;
 
 /// Value policy for a registered environment variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +41,17 @@ pub const CACHE_TEST_BINS_ENV: &str = "ZCCACHE_CACHE_TEST_BINS";
 /// Set this to `0` to opt out of daemon native crash capture temporarily.
 pub const NATIVE_CRASH_CAPTURE_ENV: &str = "ZCCACHE_NATIVE_CRASH_CAPTURE";
 
+/// Set this to turn every materialized-output mtime floor off.
+const MTIME_FLOOR_DISABLE_ENV: &str = "ZCCACHE_DISABLE_MTIME_FLOOR";
+/// Set this to store artifacts as single pack files.
+const PACK_ARTIFACTS_ENV: &str = "ZCCACHE_PACK_ARTIFACTS";
+/// Set this to print one CWD/argv diagnostic per wrapper invocation.
+const DIAG_CWD_ENV: &str = "ZCCACHE_DIAG_CWD";
+/// Set this to expand the session summary.
+const SUMMARY_VERBOSE_ENV: &str = "ZCCACHE_SUMMARY_VERBOSE";
+/// Set this to restore fail-fast behaviour for lost link requests.
+const LINK_RETRY_DISABLE_ENV: &str = "ZCCACHE_DISABLE_LINK_RETRY";
+
 /// The complete registry for zccache-owned boolean switches.
 ///
 /// New entries require a typed accessor below. The `ban_registered_env_read`
@@ -68,6 +83,41 @@ pub const ENVIRONMENT_VARIABLES: &[EnvironmentVariableDeclaration] = &[
         kind: EnvironmentVariableKind::DefaultOnBoolean,
         help: "Temporarily disable default-on daemon native crash capture with 0.",
     },
+    EnvironmentVariableDeclaration {
+        name: QUIET_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Silence the daemon's Windows Defender exclusion banner.",
+    },
+    EnvironmentVariableDeclaration {
+        name: MTIME_FLOOR_DISABLE_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Turn off sibling mtime floors on materialized outputs.",
+    },
+    EnvironmentVariableDeclaration {
+        name: COLOCATE_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Root the cache on the working directory's volume.",
+    },
+    EnvironmentVariableDeclaration {
+        name: PACK_ARTIFACTS_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Store artifacts as single pack files.",
+    },
+    EnvironmentVariableDeclaration {
+        name: DIAG_CWD_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Print one CWD/argv diagnostic per wrapper invocation.",
+    },
+    EnvironmentVariableDeclaration {
+        name: SUMMARY_VERBOSE_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Expand the session summary.",
+    },
+    EnvironmentVariableDeclaration {
+        name: LINK_RETRY_DISABLE_ENV,
+        kind: EnvironmentVariableKind::OwnedBoolean,
+        help: "Fail fast instead of retrying a lost link request.",
+    },
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +126,20 @@ enum OwnedBoolean {
     NoSpawn,
     ProbeBypass,
     CacheTestBinaries,
+    Quiet,
+    MtimeFloorDisable,
+    Colocate,
+    PackArtifacts,
+    DiagCwd,
+    SummaryVerbose,
+    LinkRetryDisable,
 }
+
+const OWNED_BOOLEAN_COUNT: usize = 11;
+
+/// One flag per [`OwnedBoolean`], so a polled switch warns once per process.
+static WARNED: [AtomicBool; OWNED_BOOLEAN_COUNT] =
+    [const { AtomicBool::new(false) }; OWNED_BOOLEAN_COUNT];
 
 impl OwnedBoolean {
     const fn name(self) -> &'static str {
@@ -85,6 +148,13 @@ impl OwnedBoolean {
             Self::NoSpawn => NO_SPAWN_ENV,
             Self::ProbeBypass => ZCCACHE_PROBE_BYPASS_ENV,
             Self::CacheTestBinaries => CACHE_TEST_BINS_ENV,
+            Self::Quiet => QUIET_ENV,
+            Self::MtimeFloorDisable => MTIME_FLOOR_DISABLE_ENV,
+            Self::Colocate => COLOCATE_ENV,
+            Self::PackArtifacts => PACK_ARTIFACTS_ENV,
+            Self::DiagCwd => DIAG_CWD_ENV,
+            Self::SummaryVerbose => SUMMARY_VERBOSE_ENV,
+            Self::LinkRetryDisable => LINK_RETRY_DISABLE_ENV,
         }
     }
 
@@ -92,8 +162,32 @@ impl OwnedBoolean {
         if matches!(self, Self::NoSpawn) {
             return no_spawn_from_env_value(std::env::var_os(self.name()).as_deref());
         }
-        owned_flag_enabled(std::env::var(self.name()).ok().as_deref())
+        let value = std::env::var(self.name()).ok();
+        if owned_flag_value_is_unrecognized(value.as_deref())
+            && !WARNED[self as usize].swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(
+                variable = self.name(),
+                value = value.as_deref().unwrap_or_default(),
+                "unrecognized value leaves this switch off; use 1 or true to enable it"
+            );
+        }
+        owned_flag_enabled(value.as_deref())
     }
+}
+
+/// True when a set value is neither an enabling spelling nor a plain off
+/// spelling, so the operator probably expected something else to happen.
+/// `yes` and `on` land here: they read as "on" but this grammar disables them.
+fn owned_flag_value_is_unrecognized(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| {
+        let trimmed = raw.trim();
+        !trimmed.is_empty()
+            && !owned_flag_enabled(Some(trimmed))
+            && !["0", "false", "no", "off"]
+                .iter()
+                .any(|off| trimmed.eq_ignore_ascii_case(off))
+    })
 }
 
 /// The canonical grammar for a zccache-owned boolean switch: `1` or
@@ -145,6 +239,48 @@ pub fn cache_test_binaries_enabled() -> bool {
     OwnedBoolean::CacheTestBinaries.enabled()
 }
 
+/// True when `ZCCACHE_QUIET` silences the Defender exclusion banner.
+#[must_use]
+pub fn quiet_enabled() -> bool {
+    OwnedBoolean::Quiet.enabled()
+}
+
+/// True when `ZCCACHE_DISABLE_MTIME_FLOOR` asks to turn mtime floors off.
+#[must_use]
+pub fn mtime_floor_disable_requested() -> bool {
+    OwnedBoolean::MtimeFloorDisable.enabled()
+}
+
+/// True when `ZCCACHE_COLOCATE` opts into a same-volume cache root.
+#[must_use]
+pub fn colocate_requested() -> bool {
+    OwnedBoolean::Colocate.enabled()
+}
+
+/// True when `ZCCACHE_PACK_ARTIFACTS` selects pack-file artifact storage.
+#[must_use]
+pub fn pack_artifacts_enabled() -> bool {
+    OwnedBoolean::PackArtifacts.enabled()
+}
+
+/// True when `ZCCACHE_DIAG_CWD` asks for the wrapper CWD/argv diagnostic.
+#[must_use]
+pub fn diag_cwd_enabled() -> bool {
+    OwnedBoolean::DiagCwd.enabled()
+}
+
+/// True when `ZCCACHE_SUMMARY_VERBOSE` expands the session summary.
+#[must_use]
+pub fn summary_verbose_enabled() -> bool {
+    OwnedBoolean::SummaryVerbose.enabled()
+}
+
+/// True when `ZCCACHE_DISABLE_LINK_RETRY` opts out of lost-link retries.
+#[must_use]
+pub fn link_retry_disabled() -> bool {
+    OwnedBoolean::LinkRetryDisable.enabled()
+}
+
 /// True unless `ZCCACHE_NATIVE_CRASH_CAPTURE=0` temporarily opts the daemon
 /// out of native crash capture for one zccache release after re-enablement.
 #[must_use]
@@ -179,7 +315,7 @@ mod tests {
 
     #[test]
     fn registry_records_native_capture_as_default_on() {
-        assert_eq!(ENVIRONMENT_VARIABLES.len(), 5);
+        assert_eq!(ENVIRONMENT_VARIABLES.len(), OWNED_BOOLEAN_COUNT + 1);
         assert!(ENVIRONMENT_VARIABLES
             .iter()
             .filter(|declaration| declaration.name != NATIVE_CRASH_CAPTURE_ENV)
@@ -188,6 +324,74 @@ mod tests {
             ENVIRONMENT_VARIABLES[4].kind,
             EnvironmentVariableKind::DefaultOnBoolean
         );
+    }
+
+    #[test]
+    fn every_owned_accessor_name_is_registered_as_owned() {
+        let accessors = [
+            OwnedBoolean::Disable,
+            OwnedBoolean::NoSpawn,
+            OwnedBoolean::ProbeBypass,
+            OwnedBoolean::CacheTestBinaries,
+            OwnedBoolean::Quiet,
+            OwnedBoolean::MtimeFloorDisable,
+            OwnedBoolean::Colocate,
+            OwnedBoolean::PackArtifacts,
+            OwnedBoolean::DiagCwd,
+            OwnedBoolean::SummaryVerbose,
+            OwnedBoolean::LinkRetryDisable,
+        ];
+        assert_eq!(accessors.len(), OWNED_BOOLEAN_COUNT);
+        for accessor in accessors {
+            assert!(
+                ENVIRONMENT_VARIABLES.iter().any(|declaration| {
+                    declaration.name == accessor.name()
+                        && declaration.kind == EnvironmentVariableKind::OwnedBoolean
+                }),
+                "{} is not registered",
+                accessor.name()
+            );
+        }
+    }
+
+    /// #1969: unset, empty, whitespace, case, each paired spelling and unknown
+    /// strings, with whether each value enables the switch and whether it warns.
+    #[test]
+    fn owned_grammar_table() {
+        let table: &[(Option<&str>, bool, bool)] = &[
+            (None, false, false),
+            (Some(""), false, false),
+            (Some("   "), false, false),
+            (Some("\t\n"), false, false),
+            (Some("1"), true, false),
+            (Some(" 1 "), true, false),
+            (Some("true"), true, false),
+            (Some("TRUE"), true, false),
+            (Some(" True\n"), true, false),
+            (Some("0"), false, false),
+            (Some("false"), false, false),
+            (Some("FALSE"), false, false),
+            (Some("off"), false, false),
+            (Some("OFF"), false, false),
+            (Some("no"), false, false),
+            (Some("NO"), false, false),
+            (Some("yes"), false, true),
+            (Some("YES"), false, true),
+            (Some("on"), false, true),
+            (Some("ON"), false, true),
+            (Some("maybe"), false, true),
+            (Some("2"), false, true),
+            (Some("1 1"), false, true),
+            (Some("ture"), false, true),
+        ];
+        for (value, enabled, warns) in table.iter().copied() {
+            assert_eq!(owned_flag_enabled(value), enabled, "enabled: {value:?}");
+            assert_eq!(
+                owned_flag_value_is_unrecognized(value),
+                warns,
+                "warns: {value:?}"
+            );
+        }
     }
 
     #[test]

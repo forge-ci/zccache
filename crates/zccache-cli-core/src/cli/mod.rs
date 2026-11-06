@@ -89,7 +89,7 @@ const LINK_RETRY_DEFAULT_BUDGET: u32 = 1;
 /// pre-#752 fail-fast behavior (mirrors the
 /// `ZCCACHE_WEDGE_RECV_TIMEOUT_SECS=0` shape).
 pub(crate) fn link_retry_budget() -> u32 {
-    if std::env::var_os("ZCCACHE_DISABLE_LINK_RETRY").is_some_and(|v| v == "1") {
+    if crate::core::config::link_retry_disabled() {
         0
     } else {
         LINK_RETRY_DEFAULT_BUDGET

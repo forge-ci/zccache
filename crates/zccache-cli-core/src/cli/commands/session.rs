@@ -478,16 +478,7 @@ fn percentage(part: u64, total: u64) -> Option<f64> {
 }
 
 fn summary_verbose_env() -> bool {
-    std::env::var("ZCCACHE_SUMMARY_VERBOSE")
-        .ok()
-        .as_deref()
-        .is_some_and(|value| {
-            let value = value.trim();
-            !value.is_empty()
-                && value != "0"
-                && !value.eq_ignore_ascii_case("false")
-                && !value.eq_ignore_ascii_case("no")
-        })
+    crate::core::config::summary_verbose_enabled()
 }
 
 pub(crate) fn phase_profile_summary_json(

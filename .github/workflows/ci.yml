@@ -365,6 +365,18 @@ jobs:
           export RUSTC="$(soldr rustup which --toolchain nightly-2026-08-15 rustc)"
           export RUSTUP_TOOLCHAIN=nightly-2026-08-15
           soldr rustup run nightly-2026-08-15 cargo test
+      - name: Check Dylint Library Formatting (ban_raw_env_flag)
+        working-directory: dylints/ban_raw_env_flag
+        run: soldr cargo fmt --all -- --check
+      - name: Test Dylint Library (ban_raw_env_flag)
+        working-directory: dylints/ban_raw_env_flag
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
+        run: |
+          export PATH="${DYLINT_CARGO_SHIM}:${PATH}"
+          export RUSTC="$(soldr rustup which --toolchain nightly-2026-08-15 rustc)"
+          export RUSTUP_TOOLCHAIN=nightly-2026-08-15
+          soldr rustup run nightly-2026-08-15 cargo test
       - name: Check Dylint Library Formatting (enforce_platform_boundary)
         working-directory: dylints/enforce_platform_boundary
         run: soldr cargo fmt --all -- --check

@@ -58,8 +58,8 @@ pub const DEV_DAEMON_NAMESPACE: &str = "dev";
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 3600;
 
 /// Environment variable used to opt into co-locating the cache on the
-/// project's volume when it differs from the home volume. When set to a
-/// non-empty, non-"0" value, `default_cache_dir` returns a path on the
+/// project's volume when it differs from the home volume. When set to `1` or
+/// `true`, `default_cache_dir` returns a path on the
 /// CWD's volume so hardlink-based cache writes (see issue #296) succeed
 /// without falling back to byte-copy. Unset → behaviour unchanged.
 pub const COLOCATE_ENV: &str = "ZCCACHE_COLOCATE";
@@ -74,10 +74,12 @@ pub use cleanup::{cleanup_legacy_temp_root_state, cleanup_stale_depfile_dirs};
 #[allow(deprecated)]
 pub use env_policy::owned_env_flag_enabled;
 pub use env_policy::{
-    cache_test_binaries_enabled, daemon_spawn_disabled, native_crash_capture_enabled,
-    no_spawn_error, owned_flag_enabled, probe_bypass_enabled, zccache_disabled,
-    EnvironmentVariableDeclaration, EnvironmentVariableKind, CACHE_TEST_BINS_ENV,
-    ENVIRONMENT_VARIABLES, NATIVE_CRASH_CAPTURE_ENV, NO_SPAWN_ENV,
+    cache_test_binaries_enabled, colocate_requested, daemon_spawn_disabled, diag_cwd_enabled,
+    link_retry_disabled, mtime_floor_disable_requested, native_crash_capture_enabled,
+    no_spawn_error, owned_flag_enabled, pack_artifacts_enabled, probe_bypass_enabled,
+    quiet_enabled, summary_verbose_enabled, zccache_disabled, EnvironmentVariableDeclaration,
+    EnvironmentVariableKind, CACHE_TEST_BINS_ENV, ENVIRONMENT_VARIABLES, NATIVE_CRASH_CAPTURE_ENV,
+    NO_SPAWN_ENV,
 };
 pub use materialization_mode::{
     materialization_mode_from_client_env, materialization_mode_from_env,

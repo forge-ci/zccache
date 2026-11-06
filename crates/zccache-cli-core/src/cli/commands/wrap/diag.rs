@@ -10,26 +10,16 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-const ENV_VAR: &str = "ZCCACHE_DIAG_CWD";
 const LINE_TAG: &str = "ZCCACHE_DIAG_CWD";
 
-/// Emit the diagnostic to stderr if `ZCCACHE_DIAG_CWD=1` (or any non-empty,
-/// non-`0` value). No-op otherwise. Errors writing to stderr are intentionally
+/// Emit the diagnostic to stderr if `ZCCACHE_DIAG_CWD` is `1` or `true`.
+/// No-op otherwise. Errors writing to stderr are intentionally
 /// ignored — diagnostics must never affect the wrapper's exit status.
 pub(super) fn emit(args: &[String]) {
-    if !enabled_for(std::env::var_os(ENV_VAR).as_deref()) {
+    if !crate::core::config::diag_cwd_enabled() {
         return;
     }
     let _ = emit_to(&mut std::io::stderr().lock(), args);
-}
-
-fn enabled_for(value: Option<&std::ffi::OsStr>) -> bool {
-    match value {
-        Some(v) if v.is_empty() => false,
-        Some(v) if v == "0" => false,
-        Some(_) => true,
-        None => false,
-    }
 }
 
 fn emit_to(writer: &mut dyn Write, args: &[String]) -> std::io::Result<()> {
@@ -51,26 +41,6 @@ fn emit_to(writer: &mut dyn Write, args: &[String]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
-
-    #[test]
-    fn enabled_when_value_is_1() {
-        assert!(enabled_for(Some(OsStr::new("1"))));
-    }
-
-    #[test]
-    fn enabled_when_value_is_arbitrary_truthy_string() {
-        assert!(enabled_for(Some(OsStr::new("yes"))));
-        assert!(enabled_for(Some(OsStr::new("true"))));
-        assert!(enabled_for(Some(OsStr::new("verbose"))));
-    }
-
-    #[test]
-    fn disabled_when_unset_or_empty_or_zero() {
-        assert!(!enabled_for(None));
-        assert!(!enabled_for(Some(OsStr::new(""))));
-        assert!(!enabled_for(Some(OsStr::new("0"))));
-    }
 
     #[test]
     fn emits_single_tagged_line() {
