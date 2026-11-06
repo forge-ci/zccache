@@ -353,7 +353,7 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
     let current_depfile_dest: Option<NormalizedPath> = if is_rustc {
         rustc_requested_depfile(rustc_args, cwd_path.as_path())
     } else {
-        dep_flags.and_then(|flags| user_depfile_destination(flags, output_path.as_path()))
+        native_depfile_destination(compiler_path, dep_flags, output_path.as_path())
     };
     let rustc_requested_outputs = if is_rustc {
         rustc_requested_outputs(rustc_args, output_path, cwd_path, client_env)
@@ -509,7 +509,7 @@ pub(super) async fn try_depgraph_cached_hit(
     let current_depfile_dest: Option<NormalizedPath> = if is_rustc {
         rustc_requested_depfile(rustc_args, cwd_path.as_path())
     } else {
-        dep_flags.and_then(|flags| user_depfile_destination(flags, output_path.as_path()))
+        native_depfile_destination(compiler_path, dep_flags, output_path.as_path())
     };
     let rustc_requested_outputs = if is_rustc {
         rustc_requested_outputs(rustc_args, output_path, cwd_path, client_env)
@@ -636,6 +636,22 @@ fn rustc_requested_outputs(
     Some(outputs)
 }
 
+/// Where a C/C++ hit must restore the requested depfile. MSVC's `/showIncludes`
+/// also sets `has_md`, but its dependency trace is replayed through stdout and
+/// no depfile exists on disk.
+fn native_depfile_destination(
+    compiler_path: &Path,
+    dep_flags: Option<&UserDepFlags>,
+    output_path: &Path,
+) -> Option<NormalizedPath> {
+    if crate::compiler::detect_family(&compiler_path.to_string_lossy())
+        == crate::compiler::CompilerFamily::Msvc
+    {
+        return None;
+    }
+    dep_flags.and_then(|flags| user_depfile_destination(flags, output_path))
+}
+
 fn rustc_requested_depfile(effective_args: &[String], cwd: &Path) -> Option<NormalizedPath> {
     let parsed = crate::depgraph::parse_rustc_args(effective_args, cwd);
     crate::daemon::server::rustc_depfile_output_path(&parsed, cwd)
@@ -646,4 +662,22 @@ fn effective_rustc_args<'a>(compiler_path: &Path, effective_args: &'a [String]) 
         .ok()
         .flatten()
         .map_or(effective_args, |(_, args)| args)
+}
+
+#[cfg(test)]
+mod depfile_destination_tests {
+    use super::*;
+
+    /// #1992: only an on-disk depfile request may make a depfile mandatory.
+    #[test]
+    fn show_includes_never_requires_an_on_disk_depfile() {
+        let flags = UserDepFlags {
+            has_md: true,
+            ..UserDepFlags::default()
+        };
+        let output = Path::new("unit.o");
+        assert!(native_depfile_destination(Path::new("cl.exe"), Some(&flags), output).is_none());
+        assert!(native_depfile_destination(Path::new("gcc"), Some(&flags), output).is_some());
+        assert!(native_depfile_destination(Path::new("gcc"), None, output).is_none());
+    }
 }
