@@ -91,15 +91,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -713,17 +704,6 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1498,9 +1478,9 @@ dependencies = [
 
 [[package]]
 name = "kernal-api"
-version = "0.1.26"
+version = "0.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f18d3cbb9bd8f6a590cf9b5a75297c542786fcef93bb3ff7245eb8f8b1b09561"
+checksum = "12e468c71f4b47168e9897f04c3ef23c863aad335d0a387888b44873a6f2428d"
 dependencies = [
  "blake3",
  "crash-handler",
@@ -1789,9 +1769,9 @@ dependencies = [
 
 [[package]]
 name = "mimalloc-pprof"
-version = "0.9.4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f51af22471c0f8e22c9d9413bf4d3cec756ad6ee02179a923b346fcef74af670"
+checksum = "d26c55d67571b57373a078262cb6efb4f8a2ff0719157c452217e604c6bd7306"
 dependencies = [
  "cc",
 ]
@@ -1838,6 +1818,18 @@ name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "nom"
@@ -2554,9 +2546,9 @@ dependencies = [
 
 [[package]]
 name = "running-process"
-version = "4.10.16"
+version = "4.10.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c040ca81d60235a6027ef3115629049829464758e1011500902c8a2355727812"
+checksum = "5bd593727c580946bd825f06916220d6ece7d9f055d2b056afa195ccc44a9f88"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2582,9 +2574,9 @@ dependencies = [
 
 [[package]]
 name = "running-process-platform-internal"
-version = "4.10.16"
+version = "4.10.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ef39418f8c71399ea811c5daba36f2325516cc02c3b2169473400411941ed5f"
+checksum = "23731ed2a4ece92c24d7f3cbd8bfb83496107a5e1006540a6cbc4b02020fd0b9"
 dependencies = [
  "blake3",
  "dirs",
@@ -2601,9 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "running-process-protocol"
-version = "4.10.16"
+version = "4.10.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51894dfa970ac24213066f37b33656fd92c7053ef3e94f184b70000d8cf48f7"
+checksum = "05353a80bfda60cd02b2ca49678d6b3e4d690a3f9824384479d75264e0301e5b"
 dependencies = [
  "prost",
  "prost-build",
@@ -2698,7 +2690,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
 dependencies = [
- "twox-hash",
+ "twox-hash 1.6.3",
 ]
 
 [[package]]
@@ -2943,6 +2935,27 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "subtle"
@@ -3375,6 +3388,12 @@ dependencies = [
  "cfg-if",
  "static_assertions",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typed-path"
@@ -3866,7 +3885,7 @@ dependencies = [
 
 [[package]]
 name = "zccache"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "arc-swap",
  "bincode",
@@ -3928,7 +3947,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-artifact"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bincode",
  "dashmap",
@@ -3950,17 +3969,18 @@ dependencies = [
 
 [[package]]
 name = "zccache-audit"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "zccache-core",
 ]
 
 [[package]]
 name = "zccache-cli"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -3969,7 +3989,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-cli-core"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bincode",
  "bytes",
@@ -4013,14 +4033,15 @@ dependencies = [
 
 [[package]]
 name = "zccache-compile-trace"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "zccache-audit",
+ "zccache-core",
 ]
 
 [[package]]
 name = "zccache-compiler"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "clang",
  "kernal-api",
@@ -4034,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-core"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "dashmap",
  "kernal-api",
@@ -4042,12 +4063,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "zccache-daemon-core"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "arc-swap",
  "bincode",
@@ -4057,12 +4079,14 @@ dependencies = [
  "console-subscriber",
  "dashmap",
  "kernal-api",
+ "memchr",
  "prost",
  "rayon",
  "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strum",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4086,7 +4110,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-depgraph"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bincode",
  "dashmap",
@@ -4106,7 +4130,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-download"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "kernal-api",
  "reqwest",
@@ -4119,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-download-protocol"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bincode",
  "bytes",
@@ -4132,7 +4156,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-fingerprint"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "kernal-api",
  "rayon",
@@ -4141,13 +4165,14 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "twox-hash 2.1.5",
  "zccache-core",
  "zccache-hash",
 ]
 
 [[package]]
 name = "zccache-fingerprint-py"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -4157,7 +4182,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-fscache"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bincode",
  "dashmap",
@@ -4173,7 +4198,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-gha"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "reqwest",
  "serde",
@@ -4184,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-hash"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "kernal-api",
  "serde",
@@ -4193,7 +4218,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-ipc"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bytes",
  "dashmap",
@@ -4212,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-protocol"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "bytes",
  "kernal-api",
@@ -4229,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-symbols"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "tempfile",
  "zccache-core",
@@ -4237,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-test-support"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "tempfile",
  "zccache-audit",
@@ -4246,7 +4271,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-watcher"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "kernal-api",
  "rayon",
@@ -4259,7 +4284,7 @@ dependencies = [
 
 [[package]]
 name = "zccache-watcher-py"
-version = "1.15.1"
+version = "1.15.14"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -4348,18 +4373,16 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.4.2"
+version = "9.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+checksum = "c2d98561b612a84ae525331a7a094429ef8a5772514ed507ff6db5f54badc971"
 dependencies = [
- "arbitrary",
  "crc32fast",
- "crossbeam-utils",
- "displaydoc",
  "flate2",
  "indexmap",
  "memchr",
- "thiserror",
+ "nix",
+ "typed-path",
  "zopfli",
 ]
 

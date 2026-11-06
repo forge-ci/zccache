@@ -19,10 +19,19 @@ this rule applies to all new tests now.
 - **perf-guard.yml** - Main-only Rust, C, and C++ perf-regression guard that runs language jobs in parallel, fails below the zccache vs bare compiler or pinned-sccache speed floors, and uploads Markdown/JSON run artifacts.
 - **broker-stress.yml** - Exercises concurrent soldr clients against the shared broker, requires the daemon path, and rejects broker-error and uncached-fallback telemetry.
 
-Normal build/test workflows use `zackees/setup-soldr` for Rust build acceleration, excluding `release-auto.yml`. These setup-soldr steps enable strict zccache seeding so missing managed zccache releases fail immediately instead of falling back to `cargo install`, and they set `linker: fast` explicitly to keep the intended fast-linker behavior without warning noise. Jobs that run zccache self-tests stop the setup-soldr builder daemon before the test phase, run tests with a fresh `SOLDR_CACHE_DIR`, and request `SOLDR_CACHE_LIFECYCLE=command` for the isolated test cache when supported by soldr. Durable cache saves follow the #1677 budget rule (only a push to `main` saves on GitHub), except under nektos/act, where local bosn runs save fully so they stay warm; `SAVE_CACHE_POLICY` in `ci/check_cache_footprint.py` is the single definition and the guard enforces it.
+Normal build/test workflows use `zackees/setup-soldr` for Rust build acceleration, excluding `auto-release.yml`. These setup-soldr steps enable strict zccache seeding so missing managed zccache releases fail immediately instead of falling back to `cargo install`, and they set `linker: fast` explicitly to keep the intended fast-linker behavior without warning noise. Jobs that run zccache self-tests stop the setup-soldr builder daemon before the test phase, run tests with a fresh `SOLDR_CACHE_DIR`, and request `SOLDR_CACHE_LIFECYCLE=command` for the isolated test cache when supported by soldr. Durable cache saves follow the #1677 budget rule (only a push to `main` saves on GitHub), except under nektos/act, where local bosn runs save fully so they stay warm; `SAVE_CACHE_POLICY` in `ci/check_cache_footprint.py` is the single definition and the guard enforces it.
 
 Exceptions:
 
 - **test-action.yml** exercises this repository's own zccache action and must keep using that action directly.
 - **bench-action.yml** and **bench-fingerprint.yml** compare bare Cargo, sccache, and zccache behavior, so setup-soldr would invalidate the control rows.
 - **perf-rust-cluster.yml** builds pinned benchmark binaries and cross-repo perf fixtures with explicit cache topology; it remains on its purpose-built cache stack.
+
+## PR queue vs deferred lanes
+
+Pull requests (and the merge queue) run only the Linux set: `CI`
+(gated by the single required `CI summary` check), `Linux`, `Python Tests`,
+plus path-filtered cheap checks. The expensive lanes, `macOS`, `Windows`,
+`Integration`, `Wrapper end-to-end`, `Filesystem Matrix`, `Perf Guard`,
+`Broker stress` and `test-action`, run on push to `main`, a nightly
+`schedule` and `workflow_dispatch`, never on `pull_request`.

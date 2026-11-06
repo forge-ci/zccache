@@ -758,39 +758,9 @@ where
                      payload: &CachedPayload,
                      policy: crate::compiler::DeliveryPolicy|
      -> MaterializationResult<StagedMaterializationStats> {
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| destination_write_failure(out, error))?;
-        }
-        if provisional_staged {
-            match payload {
-                CachedPayload::File(path) => {
-                    crate::daemon::server::persist::materialize_independent_with_mode(
-                        path.as_path(),
-                        out,
-                        mode,
-                    )
-                    .map_err(|error| classify_file_materialization_error(out, path, error))
-                }
-                CachedPayload::Bytes(_) => write_cached_payload_with_floor(
-                    out,
-                    payload,
-                    policy,
-                    mode,
-                    SiblingFloorPass::BatchFollows,
-                    None,
-                ),
-            }
-        } else {
-            write_cached_payload_with_floor(
-                out,
-                payload,
-                policy,
-                mode,
-                SiblingFloorPass::BatchFollows,
-                None,
-            )
-        }
+        retry_transient_scan_window(|| {
+            deliver_one_output(out, payload, policy, mode, provisional_staged)
+        })
     };
     let observed = if targets.len() < PAR_WRITE_THRESHOLD {
         let mut observed = StagedMaterializationStats::default();
@@ -850,6 +820,104 @@ where
         batch_seed,
     );
     Ok(observed)
+}
+
+/// Deliver one cached payload to one requested output path. Split out of
+/// [`write_payloads_par_with_mtime_floor_and_policies_observed`] so the whole
+/// delivery — parent creation, blob materialization, mtime stamping — can be
+/// retried as a unit through a scanner window.
+fn deliver_one_output(
+    out: &Path,
+    payload: &CachedPayload,
+    policy: crate::compiler::DeliveryPolicy,
+    mode: MaterializationMode,
+    provisional_staged: bool,
+) -> MaterializationResult<StagedMaterializationStats> {
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| destination_write_failure(out, error))?;
+    }
+    if provisional_staged {
+        if let CachedPayload::File(path) = payload {
+            return crate::daemon::server::persist::materialize_independent_with_mode(
+                path.as_path(),
+                out,
+                mode,
+            )
+            .map_err(|error| classify_file_materialization_error(out, path, error));
+        }
+    }
+    write_cached_payload_with_floor(
+        out,
+        payload,
+        policy,
+        mode,
+        SiblingFloorPass::BatchFollows,
+        None,
+    )
+}
+
+/// The I/O error behind a materialization failure, whatever its bucket.
+pub(in crate::daemon::server) fn failure_io_error(
+    failure: &MaterializationFailure,
+) -> &std::io::Error {
+    match failure {
+        MaterializationFailure::CacheBlobMissing(inner) => &inner.error,
+        MaterializationFailure::CacheRead(inner) => &inner.error,
+        MaterializationFailure::DestinationWrite(inner) => &inner.error,
+    }
+}
+
+/// Bounded retry through a Windows antivirus/indexer scan window (#1757).
+///
+/// A real-time scanner opens a freshly written output with `FILE_SHARE_READ`
+/// only — no `FILE_SHARE_DELETE` — for tens to hundreds of milliseconds. While
+/// that handle is live, creating, replacing, chmod-ing or re-stamping that path
+/// fails with `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32). A
+/// cache hit that gave up here would be reported as `destination_write_failed`,
+/// which the compile pipeline treats as a soft miss: it re-runs the compiler
+/// and answers `cached: false` with exit 0, so the miss is invisible
+/// (FastLED/fbuild#1757).
+///
+/// The ladder matches `kernal_api`'s native replacement retry (#490): 50, 100,
+/// 250 and 500 ms, five attempts in all. Only the platform classifier's
+/// transient share errors are retried, so a genuine permission or volume error
+/// still fails on its first attempt instead of stalling the hit path.
+fn retry_transient_scan_window<T>(
+    mut attempt: impl FnMut() -> MaterializationResult<T>,
+) -> MaterializationResult<T> {
+    retry_while(&mut attempt, &|failure| {
+        crate::platform::fs::is_transient_share_error(failure_io_error(failure))
+    })
+}
+
+/// The retry ladder itself, parameterized on the retry predicate so the timing
+/// contract is testable without a Windows scanner.
+pub(in crate::daemon::server) fn retry_while<T>(
+    attempt: &mut impl FnMut() -> MaterializationResult<T>,
+    retryable: &dyn Fn(&MaterializationFailure) -> bool,
+) -> MaterializationResult<T> {
+    const DELAYS: [std::time::Duration; 4] = [
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(100),
+        std::time::Duration::from_millis(250),
+        std::time::Duration::from_millis(500),
+    ];
+    let mut next = 0usize;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(failure) => {
+                let Some(delay) = DELAYS.get(next) else {
+                    return Err(failure);
+                };
+                if !retryable(&failure) {
+                    return Err(failure);
+                }
+                std::thread::sleep(*delay);
+                next += 1;
+            }
+        }
+    }
 }
 
 pub(in crate::daemon::server) fn cache_blob_missing(

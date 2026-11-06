@@ -11,6 +11,7 @@ description = "Diagnostic compile trace support for zccache"
 publish = false
 
 [dependencies]
+zccache-core = { workspace = true }
 zccache-audit = { workspace = true }
 
 [lints]

@@ -291,7 +291,9 @@ mod tests {
             DaemonServer::bind_with_cache_dir(&crate::ipc::unique_test_endpoint(), &cache_dir)
                 .unwrap();
         let state = Arc::clone(&server.state);
-        let publication_write = Arc::clone(&state.artifact_publication).write_owned().await;
+        let publication_write = Arc::clone(&state.artifact_publication)
+            .write_for(crate::core::sync::OPERATION_TIMEOUT)
+            .await;
         let stdout = Arc::new(Vec::new());
         let stderr = Arc::new(b"cannot find function `missing`".to_vec());
         let mut publish = tokio::spawn(async move {

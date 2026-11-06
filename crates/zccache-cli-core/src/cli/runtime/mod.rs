@@ -12,11 +12,12 @@ use std::path::Path;
 pub fn run_async<T>(
     future: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("failed to create tokio runtime: {e}"))?
-        .block_on(future)
+        .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
+    crate::core::wait::block_on_for(&runtime, future, crate::core::wait::WHOLE_COMMAND)
+        .map_err(|error| format!("command exceeded its runtime budget: {error}"))?
 }
 
 /// Identity of the daemon instance a client is about to talk to.
@@ -337,7 +338,7 @@ pub(crate) fn classify_wait_tick(
 pub async fn wait_for_daemon_ready(endpoint: &str) -> Result<(), String> {
     wait_for_daemon_ready_with(
         endpoint,
-        |ep| crate::ipc::check_running_daemon_for(ep),
+        crate::ipc::check_running_daemon_for,
         AdaptiveWaitConfig::default(),
     )
     .await

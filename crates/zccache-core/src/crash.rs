@@ -44,8 +44,8 @@
 //! cheap enough to keep on the hot path.
 
 use super::NormalizedPath;
+use crate::blocking_sync::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -451,7 +451,7 @@ fn write_panic_dump(panic_info: &str, backtrace: &str) -> Option<NormalizedPath>
 /// Two near-simultaneous crashes can share a second-resolution timestamp;
 /// the sequence suffix breaks ties so neither overwrites the other.
 fn unique_dump_path(crash_dir: &Path, kind: &str, ext: &str) -> PathBuf {
-    let _lock = DUMP_NAME_LOCK.lock();
+    let _lock = DUMP_NAME_LOCK.lock_for(crate::sync::STATE_TIMEOUT);
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

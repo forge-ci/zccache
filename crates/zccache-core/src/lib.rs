@@ -3,6 +3,8 @@
 //! This crate contains shared types, error definitions, path utilities,
 //! and configuration structures used across all zccache crates.
 
+pub mod blocking_sync;
+pub mod cache_root_lock;
 pub mod config;
 pub mod crash;
 pub mod defender;
@@ -13,7 +15,11 @@ pub mod key_env;
 pub mod lifecycle;
 pub mod mtime;
 pub mod path;
+pub mod sync;
+mod sync_barrier;
+mod sync_watchdog;
 pub mod version;
+pub mod wait;
 
 pub use error::{Error, Result};
 pub use path::{normalize, normalize_for_key, normalize_msys_path, stable_path_id, NormalizedPath};

@@ -1,6 +1,9 @@
 name: macOS
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"
   push:
     branches: [main]
     paths-ignore:
@@ -14,24 +17,13 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
 
 # Superseded PR runs used to keep holding macOS slots while a fresh run
 # queued behind them. Against GitHub's 5-concurrent-job macOS cap that is
 # what produced the 16 -> 32 -> 49 -> 59 minute queue staircase. Pushes to
-# main are never cancelled: release-auto.yml triggers on push-to-main
+# main are never cancelled: auto-release.yml triggers on push-to-main
 # version bumps, so every commit that lands must be fully tested.
 permissions:
   actions: read
@@ -59,14 +51,17 @@ jobs:
   macos:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: macos-15
       run_check: false
 
   observe-macos-queue:
     name: Observe macOS runner queue
+    # Start the queue budget only when the watched jobs become eligible.
+    needs: cache-pre-prune
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6

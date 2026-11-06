@@ -75,8 +75,12 @@ pub(super) async fn discover_system_includes(
         // the slow path.
         let use_fast = matches!(compiler_family, crate::compiler::CompilerFamily::Clang);
         let cached = {
-            let cache = state.system_includes.lock().await;
-            cache.get(compiler).map(|paths| paths.to_vec())
+            state
+                .system_includes
+                .with_for(STATE_TIMEOUT, |cache| {
+                    cache.get(compiler).map(|paths| paths.to_vec())
+                })
+                .await
         };
         if let Some(paths) = cached {
             (paths, false)
@@ -86,8 +90,11 @@ pub(super) async fn discover_system_includes(
             // its own `-v -E` / `-###`. The guard is held through the insert
             // below, so waiters re-check here and reuse the first result.
             let probe_gate = state.system_include_probes.get(compiler);
-            let _probe_guard = probe_gate.lock_owned().await;
-            let filled_while_waiting = state.system_includes.lock().await.get(compiler).is_some();
+            let _probe_guard = probe_gate.acquire_for(OPERATION_TIMEOUT).await;
+            let filled_while_waiting = state
+                .system_includes
+                .with_for(STATE_TIMEOUT, |cache| cache.get(compiler).is_some())
+                .await;
             let discovered = if filled_while_waiting {
                 None
             } else {
@@ -100,34 +107,39 @@ pub(super) async fn discover_system_includes(
             // does not surface to the compile request (the in-memory L1
             // entry is still authoritative for this daemon's lifetime).
             let (resolved, inserted_snapshot, empty_discovery) = {
-                let mut cache = state.system_includes.lock().await;
-                if let Some(paths) = cache.get(compiler) {
-                    (paths.to_vec(), None, false)
-                } else if discovery_result_is_cacheable(discovered.as_deref()) {
-                    let discovered = discovered.expect("checked non-empty discovery result");
-                    cache.insert(compiler.clone(), discovered);
-                    let paths = cache
-                        .get(compiler)
-                        .map(|paths| paths.to_vec())
-                        .unwrap_or_default();
-                    // Snapshot the full cache under the lock. We only do
-                    // this on an actual insert (not a hit), so the cost
-                    // is paid once per (compiler binary, mtime) — the
-                    // same denominator as the spawn cost we're trying to
-                    // amortize. Cloning the `SystemIncludeCache` is a
-                    // shallow `HashMap` clone (≤ a few dozen entries in
-                    // practice) — orders of magnitude cheaper than the
-                    // `<compiler> -###` / `-v -E` spawn we just paid for.
-                    let snapshot = cache.clone();
-                    (paths, Some(snapshot), false)
-                } else if discovered.is_some() {
-                    // Issue #1167: a process that succeeds but reports zero
-                    // paths is not a stable compiler property. Never put it
-                    // in L1/L2; the next request must probe again.
-                    (Vec::new(), None, true)
-                } else {
-                    (Vec::new(), None, false)
-                }
+                state
+                    .system_includes
+                    .with_for(STATE_TIMEOUT, |cache| {
+                        if let Some(paths) = cache.get(compiler) {
+                            (paths.to_vec(), None, false)
+                        } else if discovery_result_is_cacheable(discovered.as_deref()) {
+                            let discovered =
+                                discovered.expect("checked non-empty discovery result");
+                            cache.insert(compiler.clone(), discovered);
+                            let paths = cache
+                                .get(compiler)
+                                .map(|paths| paths.to_vec())
+                                .unwrap_or_default();
+                            // Snapshot the full cache under the lock. We only do
+                            // this on an actual insert (not a hit), so the cost
+                            // is paid once per (compiler binary, mtime) — the
+                            // same denominator as the spawn cost we're trying to
+                            // amortize. Cloning the `SystemIncludeCache` is a
+                            // shallow `HashMap` clone (≤ a few dozen entries in
+                            // practice) — orders of magnitude cheaper than the
+                            // `<compiler> -###` / `-v -E` spawn we just paid for.
+                            let snapshot = cache.clone();
+                            (paths, Some(snapshot), false)
+                        } else if discovered.is_some() {
+                            // Issue #1167: a process that succeeds but reports zero
+                            // paths is not a stable compiler property. Never put it
+                            // in L1/L2; the next request must probe again.
+                            (Vec::new(), None, true)
+                        } else {
+                            (Vec::new(), None, false)
+                        }
+                    })
+                    .await
             };
             if empty_discovery {
                 warn_empty_system_include_discovery(compiler);
@@ -315,13 +327,25 @@ async fn run_discovery_command(
     lineage: &crate::daemon::lineage::Lineage,
     compiler_priority: CompilePriority,
 ) -> std::io::Result<std::process::Output> {
-    let builder = kernal_api::SpawnSpec::new(compiler.as_path()).args(args);
+    // An include probe changes the job type (`-###`, `-v -E`): it is an
+    // internal scan (#2027). Its callers already fail open to the uncached
+    // bypass when it yields nothing.
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let (builder, _response_file) = super::super::super::compiler_spawn::internal_scan_spawn(
+        compiler.as_path(),
+        crate::compiler::detect_family(&compiler.to_string_lossy()),
+        &args,
+        None,
+        None,
+    )?
+    .into_parts();
     let builder = lineage.apply_to_async_builder(builder, None);
     crate::daemon::process::async_builder_output_with_priority_timeout(
         builder,
         compiler_priority,
         SYSTEM_INCLUDE_DISCOVERY_TIMEOUT,
         compiler.display().to_string(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
 }

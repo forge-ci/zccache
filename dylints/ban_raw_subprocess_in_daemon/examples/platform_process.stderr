@@ -1,0 +1,28 @@
+error: `kernal_api::platform::process::foreground_output` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/platform_process.rs:4:13
+   |
+LL |     let _ = capture(command);
+   |             ^^^^^^^
+   |
+   = note: `#[deny(ban_raw_subprocess_in_daemon)]` on by default
+
+error: `kernal_api::platform::process::DaemonChild::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/platform_process.rs:5:16
+   |
+LL |     let wait = DaemonChild::wait;
+   |                ^^^^^^^^^^^^^^^^^
+
+error: `kernal_api::platform::process::SpawnedChild::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/platform_process.rs:7:13
+   |
+LL |     let _ = child.wait();
+   |             ^^^^^^^^^^^^
+
+error: `kernal_api::platform::process::spawn_sync` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+  --> $DIR/platform_process.rs:8:18
+   |
+LL |     let _spawn = kernal_api::platform::process::spawn_sync;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

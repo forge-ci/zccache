@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use zccache_core::blocking_sync::Mutex;
 
 use kernal_api::platform::fs::{PatternSet, PatternSetBuilder};
 use zccache_core::NormalizedPath;
@@ -150,10 +151,12 @@ impl PollingWatcher {
                 )
             })?;
 
-        match ready_rx.recv() {
+        match zccache_core::wait::recv_for(&ready_rx, zccache_core::wait::PROBE) {
             Ok(()) => {}
             Err(_) => {
-                let _ = worker_handle.join();
+                let _ = worker_shutdown_tx.send(());
+                let _ =
+                    zccache_core::wait::join_for(worker_handle, zccache_core::wait::HELPER_JOIN);
                 return Err(std::io::Error::other(
                     "watcher worker exited before initialization completed",
                 ));
@@ -168,26 +171,26 @@ impl PollingWatcher {
 
         *self
             .poll_rx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher receiver lock poisoned"))? = Some(poll_rx);
         *self
             .worker_shutdown_tx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher shutdown lock poisoned"))? =
             Some(worker_shutdown_tx);
         *self
             .worker_handle
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher worker lock poisoned"))? =
             Some(worker_handle);
         *self
             .dispatch_shutdown_tx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher dispatch shutdown lock poisoned"))? =
             Some(dispatch_shutdown_tx);
         *self
             .dispatch_handle
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher dispatch lock poisoned"))? =
             Some(dispatch_handle);
 
@@ -201,7 +204,7 @@ impl PollingWatcher {
     pub fn stop(&self) -> std::io::Result<()> {
         let worker_shutdown = self
             .worker_shutdown_tx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher shutdown lock poisoned"))?
             .take();
         if let Some(tx) = worker_shutdown {
@@ -210,7 +213,7 @@ impl PollingWatcher {
 
         let dispatch_shutdown = self
             .dispatch_shutdown_tx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher dispatch shutdown lock poisoned"))?
             .take();
         if let Some(tx) = dispatch_shutdown {
@@ -219,29 +222,39 @@ impl PollingWatcher {
 
         let worker = self
             .worker_handle
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher worker lock poisoned"))?
             .take();
         if let Some(handle) = worker {
-            handle
-                .join()
+            zccache_core::wait::join_for(handle, zccache_core::wait::HELPER_JOIN)
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "watcher thread join timed out",
+                    )
+                })?
                 .map_err(|_| std::io::Error::other("watcher worker thread panicked"))?;
         }
 
         let dispatch = self
             .dispatch_handle
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher dispatch lock poisoned"))?
             .take();
         if let Some(handle) = dispatch {
-            handle
-                .join()
+            zccache_core::wait::join_for(handle, zccache_core::wait::HELPER_JOIN)
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "watcher thread join timed out",
+                    )
+                })?
                 .map_err(|_| std::io::Error::other("watcher dispatch thread panicked"))?;
         }
 
         *self
             .poll_rx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher receiver lock poisoned"))? = None;
 
         Ok(())
@@ -250,7 +263,7 @@ impl PollingWatcher {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.worker_handle
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .ok()
             .and_then(|guard| guard.as_ref().map(JoinHandle::is_finished))
             .is_some_and(|finished| !finished)
@@ -263,7 +276,7 @@ impl PollingWatcher {
     pub fn poll_timeout(&self, timeout: Duration) -> std::io::Result<Option<PollWatchBatch>> {
         let receiver_guard = self
             .poll_rx
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher receiver lock poisoned"))?;
         let Some(receiver) = receiver_guard.as_ref() else {
             return Ok(None);
@@ -286,7 +299,7 @@ impl PollingWatcher {
 
     pub fn add_observer(&self, observer: Arc<dyn PollWatchObserver>) -> std::io::Result<()> {
         self.observers
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .map_err(|_| std::io::Error::other("watcher observers lock poisoned"))?
             .push(observer);
         Ok(())
@@ -327,7 +340,7 @@ fn run_dispatch_loop(
             break;
         }
 
-        let snapshot = match observers.lock() {
+        let snapshot = match observers.lock_for(zccache_core::sync::STATE_TIMEOUT) {
             Ok(guard) => guard.clone(),
             Err(_) => break,
         };

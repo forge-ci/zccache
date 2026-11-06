@@ -25,18 +25,8 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
-  pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
 
 permissions:
   actions: read
@@ -80,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: zackees/ci.yml
-          ref: 365508627edb8130e2c5615338b00bf02a069fa7
+          ref: 41fcbca60a7901c8707411c4abf4d0b41dd71426
           path: .ci-lint
           persist-credentials: false
           sparse-checkout: ci_lint
@@ -96,6 +86,9 @@ jobs:
       contents: read
 
   integration:
+    env: # setup-soldr#629: S3 remote build cache credentials
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     needs: [cache-pre-prune, ci-mode]
     # GATE-008/010: skipped only for a PR head attested by the local gate's
     # isolated `tests` lane, which replays this workflow through Bosn
@@ -109,9 +102,14 @@ jobs:
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
       - id: soldr
         uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
         with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
           job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
           cache-key-suffix: integration # isolated full-workspace profile (#1885/#1867)
           cook-delta: false # per-commit delta layer off (setup-soldr#528)
@@ -178,6 +176,42 @@ jobs:
           # ensuring the audit below evaluates only this job's behavior.
           uv run --no-project python ci/clear_runtime_telemetry.py \
             --cache-root "$SOLDR_CACHE_DIR/cache/zccache"
+      - name: Install PCH regression toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Content-verified PCH replay requires clang >=19. Keep this toolchain
+          # private to the focused step instead of changing unrelated test tools.
+          pch_archive="$RUNNER_TEMP/pch-clang-21.1.5.tar.zst"
+          pch_toolchain="$RUNNER_TEMP/pch-clang-21.1.5"
+          curl --fail --silent --show-error --location --retry 3 --max-time 180 \
+            https://media.githubusercontent.com/media/zackees/clang-tool-chain-bins/main/assets/clang/linux/x86_64/llvm-21.1.5-linux-x86_64.tar.zst \
+            --output "$pch_archive"
+          printf '%s  %s\n' 4021cc49d70472122761709e7376835dfc857b5ec77183fa969b5f61d0f13a2f "$pch_archive" | sha256sum --check -
+          mkdir -p "$pch_toolchain"
+          tar --zstd -xf "$pch_archive" -C "$pch_toolchain" --strip-components=1
+          chmod u+x "$pch_toolchain"/bin/*
+          "$pch_toolchain/bin/clang++" --version
+          UV_TOOL_DIR="$RUNNER_TEMP/pch-uv-tools" UV_TOOL_BIN_DIR="$RUNNER_TEMP/pch-bin" uv tool install ninja==1.13.0
+          echo "PCH_TEST_TOOLS=$pch_toolchain/bin:$RUNNER_TEMP/pch-bin" >> "$GITHUB_ENV"
+      - name: Strict PCH regressions (Clang 21)
+        shell: bash
+        env:
+          ZCCACHE_PCH_TESTS_REQUIRED: "1"
+          NEXTEST_TEST_THREADS: num-cpus
+          SOLDR_CACHE_DIR: ${{ runner.temp }}/zccache-self-tests/integration
+          SOLDR_CACHE_LIFECYCLE: command
+          SOLDR_CACHE_SHUTDOWN_TIMEOUT_SECS: "30"
+          SOLDR_TARGET_BLOCK_FREE_GB: "2"
+          CARGO_BUILD_JOBS: "1"
+          SOLDR_JOBS: "1"
+        run: |
+          set -euo pipefail
+          unset ZCCACHE_CACHE_DIR
+          export PATH="$PCH_TEST_TOOLS:$PATH"
+          clang++ --version
+          ninja --version
+          soldr cargo nextest run --workspace --features "$ZCCACHE_INTEGRATION_FEATURES" --no-fail-fast -E 'test(/daemon_pch_strict_replay_test|pch_inputs::|pch_provenance::/)'  # ci-lint: allow RUST-015 the --no-run prebuild above already compiled every workspace test target
       - name: Test (full workspace)
         shell: bash
         env:
@@ -212,7 +246,9 @@ jobs:
             {
               echo '## Integration Test Failures'
               echo '```'
-              grep -E '^\s+(FAIL|SIGSEGV|SIGABRT|TIMEOUT) \[' test-output.txt
+              # nextest emits ANSI color even when tee captures its output.
+              sed -E 's/\x1B\[[0-?]*[ -/]*[@-~]//g' test-output.txt > test-output-plain.txt
+              grep -E '^\s+(FAIL|SIGSEGV|SIGABRT|TIMEOUT|ABORT) \[' test-output-plain.txt || echo "unknown failure (exit $status); see Test (full workspace) log"
               awk '/^failures:$/,/^test result:/' test-output.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
@@ -275,7 +311,7 @@ jobs:
           ZCCACHE_DISABLE: "1"
         run: |
           unset ZCCACHE_CACHE_DIR
-          soldr cargo test -p zccache-daemon-core --test legacy_path_validation -- --ignored --test-threads=1
+          soldr cargo test -p zccache-daemon-core --test legacy_path_validation -- --ignored
       - name: Test ignored integration and stress suite
         if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         shell: bash

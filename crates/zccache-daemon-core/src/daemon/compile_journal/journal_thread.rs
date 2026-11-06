@@ -71,7 +71,12 @@ pub(super) fn journal_thread(
     // Reused batch buffer so we don't reallocate every wakeup.
     let mut batch: Vec<JournalMessage> = Vec::with_capacity(JOURNAL_BATCH_CAP);
 
-    while let Ok(msg) = rx.recv() {
+    loop {
+        let msg = match crate::core::wait::recv_for(&rx, crate::core::wait::PROBE) {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         batch.push(msg);
         // Drain whatever else is already queued. Bounded by JOURNAL_BATCH_CAP
         // so a runaway producer can't blow up memory in one batch.

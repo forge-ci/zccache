@@ -126,7 +126,13 @@ pub(crate) fn run_async(future: impl std::future::Future<Output = ExitCode>) -> 
         .enable_all()
         .build()
         .expect("failed to create tokio runtime");
-    rt.block_on(future)
+    match crate::core::wait::block_on_for(&rt, future, crate::core::wait::WHOLE_COMMAND) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("command exceeded its runtime budget: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 pub(crate) fn format_uptime(secs: u64) -> String {
@@ -180,13 +186,15 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 ///
 /// Diagnostics go to stderr; stdout carries only the command's result.
 pub(crate) fn init_tracing() {
-    tracing_subscriber::fmt()
+    // Embedded hosts may already own the subscriber, and explicit-argv
+    // dispatch can run more than once in the same process.
+    let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
-        .init();
+        .try_init();
 }
 
 /// User-facing message for the `Ok(None)` recv path — daemon closed the

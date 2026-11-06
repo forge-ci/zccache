@@ -141,6 +141,30 @@ pub(super) fn compile_worktree_root(
     None
 }
 
+/// The key root for a C/C++ compile launched from a Cargo build script that
+/// runs inside its `OUT_DIR` (openssl-src copies its tree there and runs
+/// make, #1982). Keying such a compile relative to the worktree root names
+/// the target directory, so every fresh `CARGO_TARGET_DIR` path missed.
+/// Rooting it at `OUT_DIR` keys it relative to that directory, and the
+/// prefix maps `effective_compile_args` then injects for the root and cwd
+/// keep the object itself free of the target-dir path. Applies only under
+/// `ZCCACHE_PATH_REMAP=auto`, never to rustc, and never over an explicit
+/// `ZCCACHE_WORKTREE_ROOT`.
+pub(super) fn build_script_out_dir_root(
+    compiler_path: &Path,
+    cwd: &Path,
+    client_env: Option<&[(String, String)]>,
+) -> Option<NormalizedPath> {
+    if compiler_is_rustc_like(compiler_path)
+        || !path_remap_auto_enabled(client_env)
+        || client_env_value(client_env, WORKTREE_ROOT_ENV).is_some()
+    {
+        return None;
+    }
+    let out_dir = Path::new(client_env_value(client_env, "OUT_DIR")?);
+    (out_dir.is_absolute() && cwd.starts_with(out_dir)).then(|| out_dir.into())
+}
+
 pub(super) fn normalize_path_for_request_key(path: &Path, key_root: Option<&Path>) -> String {
     if let Some(root) = key_root {
         if let Ok(relative) = path.strip_prefix(root) {

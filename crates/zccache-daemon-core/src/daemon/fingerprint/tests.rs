@@ -86,6 +86,67 @@ fn on_batch_changed_sets_dirty() {
     assert_eq!(result.reason.as_deref(), Some("content changed"));
 }
 
+/// Run `on_batch` for a FIFO on another thread and report whether it returned.
+///
+/// Opening a FIFO for reading blocks until a writer appears, so `on_batch` only
+/// returns if it never opens the path.
+#[cfg(unix)]
+fn on_batch_returns_for_fifo(mgr: std::sync::Arc<FingerprintManager>, fifo: &Path) -> bool {
+    let status = std::process::Command::new("mkfifo")
+        .arg(fifo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "mkfifo failed");
+
+    let changed: NormalizedPath = fifo.to_path_buf().into();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        mgr.on_batch(&[changed], &[]);
+        let _ = done_tx.send(());
+    });
+    let returned = done_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .is_ok();
+    if !returned {
+        // Give the blocked open a writer, so that its thread can end.
+        let _ = fs::File::options().write(true).open(fifo);
+    }
+    returned
+}
+
+/// A build tree changes files that no watch covers, such as an archive that
+/// `ranlib` rewrites in place. Hashing one maps it, and the daemon dies with
+/// SIGBUS when the file shrinks during the hash.
+#[cfg(unix)]
+#[test]
+fn on_batch_does_not_open_a_path_with_no_watches() {
+    let dir = TempDir::new().unwrap();
+    let mgr = std::sync::Arc::new(FingerprintManager::new());
+    assert!(on_batch_returns_for_fifo(mgr, &dir.path().join("lib.a")));
+}
+
+#[cfg(unix)]
+#[test]
+fn on_batch_does_not_open_a_path_outside_every_watch() {
+    let src = TempDir::new().unwrap();
+    let build = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    create_file(src.path(), "a.rs", "content");
+
+    let cache_file = cache_dir.path().join("fp.json");
+    let mgr = std::sync::Arc::new(FingerprintManager::new());
+    mgr.check(&cache_file, "two-layer", src.path(), &[], &[], &[]);
+    mgr.mark_success(&cache_file);
+
+    assert!(on_batch_returns_for_fifo(
+        std::sync::Arc::clone(&mgr),
+        &build.path().join("lib.a")
+    ));
+
+    let result = mgr.check(&cache_file, "two-layer", src.path(), &[], &[], &[]);
+    assert_eq!(result.decision, "skip");
+}
+
 #[test]
 fn on_batch_removed_sets_dirty() {
     let src = TempDir::new().unwrap();

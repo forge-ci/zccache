@@ -123,10 +123,10 @@ impl EmbeddedDaemon {
             maintenance_policy,
             runtime_handle: runtime_handle.clone(),
             index_writer_rx: Some(index_writer_rx),
-            index_writer_handle: Mutex::new(None),
-            maintenance_handle: Mutex::new(None),
-            depgraph_maintenance_handle: Mutex::new(None),
-            depgraph_load_handle: Mutex::new(None),
+            index_writer_handle: AsyncState::new(None),
+            maintenance_handle: AsyncState::new(None),
+            depgraph_maintenance_handle: AsyncState::new(None),
+            depgraph_load_handle: AsyncState::new(None),
             maintenance_tasks: Vec::new(),
         };
         daemon
@@ -153,7 +153,9 @@ impl EmbeddedDaemon {
                 Some(h) => h.launch(task),
                 None => kernal_api::async_engine::launch(task),
             };
-            *self.index_writer_handle.lock().await = Some(handle);
+            self.index_writer_handle
+                .with_for(STATE_TIMEOUT, |slot| *slot = Some(handle))
+                .await;
         }
 
         let mut timer = super::embedded_bringup::BringupTimer::new();
@@ -208,12 +210,14 @@ impl EmbeddedDaemon {
         // #1652: the depgraph scales with every context the host ever compiled
         // and is the one phase that can take tens of seconds. Load it after
         // readiness; compiles wait on `dep_graph_load_complete`.
-        *self.depgraph_load_handle.lock().await =
-            Some(super::embedded_bringup::spawn_depgraph_load(
-                Arc::clone(&self.state),
-                embedded_depgraph_file_path(&self.state),
-                runtime_handle.as_ref(),
-            ));
+        let depgraph_load = Some(super::embedded_bringup::spawn_depgraph_load(
+            Arc::clone(&self.state),
+            embedded_depgraph_file_path(&self.state),
+            runtime_handle.as_ref(),
+        ));
+        self.depgraph_load_handle
+            .with_for(STATE_TIMEOUT, |slot| *slot = depgraph_load)
+            .await;
 
         // #1160: start the SAME schedule the standalone daemon starts. Before
         // this, embedded ran no periodic task at all beyond the disk loop, so
@@ -238,8 +242,12 @@ impl EmbeddedDaemon {
             tasks = ?started.started,
             "embedded maintenance schedule started"
         );
-        *self.maintenance_handle.lock().await = started.disk_maintenance;
-        *self.depgraph_maintenance_handle.lock().await = started.depgraph_save;
+        self.maintenance_handle
+            .with_for(STATE_TIMEOUT, |slot| *slot = started.disk_maintenance)
+            .await;
+        self.depgraph_maintenance_handle
+            .with_for(STATE_TIMEOUT, |slot| *slot = started.depgraph_save)
+            .await;
         self.maintenance_tasks = started.started;
         timer.ready(&self.state);
     }
@@ -385,15 +393,19 @@ impl EmbeddedDaemon {
     }
 
     pub(crate) async fn flush(&self) -> EmbeddedFlushReport {
-        let _maintenance_guard = self.state.disk_maintenance.lock().await;
-        let mut index_writer_handle = self.index_writer_handle.lock().await;
-        flush_embedded_state(
+        let _maintenance_guard = self
+            .state
+            .disk_maintenance
+            .acquire_for(OPERATION_TIMEOUT)
+            .await;
+        let report = flush_embedded_state(
             &self.state,
             self.runtime_handle.as_ref(),
-            &mut index_writer_handle,
+            &self.index_writer_handle,
             false,
         )
-        .await
+        .await;
+        report
     }
 
     pub(crate) async fn shutdown(&self) -> EmbeddedFlushReport {
@@ -402,12 +414,15 @@ impl EmbeddedDaemon {
         // A host-requested pass can run independently of the background
         // handle. Wait for it before the final index flush; new passes reject
         // the latched shutdown flag after acquiring this mutex.
-        let _maintenance_guard = self.state.disk_maintenance.lock().await;
-        let mut index_writer_handle = self.index_writer_handle.lock().await;
+        let _maintenance_guard = self
+            .state
+            .disk_maintenance
+            .acquire_for(OPERATION_TIMEOUT)
+            .await;
         let mut report = flush_embedded_state(
             &self.state,
             self.runtime_handle.as_ref(),
-            &mut index_writer_handle,
+            &self.index_writer_handle,
             true,
         )
         .await;
@@ -425,19 +440,28 @@ impl EmbeddedDaemon {
         // polls. The latched shutdown flag remains the authoritative stop
         // condition.
         self.state.shutdown.notify_one();
-        let handle = self.maintenance_handle.lock().await.take();
+        let handle = self
+            .maintenance_handle
+            .with_for(STATE_TIMEOUT, Option::take)
+            .await;
         let disk_outcome = match handle {
             Some(handle) => join_task(handle, "embedded maintenance").await,
             None => FlushStepOutcome::Completed,
         };
-        let depgraph_handle = self.depgraph_maintenance_handle.lock().await.take();
+        let depgraph_handle = self
+            .depgraph_maintenance_handle
+            .with_for(STATE_TIMEOUT, Option::take)
+            .await;
         let depgraph_outcome = match depgraph_handle {
             Some(handle) => join_task(handle, "embedded depgraph maintenance").await,
             None => FlushStepOutcome::Completed,
         };
         // #1652: the final flush saves the depgraph only once its startup load
         // has installed; wait for that load so a quick shutdown keeps it.
-        let load_handle = self.depgraph_load_handle.lock().await.take();
+        let load_handle = self
+            .depgraph_load_handle
+            .with_for(STATE_TIMEOUT, Option::take)
+            .await;
         let load_outcome = match load_handle {
             Some(handle) => join_task(handle, "embedded depgraph load").await,
             None => FlushStepOutcome::Completed,
@@ -655,7 +679,7 @@ impl Drop for EmbeddedDaemon {
 async fn flush_embedded_state(
     state: &Arc<SharedState>,
     runtime_handle: Option<&kernal_api::async_engine::RuntimeHandle>,
-    index_writer_handle: &mut Option<kernal_api::async_engine::Task<()>>,
+    index_writer_handle: &AsyncState<Option<kernal_api::async_engine::Task<()>>>,
     shutdown_writer: bool,
 ) -> EmbeddedFlushReport {
     let pending_writes_drained = pending_writes::await_all(
@@ -671,11 +695,18 @@ async fn flush_embedded_state(
     // must wait because returning would allow a publisher to mutate the cache
     // after the final checkpoint.
     let publication_guard = if shutdown_writer {
-        Some(state.artifact_publication.write().await)
+        Some(
+            state
+                .artifact_publication
+                .write_for(crate::core::sync::OPERATION_TIMEOUT)
+                .await,
+        )
     } else {
         kernal_api::async_engine::timeout(
             EMBEDDED_PUBLICATION_BARRIER_TIMEOUT,
-            state.artifact_publication.write(),
+            state
+                .artifact_publication
+                .write_for(crate::core::sync::OPERATION_TIMEOUT),
         )
         .await
         .ok()
@@ -703,7 +734,9 @@ async fn flush_embedded_state(
     if shutdown_writer {
         if let Some(step) = stop_index_writer_task(
             state.index_writer_shutdown.as_ref(),
-            index_writer_handle.take(),
+            index_writer_handle
+                .with_for(STATE_TIMEOUT, Option::take)
+                .await,
         )
         .await
         {
@@ -761,10 +794,10 @@ async fn flush_embedded_state(
     }
 
     if state.system_includes_loaded.load(Ordering::Acquire) {
-        let includes = {
-            let includes = state.system_includes.lock().await;
-            includes.clone()
-        };
+        let includes = state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |includes| includes.clone())
+            .await;
         let system_includes_cache_path = state.system_includes_cache_path.clone();
         steps.push(
             flush_step("system_includes", async move {
@@ -824,147 +857,5 @@ fn embedded_depgraph_file_path(state: &SharedState) -> crate::core::NormalizedPa
 }
 
 #[cfg(test)]
-mod flush_ownership_tests {
-    use super::{
-        flush_step, join_task, stop_index_writer_task, EmbeddedDaemon, FlushStepOutcome,
-        MaintenancePolicy,
-    };
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn ready_step_reports_completion() {
-        let outcome = flush_step("test", async { Ok::<(), String>(()) }).await;
-        assert_eq!(
-            outcome.outcome,
-            FlushStepOutcome::Completed,
-            "a completed persistence step must be reported as complete"
-        );
-    }
-
-    #[tokio::test]
-    async fn failed_step_preserves_error() {
-        let outcome = flush_step("test", async { Err::<(), String>("disk full".into()) }).await;
-        assert_eq!(
-            outcome.outcome,
-            FlushStepOutcome::Failed("disk full".into())
-        );
-    }
-
-    #[tokio::test]
-    async fn task_shutdown_waits_for_owned_work() {
-        let task = kernal_api::async_engine::launch(async {
-            kernal_api::async_engine::sleep(Duration::from_millis(20)).await;
-        });
-        assert_eq!(
-            join_task(task, "test task").await,
-            FlushStepOutcome::Completed
-        );
-    }
-
-    #[tokio::test]
-    async fn index_writer_shutdown_signal_survives_between_waits() {
-        let shutdown = Arc::new(kernal_api::async_engine::Notify::new());
-        let writer_shutdown = Arc::clone(&shutdown);
-        let task = kernal_api::async_engine::launch(async move {
-            kernal_api::async_engine::sleep(Duration::from_millis(20)).await;
-            writer_shutdown.notified().await;
-        });
-
-        let step = tokio::time::timeout(
-            Duration::from_secs(1),
-            stop_index_writer_task(shutdown.as_ref(), Some(task)),
-        )
-        .await
-        .expect("index writer shutdown signal was lost")
-        .expect("writer handle produces a shutdown step");
-
-        assert_eq!(step.outcome, FlushStepOutcome::Completed);
-    }
-
-    #[tokio::test]
-    async fn host_owned_disk_maintenance_still_owns_depgraph_scheduler() {
-        let temp = tempfile::tempdir().expect("temp cache");
-        let daemon = EmbeddedDaemon::start_with_maintenance(
-            crate::ipc::unique_test_endpoint(),
-            crate::core::NormalizedPath::new(temp.path()),
-            None,
-            None,
-            MaintenancePolicy::default(),
-            false,
-            None,
-        )
-        .await
-        .expect("embedded daemon");
-
-        assert!(
-            daemon.maintenance_handle.lock().await.is_none(),
-            "host ownership must suppress only the disk scheduler"
-        );
-        assert!(
-            daemon.depgraph_maintenance_handle.lock().await.is_some(),
-            "depgraph persistence remains service-owned"
-        );
-        let report = daemon.shutdown().await;
-        assert!(report.is_complete());
-    }
-
-    #[tokio::test]
-    async fn concurrent_embedded_daemons_keep_explicit_staging_roots_independent() {
-        let cache_a = tempfile::tempdir().expect("cache a");
-        let cache_b = tempfile::tempdir().expect("cache b");
-        let staging_a = tempfile::tempdir().expect("staging a");
-        let staging_b = tempfile::tempdir().expect("staging b");
-        let cache_a = crate::core::NormalizedPath::new(cache_a.path());
-        let cache_b = crate::core::NormalizedPath::new(cache_b.path());
-        let staging_a = crate::core::NormalizedPath::new(staging_a.path());
-        let staging_b = crate::core::NormalizedPath::new(staging_b.path());
-
-        let start_a = EmbeddedDaemon::start_with_maintenance(
-            crate::ipc::unique_test_endpoint(),
-            cache_a,
-            Some(&staging_a),
-            None,
-            MaintenancePolicy::default(),
-            false,
-            None,
-        );
-        let start_b = EmbeddedDaemon::start_with_maintenance(
-            crate::ipc::unique_test_endpoint(),
-            cache_b,
-            Some(&staging_b),
-            None,
-            MaintenancePolicy::default(),
-            false,
-            None,
-        );
-        let (daemon_a, daemon_b) = tokio::join!(start_a, start_b);
-        let daemon_a = daemon_a.expect("embedded daemon a");
-        let daemon_b = daemon_b.expect("embedded daemon b");
-
-        assert!(daemon_a
-            .state
-            .staging
-            .path()
-            .starts_with(staging_a.as_path()));
-        assert!(daemon_b
-            .state
-            .staging
-            .path()
-            .starts_with(staging_b.as_path()));
-        assert!(!daemon_a
-            .state
-            .staging
-            .path()
-            .starts_with(staging_b.as_path()));
-        assert!(!daemon_b
-            .state
-            .staging
-            .path()
-            .starts_with(staging_a.as_path()));
-
-        let (report_a, report_b) = tokio::join!(daemon_a.shutdown(), daemon_b.shutdown());
-        assert!(report_a.is_complete());
-        assert!(report_b.is_complete());
-    }
-}
+#[path = "tests/embedded_flush_ownership.rs"]
+mod flush_ownership_tests;

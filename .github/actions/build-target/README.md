@@ -2,7 +2,7 @@
 
 Builds the zccache binaries for **one** Rust target triple and stages the
 release artifacts for it. Used by `build.yml` (the 8-target dist matrix) and
-by `release-auto.yml`, so both paths produce identically-shaped artifacts
+by `auto-release.yml`, so both paths produce identically-shaped artifacts
 rather than each workflow rolling its own packaging steps.
 
 ## Inputs

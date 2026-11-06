@@ -1,5 +1,14 @@
 # Lessons
 
+## Response-file parsing must preserve execution semantics (2026-11-02)
+
+Keeping a nested `@` argument literal in the parser is insufficient if the
+expanded argv is passed directly back to the compiler. Cover real compiler
+execution: reject nested flag injection, retain valid literal search paths
+through a cache hit, and reject unreadable top-level files before lookup.
+Warm a valid artifact before checking invalid argument rejection: a miss-only
+test misses aliases caused by an unmodeled positional input in the key parser.
+
 ## Link payloads include permissions (2026-10-02)
 
 Reading a linked executable into a byte buffer drops execute bits. Retain
@@ -323,3 +332,55 @@ family is wanted.
 
 - Reproduce a fixture leak with a focused failing unit test before changing its cleanup.
 - A raw Child handle does not kill on drop. Guard the process group immediately after spawn, reap the driver on scope exit and panic, bound polling, and give CPU burners their own finite lifetime for runner termination.
+
+## 2026-10-21 bounded synchronization must preserve writer preference
+
+Polling `std::sync::RwLock::try_write` never joins the native writer queue.
+Continuous readers can therefore starve a timed writer even where the original
+blocking acquisition had writer preference. Publish writer intent before polling
+and keep later readers out until queued writers acquire. Preserve poisoning as
+well: recovering a half-mutated cache silently can change hit correctness. The
+queued-writer unit test and the artifact put/clear race cover these contracts.
+
+Async state should expose synchronous callbacks rather than data guards. Use
+separate unit-only permits for operations that must span awaits, and keep child
+spawn guards private behind actor-thread admission hooks. Compiler coroutine
+witnesses catch retained guards behind aliases and local wrappers; lexical
+scopes also avoid the explicit-drop storage false positives.
+
+## Guard wrappers need explicit cross-crate lint coverage (2026-10-22)
+
+A watchdog guard newtype can retain the same native lock while hiding its type
+from a checker that recurses through local fields only. Test against the real
+consumer dependency and classify the wrapper by its resolved defining module
+and type. Include aliases, concrete wrappers and unit-valued native guards;
+only separately owned data-free operation permits may survive suspension.
+
+## Local replay failures (2026-11-02)
+
+Strip ANSI before parsing nextest status lines: colored FAIL prefixes made
+Integration's anchored grep emit an empty list despite a named test failure.
+An exit-137 receipt and OOMKilled=false on a replacement container cannot
+identify the original killer. Preserve original engine death events before
+cleanup; label before/after host samples instead of claiming kill-time load.
+
+## Queue observers must share watched-job prerequisites (2026-11-04)
+
+A workflow's wall-clock age is not hosted-runner queue age. In run 41760074116,
+the cache barrier finished after the observer's lifetime, and GitHub only then
+created the watched job. Start the observer alongside its watched jobs by
+matching their needs and condition; test that contract for every caller. Keep
+visible queued-job starvation and missing-identity failures loud.
+
+
+## Rustc `-o` is an output-family rule (2026-11-04)
+
+Count distinct implicit emits, excluding kind-specific destinations, before
+adapting `-o`. A single metadata emit writes exactly that filename; guessing
+`lib<crate>.rmeta` creates a nonexistent required output or captures stale data.
+Keep primary naming, required outputs and fallback capture on one rule.
+
+Repeated `--emit` flags merge distinct kinds, but the last option for each kind
+wins. A later implicit kind clears its old explicit destination. Normalize
+that policy while parsing; retaining historical paths makes stale files look
+like required compiler products.

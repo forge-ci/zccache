@@ -290,7 +290,7 @@ pub fn session_end_idempotent(
             crate::ipc::IpcError::Endpoint(format!("failed to create tokio runtime: {e}"))
         })?;
 
-    runtime.block_on(async move {
+    crate::core::wait::block_on_for(&runtime, async move {
         let request = crate::protocol::Request::SessionEnd {
             session_id: session_id.clone(),
         };
@@ -322,7 +322,7 @@ pub fn session_end_idempotent(
                 "unexpected response from daemon: {other:?}"
             ))),
         }
-    })
+    }, crate::core::wait::WHOLE_COMMAND).map_err(|error| crate::ipc::IpcError::Endpoint(error.to_string()))?
 }
 
 pub fn client_session_stats(

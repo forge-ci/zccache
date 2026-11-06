@@ -21,8 +21,6 @@
 //! internals where the symptom is much harder to diagnose. The mode is
 //! OFF by default so existing builds don't fail without warning.
 
-use std::fmt;
-
 /// Validation policy for compiler path flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrictPathsMode {
@@ -72,22 +70,11 @@ impl StrictPathsMode {
 }
 
 /// Invalid strict-path mode value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid strict paths mode '{value}'; expected off, consistent, or absolute")]
 pub struct StrictPathsParseError {
     value: String,
 }
-
-impl fmt::Display for StrictPathsParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "invalid strict paths mode '{}'; expected off, consistent, or absolute",
-            self.value
-        )
-    }
-}
-
-impl std::error::Error for StrictPathsParseError {}
 
 /// A strict-path validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]

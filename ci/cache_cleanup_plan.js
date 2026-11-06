@@ -584,7 +584,7 @@ function planLockKeyedReseeds(rows, currentHashes) {
   return { stale, retireFirst, chargeBytes };
 }
 
-function planLockTransitionPrePrune(
+function planLockTransitionPrePruneOnce(
   caches,
   currentRootLockHashes,
   usageBytes,
@@ -772,6 +772,92 @@ function planLockTransitionPrePrune(
     selectedBuildCacheIds,
     retireFirstIds,
     estimatedNewBytes: newBytes,
+  };
+}
+
+// #1996 / CACHE-026: a guard must never freeze caches forever. The forecast
+// keeps every old-lock build cache it does not select in `currentBytes` AND
+// charges its re-seed, and on overflow it used to delete nothing; the run then
+// disabled cache writes, so the next push saw the identical inventory and
+// failed the same way (2026-10-22 onward: 10.24 GB > 9.2 GB on every push).
+// Over target, retire superseded entries before giving up: setup-soldr build
+// caches and cook bases keyed to a Cargo.lock hash that is not current, oldest
+// first, each one re-forecast on the inventory without it, stopping at the
+// first fit. Every candidate carries a non-current lock, so the newest entry
+// of a family that matches the current key inputs is never a candidate. The
+// chosen ids join `retireFirstIds`, which the workflow deletes before it
+// re-forecasts. Only when retiring every candidate still does not fit does the
+// plan fail, and its reason says so (the workflow fails loudly; see
+// cache-pre-prune.yml) instead of withholding writes with no way out.
+function staleLockCandidates(caches, currentRootLockHashes, excludeIds) {
+  const currentHashes = currentLockHashesByOs(currentRootLockHashes);
+  if (!currentHashes) return [];
+  return caches
+    .filter((cache) => cache.ref === "refs/heads/main" && typeof cache.key === "string" &&
+      !excludeIds.has(cache.id))
+    .filter((cache) => {
+      const parts = setupSoldrBuildCacheKeyParts(cache.key) || parseCookBaseKey(cache.key);
+      return parts && currentHashes.has(parts.os) && !currentHashes.get(parts.os).has(parts.lockHash);
+    })
+    .sort((a, b) => newestGenerationFirst(b, a));
+}
+
+function planLockTransitionPrePrune(
+  caches,
+  currentRootLockHashes,
+  usageBytes,
+  listedBytes,
+  targetBytes = LOCK_TRANSITION_TARGET_BYTES,
+) {
+  const plan = planLockTransitionPrePruneOnce(
+    caches, currentRootLockHashes, usageBytes, listedBytes, targetBytes,
+  );
+  if (plan.ok || !Number.isFinite(plan.projectedPeakBytes)) return plan;
+  // Simulate the workflow: it deletes retireFirstIds, then re-forecasts.
+  const retired = new Set(plan.retireFirstIds);
+  const bytesOf = (ids) => caches
+    .filter((cache) => ids.has(cache.id))
+    .reduce((sum, cache) => sum + (Number(cache.size_in_bytes) || 0), 0);
+  const replan = (ids) => {
+    const freed = bytesOf(ids);
+    return planLockTransitionPrePruneOnce(
+      caches.filter((cache) => !ids.has(cache.id)),
+      currentRootLockHashes,
+      usageBytes - freed,
+      listedBytes - freed,
+      targetBytes,
+    );
+  };
+  const candidates = staleLockCandidates(caches, currentRootLockHashes, retired);
+  const overTargetRetireIds = [];
+  let after = null;
+  for (const cache of candidates) {
+    retired.add(cache.id);
+    overTargetRetireIds.push(cache.id);
+    after = replan(retired);
+    if (after.ok) break;
+  }
+  if (after && after.ok) {
+    return {
+      ...plan,
+      reason: `${plan.reason}; retiring ${overTargetRetireIds.length} superseded old-lock ` +
+        `caches first re-forecasts ${after.projectedPeakBytes}`,
+      retireFirstIds: [...retired].sort((a, b) => a - b),
+      overTargetRetireIds: overTargetRetireIds.slice().sort((a, b) => a - b),
+      projectedPeakAfterRetireBytes: after.projectedPeakBytes,
+    };
+  }
+  // Even with every superseded entry gone the peak does not fit. Fail
+  // visibly; deleting more would only cost the next run its warm restores.
+  const finalPeak = after ? after.projectedPeakBytes : plan.projectedPeakBytes;
+  return {
+    ...plan,
+    reason: `${plan.reason}; still ${finalPeak} after retiring all ` +
+      `${overTargetRetireIds.length} superseded old-lock caches -- cache writes stay ` +
+      "disabled until the budget or the transition target changes (CACHE-026)",
+    overTargetRetireIds: [],
+    overTargetCandidateIds: overTargetRetireIds.slice().sort((a, b) => a - b),
+    projectedPeakAfterRetireBytes: finalPeak,
   };
 }
 

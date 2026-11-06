@@ -93,6 +93,7 @@ impl Hit {
             rustc_metadata_compat_outputs: None,
             rustc_archive_hardlink_eligible: None,
             materialization_mode: mode,
+            pch_mtime_replay: true,
             phases: CachedHitPhases::request_cache(0, 0),
         })
         .unwrap();

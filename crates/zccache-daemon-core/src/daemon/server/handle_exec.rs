@@ -28,7 +28,6 @@ use super::*;
 use crate::depgraph::scanner::scan_recursive_cached;
 use crate::depgraph::search_paths::IncludeSearchPaths;
 use crate::protocol::{ExecCachePolicy, ExecOutputStreams};
-use dashmap::mapref::entry::Entry;
 use kernal_api::async_engine::Notify;
 
 static EXEC_STAGE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -337,10 +336,9 @@ pub(super) async fn handle_generic_tool_exec(
     } else {
         None
     };
-    if let Some(InFlight::WokenByPeer) = coalesce_guard.as_ref().map(|g| g.outcome()) {
-        if let Some(resp) = try_exec_cache_hit(
-            state,
-            &full_hex,
+    if let Some(guard) = coalesce_guard.as_ref() {
+        if let Some(resp) = try_coalesced_exec_hit(
+            guard,
             cwd,
             output_files,
             output_streams,
@@ -350,9 +348,8 @@ pub(super) async fn handle_generic_tool_exec(
         {
             return resp;
         }
-        // Fell through: peer ran but didn't store, or store failed. Run it
-        // ourselves below; we still hold the guard so further peers wait
-        // for us, not the original runner.
+        // No reusable peer result was published. Retain the acquired guard
+        // through execution and publication below.
     }
 
     // 9. Cache miss — stage declared outputs only when the tool's argv gives
@@ -564,161 +561,42 @@ pub(super) async fn handle_generic_tool_exec(
     }
 }
 
+/// Recheck a miss while the acquired per-key guard remains held. Even a new
+/// owner may have missed before a peer published and removed its old slot.
+async fn try_coalesced_exec_hit(
+    guard: &InFlightGuardExec,
+    cwd: &Path,
+    output_files: &[NormalizedPath],
+    output_streams: ExecOutputStreams,
+    mode: MaterializationMode,
+) -> Option<Response> {
+    try_exec_cache_hit(
+        &guard.state,
+        &guard.key,
+        cwd,
+        output_files,
+        output_streams,
+        mode,
+    )
+    .await
+}
+
 // ─── Key composition ─────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 #[path = "handle_exec_key.rs"]
 mod key;
 use key::*;
-enum InFlight {
-    /// We acquired the slot ourselves (no peer was running).
-    Owner,
-    /// We waited on a peer's `Notify`; caller should re-attempt the cache
-    /// lookup before spawning the tool.
-    WokenByPeer,
-}
-
-struct InFlightGuardExec {
-    state: Arc<SharedState>,
-    key: String,
-    outcome: InFlight,
-}
-
-impl InFlightGuardExec {
-    fn outcome(&self) -> InFlight {
-        match self.outcome {
-            InFlight::Owner => InFlight::Owner,
-            InFlight::WokenByPeer => InFlight::WokenByPeer,
-        }
-    }
-}
-
-impl Drop for InFlightGuardExec {
-    fn drop(&mut self) {
-        if matches!(self.outcome, InFlight::Owner) {
-            // Remove the slot, then wake any waiters.
-            if let Some((_, notify)) = self.state.in_flight_exec.remove(&self.key) {
-                notify.notify_waiters();
-            }
-        }
-    }
-}
-
-async fn acquire_in_flight(state: &Arc<SharedState>, key_hex: &str) -> InFlightGuardExec {
-    let key = key_hex.to_string();
-    let notify_arc = {
-        match state.in_flight_exec.entry(key.clone()) {
-            Entry::Occupied(o) => Arc::clone(o.get()),
-            Entry::Vacant(v) => {
-                v.insert(Arc::new(Notify::new()));
-                return InFlightGuardExec {
-                    state: Arc::clone(state),
-                    key,
-                    outcome: InFlight::Owner,
-                };
-            }
-        }
-    };
-
-    let budget = in_flight_wait_budget();
-    if let CoalesceOutcome::TimedOut =
-        coalesce_wait(&state.in_flight_exec, &key, notify_arc, budget).await
-    {
-        // Loud + durable: a wedged owner made the herd fall back to running
-        // their own copies. Logged here (not in `coalesce_wait`) so the pure
-        // wait helper stays unit-testable without touching the lifecycle log.
-        tracing::warn!(
-            event = "in_flight_exec_wait_timeout",
-            key = %key,
-            budget_ms = budget.as_millis() as u64,
-            "waited past the coalesce budget for the in-flight exec owner of this key; \
-             the owner may be wedged — running our own copy instead of hanging (issue #971)"
-        );
-        crate::core::lifecycle::write_event(
-            crate::core::lifecycle::EVENT_IN_FLIGHT_EXEC_WAIT_TIMEOUT,
-            serde_json::json!({
-                "key": key,
-                "budget_ms": budget.as_millis() as u64,
-                "reason": "in-flight exec owner did not finish within the coalesce budget; running own copy",
-            }),
-        );
-    }
-    InFlightGuardExec {
-        state: Arc::clone(state),
-        key,
-        outcome: InFlight::WokenByPeer,
-    }
-}
-
-/// Outcome of [`coalesce_wait`].
-#[derive(Debug, PartialEq, Eq)]
-enum CoalesceOutcome {
-    /// The owner's `Notify` fired while we were parked.
-    Woken,
-    /// The slot was already gone or replaced by a new owner when we re-checked
-    /// after registering — no wait was needed.
-    SlotResolved,
-    /// We waited the full budget without a wakeup (owner likely wedged).
-    TimedOut,
-}
-
-/// Wait for the in-flight owner of `key` to finish, bounded by `budget`.
-///
-/// Closes the two canonical `Notify` single-flight hazards behind #971:
-/// - **Lost wakeup (mode 1):** `Notified` only arms a waiter once polled, so we
-///   `enable()` the future BEFORE re-checking the map. An owner that runs
-///   `remove()` + `notify_waiters()` between the caller cloning the `Arc` and
-///   this point would otherwise have its wakeup dropped (`notify_waiters`
-///   stores no permit), stranding the waiter forever.
-/// - **Slot replaced (mode 2):** after `enable()` we re-check by identity
-///   (`Arc::ptr_eq`); if the slot is gone or a *new* owner installed a fresh
-///   `Notify`, the `notify_arc` we hold will never fire again, so we return
-///   `SlotResolved` instead of parking on a dead notify.
-///
-/// Kept free of `SharedState` and logging so it is deterministically testable
-/// against a bare `DashMap`.
-async fn coalesce_wait(
-    in_flight: &dashmap::DashMap<String, Arc<Notify>>,
-    key: &str,
-    notify_arc: Arc<Notify>,
-    budget: std::time::Duration,
-) -> CoalesceOutcome {
-    let notified = notify_arc.notified();
-    let mut notified = std::pin::pin!(notified);
-    notified.as_mut().enable();
-
-    let still_ours = in_flight
-        .get(key)
-        .is_some_and(|cur| Arc::ptr_eq(cur.value(), &notify_arc));
-    if !still_ours {
-        return CoalesceOutcome::SlotResolved;
-    }
-
-    let deadline = kernal_api::async_engine::sleep(budget);
-    let mut deadline = std::pin::pin!(deadline);
-    match kernal_api::fair_race!((notified.as_mut()), (deadline.as_mut())).await {
-        kernal_api::async_engine::FairRace2::First(()) => CoalesceOutcome::Woken,
-        kernal_api::async_engine::FairRace2::Second(()) => CoalesceOutcome::TimedOut,
-    }
-}
-
-/// Coalesce wait budget for [`acquire_in_flight`]. A peer already running the
-/// same keyed tool is usually the fast path, but a wedged owner must not hang
-/// its waiters forever — on expiry the waiter runs its own copy. Generous by
-/// default (exec tools can legitimately run a while); override with
-/// `ZCCACHE_EXEC_COALESCE_WAIT_MS`.
-fn in_flight_wait_budget() -> std::time::Duration {
-    std::env::var(EXEC_COALESCE_WAIT_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(std::time::Duration::from_millis)
-        .unwrap_or(std::time::Duration::from_millis(
-            EXEC_COALESCE_WAIT_DEFAULT_MS,
-        ))
-}
+#[path = "handle_exec_coalescing.rs"]
+mod coalescing;
+use coalescing::*;
 
 // ─── Spawn + capture ────────────────────────────────────────────────────
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: generic cached exec tools are not compilers"
+)]
 async fn spawn_tool(
     tool: &Path,
     args: &[String],
@@ -741,8 +619,12 @@ async fn spawn_tool(
     // grandchild can no longer wedge the exec owner forever — which in turn
     // stops that wedge from stranding every coalesced waiter on this key
     // (issue #971 mode 3, the wedged-owner path).
-    crate::daemon::process::async_builder_output_with_priority(builder, CompilePriority::Normal)
-        .await
+    crate::daemon::process::async_builder_output_with_priority(
+        builder,
+        CompilePriority::Normal,
+        crate::daemon::process::ProcessLiveness::configured(),
+    )
+    .await
 }
 
 fn snapshot_output_files(

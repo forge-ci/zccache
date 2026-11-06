@@ -48,11 +48,12 @@ fn resolve_endpoint(explicit: Option<&str>) -> String {
 }
 
 fn run_async<T>(future: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("failed to create tokio runtime: {e}"))?
-        .block_on(future)
+        .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
+    crate::core::wait::block_on_for(&runtime, future, crate::core::wait::WHOLE_COMMAND)
+        .map_err(|error| format!("command exceeded its runtime budget: {error}"))?
 }
 
 fn find_daemon_binary() -> Result<Option<NormalizedPath>, String> {
@@ -313,7 +314,12 @@ impl DownloadClient {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to create runtime: {e}"))?;
-        let async_handle = runtime.block_on(self.download_async(url, destination, options))?;
+        let async_handle = crate::core::wait::block_on_for(
+            &runtime,
+            self.download_async(url, destination, options),
+            crate::core::wait::PROBE,
+        )
+        .map_err(|error| error.to_string())??;
         Ok(DownloadHandle {
             runtime,
             conn: async_handle.conn,
@@ -413,24 +419,30 @@ impl DownloadHandle {
     }
 
     pub fn status(&mut self) -> Result<DownloadStatus, String> {
-        self.runtime.block_on(send_download_command(
-            &mut self.conn,
-            Request::DownloadStatus,
-        ))
+        crate::core::wait::block_on_for(
+            &self.runtime,
+            send_download_command(&mut self.conn, Request::DownloadStatus),
+            crate::core::wait::WHOLE_COMMAND,
+        )
+        .map_err(|error| error.to_string())?
     }
 
     pub fn wait(&mut self, timeout_ms: Option<u64>) -> Result<DownloadStatus, String> {
-        self.runtime.block_on(send_download_command(
-            &mut self.conn,
-            Request::DownloadWait { timeout_ms },
-        ))
+        crate::core::wait::block_on_for(
+            &self.runtime,
+            send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }),
+            crate::core::wait::WHOLE_COMMAND,
+        )
+        .map_err(|error| error.to_string())?
     }
 
     pub fn cancel(&mut self) -> Result<DownloadStatus, String> {
-        self.runtime.block_on(send_download_command(
-            &mut self.conn,
-            Request::DownloadCancel,
-        ))
+        crate::core::wait::block_on_for(
+            &self.runtime,
+            send_download_command(&mut self.conn, Request::DownloadCancel),
+            crate::core::wait::WHOLE_COMMAND,
+        )
+        .map_err(|error| error.to_string())?
     }
 
     pub fn close(self) -> Result<(), String> {

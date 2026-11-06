@@ -1,0 +1,22 @@
+[package]
+name = "ban_unbounded_sync"
+version = "0.1.0"
+description = "Require bounded synchronization and forbid data guards across await"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.2.0"
+
+[dev-dependencies]
+dylint_testing = "=6.2.0"
+serde_json = "1"
+zccache-core = { path = "../../crates/zccache-core" }
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[workspace]

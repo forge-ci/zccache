@@ -7,7 +7,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::fmt;
 
 mod log_audit;
 
@@ -456,29 +455,17 @@ impl AuditRunManifest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AuditValidationError {
+    #[error("audit identifier must not be empty")]
     EmptyId,
+    #[error("audit finding confidence must be between 0.0 and 1.0")]
     InvalidConfidence,
+    #[error("audit finding suggested_action must not be empty")]
     EmptySuggestedAction,
+    #[error("audit finding must reference at least one event or artifact evidence id")]
     MissingEvidence,
 }
-
-impl fmt::Display for AuditValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::EmptyId => "audit identifier must not be empty",
-            Self::InvalidConfidence => "audit finding confidence must be between 0.0 and 1.0",
-            Self::EmptySuggestedAction => "audit finding suggested_action must not be empty",
-            Self::MissingEvidence => {
-                "audit finding must reference at least one event or artifact evidence id"
-            }
-        };
-        f.write_str(message)
-    }
-}
-
-impl std::error::Error for AuditValidationError {}
 
 fn non_empty_newtype(value: impl Into<String>) -> Result<String, AuditValidationError> {
     let value = value.into();

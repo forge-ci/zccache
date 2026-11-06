@@ -3,32 +3,7 @@ name: Linux
 on:
   # Manual full run (includes native arm64); see the `arm` job.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  workflow_call:
 
 permissions:
   actions: read
@@ -37,7 +12,7 @@ permissions:
 concurrency:
   # run_id fallback on non-PR events: GitHub keeps at most ONE pending run
   # per group, so a ref-only group silently cancels queued main-push SHAs.
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  group: ci-linux-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -72,12 +47,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          python3 -m ci_lint reuse-check --workflow ci-linux.yml --mode shadow
+          python3 -m ci_lint reuse-check --workflow ci.yml --mode shadow
           --max-age-hours 24
-          --required-job "x86 / Check"
-          --required-job "x86 / Test"
-          --required-job "x86-musl / Check (linux-x86-musl)"
-          --required-job "arm-musl / Check (linux-arm-musl)"
+          --required-job "Linux / x86 / Check"
+          --required-job "Linux / x86 / Test"
+          --required-job "Linux / x86-musl / Check (linux-x86-musl)"
+          --required-job "Linux / arm-musl / Check (linux-arm-musl)"
 
   cache-pre-prune:
     name: Cache pre-prune barrier
@@ -89,6 +64,7 @@ jobs:
   x86:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: ubuntu-latest
 
@@ -101,12 +77,15 @@ jobs:
     # PR and push (cheap, compiles the aarch64 target from the x64 runner).
     if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: ubuntu-24.04-arm
 
   x86-musl:
     needs: cache-pre-prune
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     uses: ./.github/workflows/ci-check-cross.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: ubuntu-latest
       target: x86_64-unknown-linux-musl
@@ -114,7 +93,9 @@ jobs:
 
   arm-musl:
     needs: cache-pre-prune
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     uses: ./.github/workflows/ci-check-cross.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       # setup-soldr's aarch64-musl cross compiler is an x86_64 host tool.
       # Native ARM coverage remains in the separate arm job above.

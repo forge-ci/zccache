@@ -207,7 +207,7 @@ pub(in crate::daemon::server) fn rehydrate_logical_depfile(
 pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
     path: &Path,
     current_out_dir: &Path,
-    generated_name: &str,
+    generated_name: Option<&str>,
 ) -> io::Result<()> {
     const PREFIX: &[u8] = b"# env-dep:OUT_DIR=";
     let bytes = std::fs::read(path)?;
@@ -241,10 +241,25 @@ pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
     if old_out_dir == current {
         return Ok(());
     }
-    let old_generated = Path::new(old_out_dir).join(generated_name);
-    let new_generated = current_out_dir.join(generated_name);
-    let old_generated = old_generated.to_string_lossy();
-    let new_generated = new_generated.to_string_lossy();
+    // A certificate names its one generated input; the root-relative rule
+    // (zccache#1955) rebases every path beneath OUT_DIR, so match the
+    // directory with a trailing separator.
+    let (old_generated, new_generated) = match generated_name {
+        Some(name) => (
+            Path::new(old_out_dir)
+                .join(name)
+                .to_string_lossy()
+                .into_owned(),
+            current_out_dir.join(name).to_string_lossy().into_owned(),
+        ),
+        None => {
+            let separator = std::path::MAIN_SEPARATOR;
+            (
+                format!("{old_out_dir}{separator}"),
+                format!("{current}{separator}"),
+            )
+        }
+    };
     let mut rewritten = Vec::with_capacity(bytes.len() + current.len());
     let mut saw_generated_path = false;
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {
@@ -436,7 +451,7 @@ mod tests {
             a_text
         );
         std::fs::write(&depfile, original).expect("dep-info fixture");
-        rehydrate_rustc_out_dir_depfile(&depfile, &b, "bindgen.rs").expect("rebase dep-info");
+        rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
         let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert!(text.contains(&String::from_utf8_lossy(&new_generated).into_owned()));
         assert!(text.contains(&format!("# env-dep:OUT_DIR={b_text}")));
@@ -466,7 +481,7 @@ mod tests {
             ),
         )
         .expect("dep-info fixture");
-        rehydrate_rustc_out_dir_depfile(&depfile, &b, "bindgen.rs")
+        rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs"))
             .expect("overlapping path should still rebase");
         let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert_eq!(
@@ -489,7 +504,7 @@ mod tests {
             a.display()
         );
         std::fs::write(&depfile, &original).expect("dep-info fixture");
-        assert!(rehydrate_rustc_out_dir_depfile(&depfile, &b, "bindgen.rs").is_err());
+        assert!(rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).is_err());
         assert_eq!(
             std::fs::read(&depfile).expect("original dep-info"),
             original.as_bytes()
@@ -516,7 +531,7 @@ mod tests {
             ),
         )
         .expect("dep-info fixture");
-        rehydrate_rustc_out_dir_depfile(&depfile, &b, "private.rs").expect("rebase dep-info");
+        rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("private.rs")).expect("rebase dep-info");
         let text = std::fs::read_to_string(&depfile).expect("rebased dep-info");
         assert!(text.contains(&String::from_utf8_lossy(&new_generated).into_owned()));
         assert!(text.contains(&format!("# env-dep:OUT_DIR={b_text}")));
@@ -537,7 +552,7 @@ mod tests {
         original.extend_from_slice(a.to_string_lossy().as_bytes());
         original.extend_from_slice(b"\r\n");
         std::fs::write(&depfile, original).expect("dep-info fixture");
-        rehydrate_rustc_out_dir_depfile(&depfile, &b, "bindgen.rs").expect("rebase dep-info");
+        rehydrate_rustc_out_dir_depfile(&depfile, &b, Some("bindgen.rs")).expect("rebase dep-info");
         let bytes = std::fs::read(&depfile).expect("rebased dep-info");
         let new_generated = b.join("bindgen.rs");
         let new_quoted = quote_make_depfile_path(new_generated.to_string_lossy().as_bytes());
@@ -563,7 +578,7 @@ mod tests {
         assert!(rehydrate_rustc_out_dir_depfile(
             &depfile,
             Path::new("/checkout-b/out"),
-            "bindgen.rs"
+            Some("bindgen.rs")
         )
         .is_err());
         assert_eq!(

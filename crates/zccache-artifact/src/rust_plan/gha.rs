@@ -24,12 +24,14 @@ use super::targz::{tar_gz_decode, tar_gz_encode};
 /// Distinguishes a not-configured backend (`GhaError::NotAvailable`) from a
 /// genuine save/restore failure so callers can decide whether to fall back to
 /// the local backend. Intentionally free of any CLI types.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RustPlanGhaError {
     /// The GHA cache backend is not available (not running inside GitHub
     /// Actions, or the cache environment variables are unset).
+    #[error("GHA cache backend unavailable: {0}")]
     Unavailable(String),
     /// The GHA save/restore operation failed.
+    #[error("GHA cache backend failure: {0}")]
     Failure(String),
 }
 
@@ -48,17 +50,6 @@ impl RustPlanGhaError {
         matches!(self, Self::Unavailable(_))
     }
 }
-
-impl std::fmt::Display for RustPlanGhaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unavailable(message) => write!(f, "GHA cache backend unavailable: {message}"),
-            Self::Failure(message) => write!(f, "GHA cache backend failure: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for RustPlanGhaError {}
 
 fn gha_error(err: GhaError) -> RustPlanGhaError {
     let message = err.to_string();

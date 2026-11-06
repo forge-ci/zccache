@@ -75,5 +75,10 @@ pub(in crate::daemon::server) async fn settle_publication(state: &SharedState) {
         .await,
         "deferred cache publication did not drain"
     );
-    drop(state.artifact_publication.write().await);
+    drop(
+        state
+            .artifact_publication
+            .write_for(crate::core::sync::OPERATION_TIMEOUT)
+            .await,
+    );
 }

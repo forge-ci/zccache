@@ -40,7 +40,7 @@ pub(super) struct MissArtifactStoreRequest<'a> {
     pub(super) exit_code: i32,
     pub(super) compile_start: Instant,
     pub(super) synchronous_persist: bool,
-    pub(super) publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    pub(super) publication_guard: crate::core::sync::ReadPermit,
     pub(super) resource_admission:
         crate::daemon::server::compile_resource_gate::CompileResourcePermit,
 }
@@ -327,7 +327,7 @@ fn store_rustc_outputs(
     t_artifact_build: Instant,
     synchronous_persist: bool,
     staged_persist_plan: Option<StagedCompilePlan>,
-    publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    publication_guard: crate::core::sync::ReadPermit,
     resource_admission: crate::daemon::server::compile_resource_gate::CompileResourcePermit,
     materialization_mode: MaterializationMode,
 ) {
@@ -740,11 +740,26 @@ fn store_single_output(
     stats: &mut MissArtifactStoreStats,
     t_artifact_build: Instant,
     synchronous_persist: bool,
-    publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    publication_guard: crate::core::sync::ReadPermit,
     resource_admission: crate::daemon::server::compile_resource_gate::CompileResourcePermit,
     materialization_mode: MaterializationMode,
 ) {
     let state = state_arc.as_ref();
+    let provenance = if super::pch_gate::is_pch_output(output_path) {
+        match super::pch_provenance::cached_import_sidecar(output_path, &output_data) {
+            Ok(sidecar) => sidecar,
+            Err(error) => {
+                write_session_log(
+                    &state.sessions,
+                    sid,
+                    &format!("[PCH_REFUSED] cannot cache import provenance: {error}"),
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
     // Issue #643: stash the user's depfile as a second output so cache
     // hits can restore it alongside the object. Only `UserSpecified` /
     // `UserDefault` strategies reach this site with `Some(_)` — the
@@ -774,6 +789,36 @@ fn store_single_output(
             payload: ArtifactPayload::Bytes(Arc::new(dep_bytes)),
         });
     }
+    let mut user_depfile_persist_temp = user_depfile_persist_temp;
+    let provenance_source_path = if let Some((path, bytes)) = provenance {
+        let private_path = match super::pch_provenance::preserve_import_sidecar(
+            &path,
+            &bytes,
+            &mut user_depfile_persist_temp,
+            &state.depfile_tmpdir,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                write_session_log(
+                    &state.sessions,
+                    sid,
+                    &format!("[PCH_REFUSED] cannot retain import provenance: {error}"),
+                );
+                return;
+            }
+        };
+        outputs.push(ArtifactOutput {
+            name: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            payload: ArtifactPayload::Bytes(Arc::new(bytes)),
+        });
+        Some(private_path)
+    } else {
+        None
+    };
     let artifact = ArtifactData {
         outputs,
         stdout: Arc::clone(stdout),
@@ -802,6 +847,7 @@ fn store_single_output(
     if let Some(dep_path) = depfile_source_path {
         source_paths.push(dep_path);
     }
+    source_paths.extend(provenance_source_path);
     let payload_size: usize = artifact
         .outputs
         .iter()

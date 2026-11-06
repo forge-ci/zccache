@@ -1,6 +1,9 @@
 name: Windows
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: "18 7 * * *"
   push:
     branches: [main]
     paths-ignore:
@@ -14,19 +17,8 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
+  # pull_request deliberately absent: expensive lane deferred to main push,
+  # nightly schedule and workflow_dispatch (PR queue is Linux-only; CI summary gate).
 
 permissions:
   actions: read
@@ -49,6 +41,7 @@ jobs:
   x86:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: windows-latest
       run_check: false
@@ -56,6 +49,7 @@ jobs:
   arm:
     needs: cache-pre-prune
     uses: ./.github/workflows/ci-check.yml
+    secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: windows-11-arm
       run_check: false

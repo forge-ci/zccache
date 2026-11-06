@@ -178,17 +178,7 @@ impl DepGraph {
             };
         }
 
-        let candidate = self
-            .indexes
-            .equivalent_contexts
-            .get(&key)
-            .and_then(|instances| {
-                instances.iter().find_map(|candidate_key| {
-                    self.contexts
-                        .get(candidate_key)
-                        .map(|entry| (*candidate_key, entry.clone()))
-                })
-            });
+        let candidate = self.best_equivalent_candidate(&key);
         let rebased_from_equivalent_root = candidate.as_ref().is_some_and(|(_, entry)| {
             entry.key_root.is_some() && key_root.is_some() && entry.key_root != key_root
         });
@@ -270,6 +260,39 @@ impl DepGraph {
     }
 
     /// Returns `true` if the context has never been updated (no artifact key).
+    /// The equivalent-root instance a new checkout rebases from (soldr#4017).
+    ///
+    /// Prefers a `Warm` instance, then a `Stale` one, then any; ties go to the
+    /// most recently accessed. Taking the oldest instance regardless of state
+    /// let one never-updated `Cold` instance (a request served another way, a
+    /// failed compile) shadow every warm sibling, so each fresh checkout
+    /// inherited `Cold` and missed every shared registry crate. Correctness is
+    /// unchanged: the inherited state is still validated by `check` against
+    /// the new checkout's current file hashes.
+    fn best_equivalent_candidate(&self, key: &ContextKey) -> Option<(ContextKey, ContextEntry)> {
+        let rank = |state: ContextState| match state {
+            ContextState::Warm => 2u8,
+            ContextState::Stale => 1,
+            ContextState::Cold => 0,
+        };
+        let instances = self.indexes.equivalent_contexts.get(key)?;
+        let best_key = instances
+            .iter()
+            .filter_map(|candidate_key| {
+                self.contexts.get(candidate_key).map(|entry| {
+                    (
+                        (rank(entry.state), entry.last_accessed_unix_ms),
+                        *candidate_key,
+                    )
+                })
+            })
+            .max_by_key(|(order, _)| *order)
+            .map(|(_, candidate_key)| candidate_key)?;
+        self.contexts
+            .get(&best_key)
+            .map(|entry| (best_key, entry.clone()))
+    }
+
     /// Used by the server to skip pre-compile hashing on cold contexts where
     /// `check_diagnostic` would return `Cold` without examining any hashes.
     #[must_use]

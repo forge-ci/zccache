@@ -33,6 +33,10 @@ step "build integration test binaries"
 soldr cargo test --workspace --features "$FEATURES" --no-fail-fast --no-run
 soldr cargo build -p zccache --features ci-bin --bin zccache-ci
 
+# The Actions replay installs clang 21 for these focused regressions.
+step "strict PCH regressions"
+soldr cargo nextest run --workspace --features "$FEATURES" --no-fail-fast -E 'test(/daemon_pch_strict_replay_test|pch_inputs::|pch_provenance::/)'
+
 # integration.yml "Test (full workspace)": nextest, then the doctests.
 step "test (full workspace, nextest)"
 soldr cargo nextest run --workspace --features "$FEATURES" --no-fail-fast

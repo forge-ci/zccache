@@ -82,11 +82,15 @@ pub(super) async fn watch_directories(state: &SharedState, dirs: &[NormalizedPat
     // Each directory here is the exact parent of a source/header file from
     // depfile scanning — no need to walk children or parents.
     let new_dirs: Vec<(NormalizedPath, NormalizedPath)> = {
-        let mut watched = state.watched_dirs.lock().await;
-        pairs
-            .into_iter()
-            .filter(|(_, canonical)| watched.insert(canonical.clone()))
-            .collect()
+        state
+            .watched_dirs
+            .with_for(STATE_TIMEOUT, |watched| {
+                pairs
+                    .into_iter()
+                    .filter(|(_, canonical)| watched.insert(canonical.clone()))
+                    .collect()
+            })
+            .await
     };
 
     if new_dirs.is_empty() {
@@ -107,41 +111,49 @@ pub(super) async fn watch_directories(state: &SharedState, dirs: &[NormalizedPat
     // call may retry.
     let mut to_unmark: Vec<(NormalizedPath, NormalizedPath)> = Vec::new();
     {
-        let mut watcher_guard = state.watcher.lock().await;
-        match *watcher_guard {
-            Some(ref mut w) => {
-                for (raw, dir) in &new_dirs {
-                    match w.watch(dir) {
-                        Ok(()) => {
-                            tracing::info!("watching directory: {}", dir.display());
-                        }
-                        Err(e) => {
-                            tracing::warn!("failed to watch {}: {e}", dir.display());
-                            to_unmark.push((raw.clone(), dir.clone()));
+        state
+            .watcher
+            .with_for(STATE_TIMEOUT, |watcher_guard| {
+                match watcher_guard {
+                    Some(ref mut w) => {
+                        for (raw, dir) in &new_dirs {
+                            match w.watch(dir) {
+                                Ok(()) => {
+                                    tracing::info!("watching directory: {}", dir.display());
+                                }
+                                Err(e) => {
+                                    tracing::warn!("failed to watch {}: {e}", dir.display());
+                                    to_unmark.push((raw.clone(), dir.clone()));
+                                }
+                            }
                         }
                     }
+                    None => {
+                        // No watcher available — roll back every reservation.
+                        to_unmark.extend(new_dirs.iter().cloned());
+                    }
                 }
-            }
-            None => {
-                // No watcher available — roll back every reservation.
-                to_unmark.extend(new_dirs.iter().cloned());
-            }
-        }
+            })
+            .await
     }
 
     if !to_unmark.is_empty() {
-        let mut watched = state.watched_dirs.lock().await;
-        // Invariant: a raw path stays marked in `watched_raw_dirs` iff its
-        // watch registration took. Rolling back both halves is what lets the
-        // next `watch_directories` call re-canonicalize and re-register a
-        // directory whose registration failed (#1906) — otherwise the
-        // raw-path pre-filter short-circuits forever and the directory is
-        // silently unwatched, which `try_fast_hit` cannot see coming.
-        // Canonicalize *failures* are deliberately still marked; only
-        // registration failures roll back.
-        for (raw, canonical) in &to_unmark {
-            watched.remove(canonical);
-            state.watched_raw_dirs.remove(raw);
-        }
+        state
+            .watched_dirs
+            .with_for(STATE_TIMEOUT, |watched| {
+                // Invariant: a raw path stays marked in `watched_raw_dirs` iff its
+                // watch registration took. Rolling back both halves is what lets the
+                // next `watch_directories` call re-canonicalize and re-register a
+                // directory whose registration failed (#1906) — otherwise the
+                // raw-path pre-filter short-circuits forever and the directory is
+                // silently unwatched, which `try_fast_hit` cannot see coming.
+                // Canonicalize *failures* are deliberately still marked; only
+                // registration failures roll back.
+                for (raw, canonical) in &to_unmark {
+                    watched.remove(canonical);
+                    state.watched_raw_dirs.remove(raw);
+                }
+            })
+            .await
     }
 }

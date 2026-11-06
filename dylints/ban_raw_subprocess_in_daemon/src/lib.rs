@@ -2,7 +2,10 @@
 
 extern crate rustc_errors;
 extern crate rustc_hir;
+extern crate rustc_middle;
 extern crate rustc_span;
+
+mod session_owner;
 
 use rustc_errors::DiagDecorator;
 use rustc_hir::def::Res;
@@ -11,61 +14,22 @@ use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_span::{symbol::Symbol, FileName, RemapPathScopeComponents};
 
 dylint_linting::declare_late_lint! {
-    /// ### What it does
+    /// Require the bounded daemon process owner for child creation and waits.
     ///
-    /// Bans method calls `Command::spawn`, `Command::output`, and
-    /// `Command::status` on `std::process::Command` and
-    /// `tokio::process::Command` in `zccache-daemon` production code.
+    /// Resolved std/Tokio creation and native platform APIs are forbidden.
+    /// Semantic kernal-api session operations belong in process_session.rs
+    /// functions whose signatures require a direct finite budget. Ordinary
+    /// callers use the process facade with a mandatory ProcessLiveness policy.
+    /// Aliases, UFCS and function items are checked by their resolved DefId.
     ///
-    /// ### Why is this bad?
-    ///
-    /// The daemon is launched detached (no console attached). On Windows
-    /// spawning a console-subsystem child from a console-less parent
-    /// without `CREATE_NO_WINDOW` causes the OS to allocate a fresh
-    /// console window for the child — a visible flash per cache-miss
-    /// compile in the `soldr -> cargo -> rustc -> zccache-cli -> daemon
-    /// -> rustc` chain.
-    ///
-    /// The blessed helpers in `crates/zccache-daemon-core/src/daemon/process.rs`
-    /// (`command_output_with_priority`, `tokio_command_output_with_priority`)
-    /// execute through the kernal-api process facade, then apply zccache's priority and
-    /// daemon Job Object policy. Bypassing them silently regresses one or
-    /// more of those invariants.
-    ///
-    /// Dedicated test-fixture directories are out of production scope. There
-    /// is no production file allowlist; every production module is checked.
-    ///
-    /// ### Example
-    ///
-    /// ```rust,ignore
-    /// let mut cmd = std::process::Command::new("rustc");
-    /// cmd.args(["--version"]);
-    /// let output = cmd.output().unwrap();
-    /// ```
-    ///
-    /// Use instead:
-    ///
-    /// ```rust,ignore
-    /// let mut cmd = std::process::Command::new("rustc");
-    /// cmd.args(["--version"]);
-    /// let output = crate::process::command_output_with_priority(
-    ///     &mut cmd,
-    ///     crate::process::CompilePriority::Normal,
-    /// )
-    /// .unwrap();
-    /// ```
+    /// This establishes capability placement and budget signatures, not a
+    /// proof of termination. Runtime tests cover progress and cleanup.
     pub BAN_RAW_SUBPROCESS_IN_DAEMON,
     Deny,
     "ban raw Command::{spawn, output, status} in zccache-daemon production code"
 }
 
-/// Each entry is a canonical suffix for a banned method. We deliberately list
-/// `std::process::Command::*` and
-/// `tokio::process::Command::*` separately — they are distinct types with
-/// distinct DefIds — and intentionally omit other methods on `Command`
-/// (e.g. `args`, `env`, `current_dir`) and on `Child` (e.g.
-/// `wait_with_output`, `kill`). The bug class is at *spawn time*; once
-/// you have a `Child`, `CREATE_NO_WINDOW` is already decided.
+/// Raw creation APIs remain forbidden even inside the semantic session owner.
 const BANNED_METHOD_PATHS: &[&[&str]] = &[
     &["std", "process", "Command", "spawn"],
     &["std", "process", "Command", "output"],
@@ -108,12 +72,18 @@ impl<'tcx> LateLintPass<'tcx> for BanRawSubprocessInDaemon {
         // UI fixtures live beside this lint rather than beneath the daemon
         // crate. Keeping that narrow exception lets the real UI test exercise
         // both the resolved-method matcher and the production scope guard.
-        let is_ui_fixture = normalized.starts_with("ui/") || normalized.contains("/ui/");
+        let is_ui_fixture = cx.sess().opts.unstable_opts.ui_testing
+            || normalized.starts_with("ui/")
+            || normalized.contains("/ui/");
         if !normalized.contains(DAEMON_SOURCE_PREFIX) && !is_ui_fixture {
             return;
         }
 
-        if normalized.contains("/tests/") {
+        if !is_ui_fixture
+            && (cx.sess().is_test_crate()
+                || normalized.contains("/tests/")
+                || normalized.ends_with("_tests.rs"))
+        {
             return;
         }
 
@@ -139,11 +109,17 @@ impl<'tcx> LateLintPass<'tcx> for BanRawSubprocessInDaemon {
 
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
         let filename = normalize_slashes(&source_filename(cx, item.span));
-        let is_ui_fixture = filename.starts_with("ui/") || filename.contains("/ui/");
+        let is_ui_fixture = cx.sess().opts.unstable_opts.ui_testing
+            || filename.starts_with("ui/")
+            || filename.contains("/ui/");
         if !filename.contains(DAEMON_SOURCE_PREFIX) && !is_ui_fixture {
             return;
         }
-        if filename.contains("/tests/") {
+        if !is_ui_fixture
+            && (cx.sess().is_test_crate()
+                || filename.contains("/tests/")
+                || filename.ends_with("_tests.rs"))
+        {
             return;
         }
         let Ok(snippet) = cx.sess().source_map().span_to_snippet(item.span) else {
@@ -166,6 +142,9 @@ fn check_resolved_path(
     span: rustc_span::Span,
     def_id: rustc_hir::def_id::DefId,
 ) {
+    if session_owner::check(cx, span, def_id) {
+        return;
+    }
     let path = cx.get_def_path(def_id);
     for banned in BANNED_METHOD_PATHS {
         if path_ends_with(&path, banned) {
@@ -260,7 +239,15 @@ mod ui_test_support {
     include!("../../ui_test_support.rs");
 }
 
+#[cfg(test)]
+mod ui_dependencies;
+
 #[test]
 fn ui() {
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
+    let _directory =
+        ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "examples")
+        .rustc_flags(ui_dependencies::dependency_flags())
+        .run();
 }

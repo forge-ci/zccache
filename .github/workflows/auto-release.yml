@@ -73,7 +73,7 @@ jobs:
           }
 
           manual_recovery_warning() {
-            echo "::warning title=Release skipped::This automated rerun is diagnostic-only and was skipped; nothing was published. Recovery is manual: run workflow_dispatch for release-auto.yml with the existing tag and dry-run inputs."
+            echo "::warning title=Release skipped::This automated rerun is diagnostic-only and was skipped; nothing was published. Recovery is manual: run workflow_dispatch for auto-release.yml with the existing tag and dry-run inputs."
           }
 
           # Manual dispatch always proceeds — operator chose to run it.
@@ -111,7 +111,7 @@ jobs:
                 fi
               done
               if [ -z "$RELEASED" ]; then
-                echo "::warning title=Version $NEW_VERSION is bumped but unreleased::No GitHub release exists for $NEW_VERSION. A failed release run does not retry on its own: use workflow_dispatch for release-auto.yml with the existing tag and dry-run inputs. See issue #1472."
+                echo "::warning title=Version $NEW_VERSION is bumped but unreleased::No GitHub release exists for $NEW_VERSION. A failed release run does not retry on its own: use workflow_dispatch for auto-release.yml with the existing tag and dry-run inputs. See issue #1472."
               fi
               echo "should_release=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -153,9 +153,19 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Validate release metadata
         run: |
@@ -170,87 +180,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RAW_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
-        run: |
-          VERSION="$(python - <<'PY'
-          import tomllib
-          from pathlib import Path
-          data = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
-          print(data["workspace"]["package"]["version"])
-          PY
-          )"
-
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${GITHUB_REF_NAME#refs/tags/}"
-            CHECKOUT_REF="$TAG"
-          else
-            TAG="${RAW_TAG#refs/tags/}"
-            if [ -z "$TAG" ]; then
-              if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-                # A manual recovery run must build the selected revision, not
-                # an existing release tag that may predate its workflow fix.
-                TAG="$VERSION"
-                CHECKOUT_REF="$GITHUB_SHA"
-              elif git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-                TAG="$VERSION"
-                CHECKOUT_REF="$VERSION"
-              elif git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-                TAG="v$VERSION"
-                CHECKOUT_REF="$TAG"
-              else
-                TAG="$VERSION"
-                CHECKOUT_REF="$GITHUB_SHA"
-              fi
-            else
-              if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-                CHECKOUT_REF="$TAG"
-              else
-                CHECKOUT_REF="$GITHUB_SHA"
-              fi
-            fi
-          fi
-
-          NORMALIZED_TAG="${TAG#v}"
-
-          if [ "$NORMALIZED_TAG" != "$VERSION" ]; then
-            echo "Tag $TAG does not match workspace version $VERSION" >&2
-            exit 1
-          fi
-
-          SEEN=""
-          GITHUB_RELEASE_EXISTS=false
-          for CANDIDATE in "$TAG" "$NORMALIZED_TAG" "v$NORMALIZED_TAG"; do
-            if [ -z "$CANDIDATE" ]; then
-              continue
-            fi
-            case " $SEEN " in
-              *" $CANDIDATE "*) continue ;;
-            esac
-            SEEN="$SEEN $CANDIDATE"
-
-            RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$CANDIDATE" 2>/dev/null || true)"
-            if [ -z "$RELEASE_JSON" ]; then
-              continue
-            fi
-
-            PUBLISHED_AT="$(RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
-          import json
-          import os
-
-          data = json.loads(os.environ["RELEASE_JSON"])
-          print(data.get("published_at") or "")
-          PY
-            )"
-            if [ -n "$PUBLISHED_AT" ]; then
-              GITHUB_RELEASE_EXISTS=true
-              echo "Release $CANDIDATE is already published at $PUBLISHED_AT; release job will update it"
-              break
-            fi
-          done
-
-          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "github_release_exists=$GITHUB_RELEASE_EXISTS" >> "$GITHUB_OUTPUT"
+        run: python -m ci.release_workflow resolve-release
 
       - name: Check registry publish status
         id: registries
@@ -258,7 +188,7 @@ jobs:
           python -m ci.release_workflow check-registries
 
   bootstrap-zccache:
-    name: Bootstrap zccache (bare Cargo)
+    name: Bootstrap zccache (uncached soldr)
     runs-on: ubuntu-24.04
     needs: preflight
     steps:
@@ -266,21 +196,31 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.checkout_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
-          targets: x86_64-unknown-linux-gnu
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Build bootstrap zccache without a compiler wrapper
         env:
-          CARGO: cargo
+          # soldr owns the toolchain, but must not wrap its own bootstrap.
+          ZCCACHE_DISABLE: "1"
           RUSTC_WRAPPER: ""
           RUSTC_WORKSPACE_WRAPPER: ""
         shell: bash
         run: |
           set -euo pipefail
           unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
-          "$CARGO" build --release --target x86_64-unknown-linux-gnu \
+          soldr cargo build --release --target x86_64-unknown-linux-gnu \
             -p zccache --features zccache-bin --bin zccache
           mkdir -p bootstrap-zccache
           install -m 0755 \
@@ -297,6 +237,16 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ubuntu-24.04
     needs: [preflight, bootstrap-zccache, cache-pre-prune]
+    # Job-level permissions replace the workflow block: keep its read scope
+    # and add id-token for the Windows Authenticode OIDC login. Azure Artifact
+    # Signing trusts this repo's subject for refs/heads/main, tags, and
+    # environments, which covers the bump-on-main and tag-push triggers and a
+    # workflow_dispatch from main; a dispatch from another branch fails to
+    # sign rather than shipping unsigned binaries.
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -402,6 +352,13 @@ jobs:
           require_debug_sidecars: ${{ matrix.require_debug_sidecars || 'true' }}
           include_python: ${{ matrix.include_python }}
           version: ${{ needs.preflight.outputs.version }}
+          authenticode_sign: ${{ contains(matrix.target, 'pc-windows-msvc') }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_signing_endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          azure_signing_account: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          azure_signing_profile: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          azure_sign_publisher: ${{ secrets.AZURE_SIGN_PUBLISHER }}
 
       - uses: actions/upload-artifact@v7
         if: matrix.upload_binaries == 'true'
@@ -564,6 +521,12 @@ jobs:
           python -m pip install --disable-pip-version-check --no-index --find-links dist/wheels "zccache==${{ needs.preflight.outputs.version }}"
           python ci/test_exec_cached_wheel.py
 
+      # The release build signs on Linux, where only a structural check is
+      # possible; this is Windows' own chain/timestamp/hash verdict.
+      - name: Require Valid Authenticode signatures
+        if: runner.os == 'Windows'
+        run: python ci/sign_windows_release.py check-installed
+
   # #1535: wheel families whose runner cannot be relied on to schedule. Split
   # into a separate job rather than flagged inside `test-wheels`, because
   # nothing in the publish chain may `needs:` this one.
@@ -624,7 +587,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, build-wheels]
     if: needs.preflight.outputs.pypi_complete != 'true'
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
@@ -684,7 +647,7 @@ jobs:
       # verify step's `--wheels-dir dist/wheels` lookup succeeds.
       # Without this, the verify step fails with "wheels directory does
       # not exist" even though the actual publish step already ran
-      # successfully — release-auto reports failure on a green release.
+      # successfully — auto-release reports failure on a green release.
       - uses: actions/download-artifact@v8
         with:
           name: pypi-wheels
@@ -718,9 +681,19 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
+
+      - uses: zackees/setup-soldr@v0 # Match the setup-soldr ref on main.
         with:
           toolchain: 1.95.0
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
 
       - name: Publish crates to crates.io
         env:

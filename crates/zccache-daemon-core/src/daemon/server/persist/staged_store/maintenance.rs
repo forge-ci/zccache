@@ -51,7 +51,8 @@ pub(crate) fn scan_staged_disk_artifacts(
         return Ok(Vec::new());
     }
     let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard = kernal_api::platform::fs::lock_shared(&store_lock)?;
+    let _store_lock_guard =
+        crate::core::wait::lock_shared_for(&store_lock, crate::core::wait::PROBE)?;
     scan_staged_disk_artifacts_locked(artifact_dir, root.as_path())
 }
 
@@ -123,7 +124,8 @@ pub(crate) fn evict_staged_artifact_keys(
         return Ok(0);
     }
     let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard = kernal_api::platform::fs::lock_exclusive(&store_lock)?;
+    let _store_lock_guard =
+        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
     evict_staged_artifact_keys_locked(artifact_dir, root.as_path(), keys)
 }
 
@@ -147,7 +149,19 @@ pub(crate) fn evict_staged_artifact_keys_if_unchanged(
         artifact_dir,
         super::StagedHookPoint::MaintenanceStoreLockPending,
     );
-    let _store_lock_guard = kernal_api::platform::fs::lock_exclusive(&store_lock)?;
+    // Maintenance holds publication exclusion here. A foreign warm/reader
+    // may retain the store lock indefinitely; defer rather than queue all
+    // compiles behind it (soldr#3843 / #3845).
+    let _store_lock_guard =
+        match crate::core::wait::lock_exclusive_for(&store_lock, std::time::Duration::from_secs(2))
+        {
+            Ok(guard) => guard,
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                tracing::warn!(root = %root.display(), "staged store busy; deferring eviction");
+                return Ok(HashSet::new());
+            }
+            Err(error) => return Err(error),
+        };
     let mut removed = HashSet::new();
     for (key, expected_generation) in expected.iter().filter(|(key, _)| staged_key_supported(key)) {
         let pointer = pointer_path(artifact_dir, key);
@@ -226,7 +240,8 @@ pub(in crate::daemon::server) fn clear_staged_artifacts(artifact_dir: &Path) -> 
         artifact_dir,
         super::StagedHookPoint::MaintenanceStoreLockPending,
     );
-    let _store_lock_guard = kernal_api::platform::fs::lock_exclusive(&store_lock)?;
+    let _store_lock_guard =
+        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
     let mut bytes_removed = 0;
     for entry in fs::read_dir(&root)?.flatten() {
         if entry.file_name() == STORE_LOCK {
@@ -235,4 +250,38 @@ pub(in crate::daemon::server) fn clear_staged_artifacts(artifact_dir: &Path) -> 
         bytes_removed += remove_staged_tree(&entry.path())?;
     }
     Ok(bytes_removed)
+}
+
+#[cfg(test)]
+mod bounded_lock_tests {
+    use super::*;
+
+    #[test]
+    fn maintenance_contention_defers_eviction_without_waiting_for_the_reader() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = staged_root(directory.path());
+        fs::create_dir_all(root.join("aa")).unwrap();
+        fs::write(root.join("aa/payload"), b"preserve while in use").unwrap();
+        let file = open_store_lock(&root).unwrap();
+        let reader = kernal_api::platform::fs::try_lock_shared(&file).unwrap();
+        let expected = HashMap::from([("aa".to_string(), None)]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let artifact_dir = directory.path().to_owned();
+        let worker_expected = expected.clone();
+        let worker = std::thread::spawn(move || {
+            let result = evict_staged_artifact_keys_if_unchanged(&artifact_dir, &worker_expected);
+            let _ = tx.send(result);
+        });
+        let deferred = rx.recv_timeout(std::time::Duration::from_secs(10));
+        // Always release before joining, including the regression/failure path.
+        drop(reader);
+        worker.join().unwrap();
+        assert!(deferred.unwrap().unwrap().is_empty());
+        assert!(root.join("aa/payload").exists());
+        assert_eq!(
+            evict_staged_artifact_keys_if_unchanged(directory.path(), &expected).unwrap(),
+            HashSet::from(["aa".to_string()])
+        );
+        assert!(!root.join("aa").exists());
+    }
 }

@@ -142,8 +142,11 @@ pub(super) async fn load_persisted_caches(
                     system_includes_cache_path.as_path(),
                 ) {
                     Ok(loaded) => {
-                        let mut live = includes_state.system_includes.blocking_lock();
-                        live.merge_from(loaded);
+                        includes_state
+                            .system_includes
+                            .with_blocking_for(STATE_TIMEOUT, |live| {
+                                live.merge_from(loaded);
+                            })
                     }
                     Err(e) => tracing::warn!(
                         path = %system_includes_cache_path.display(),
@@ -213,11 +216,9 @@ pub(super) fn spawn_depgraph_load(
                 0
             };
             if let Some(warning) = warning {
-                let mut guard = state
+                state
                     .depgraph_load_warning
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                *guard = Some(warning);
+                    .with_blocking_for(STATE_TIMEOUT, |slot| *slot = Some(warning));
             }
             contexts
         });

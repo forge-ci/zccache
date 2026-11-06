@@ -136,22 +136,11 @@ impl StagedPublishFailure {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
 struct StagedPublishError {
     reason: StagedPublishFailure,
     source: io::Error,
-}
-
-impl std::fmt::Display for StagedPublishError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.source.fmt(formatter)
-    }
-}
-
-impl std::error::Error for StagedPublishError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 fn publish_error(reason: StagedPublishFailure, source: io::Error) -> io::Error {
@@ -518,8 +507,9 @@ fn persist_staged_generation(
     let root = staged_root(artifact_dir);
     let store_lock = open_store_lock(&root)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    let _store_lock_guard = kernal_api::platform::fs::lock_shared(&store_lock)
-        .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
+    let _store_lock_guard =
+        crate::core::wait::lock_shared_for(&store_lock, crate::core::wait::PROBE)
+            .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
     #[cfg(test)]
     hook::pause(artifact_dir, StagedHookPoint::PublicationStoreLocked);
     let key_root = root.join(key_hex);
@@ -532,8 +522,9 @@ fn persist_staged_generation(
         .truncate(false)
         .open(key_root.join(PUBLISH_LOCK))
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    let _publish_lock_guard = kernal_api::platform::fs::lock_exclusive(&publish_lock)
-        .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
+    let _publish_lock_guard =
+        crate::core::wait::lock_exclusive_for(&publish_lock, crate::core::wait::PROBE)
+            .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
     let temporary_generation = key_root.join(format!(
         ".tmp-{}-{}",
         std::process::id(),
@@ -923,7 +914,8 @@ pub(in crate::daemon::server) fn cleanup_staged_artifact_temps(
         return Ok(0);
     }
     let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard = kernal_api::platform::fs::lock_exclusive(&store_lock)?;
+    let _store_lock_guard =
+        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
     let entries = fs::read_dir(&root)?;
     let mut removed = 0;
     for entry in entries.flatten() {

@@ -8,7 +8,8 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use zccache_core::blocking_sync::Mutex;
 
 use zccache_core::NormalizedPath;
 
@@ -79,7 +80,7 @@ pub(super) fn find_time_macro_use(
 /// Emit the once-per-translation-unit diagnostic for a cache bypass.
 pub(super) fn warn_time_macro_uncacheable(found: &TimeMacroUse) {
     let warned = WARNED_TRANSLATION_UNITS.get_or_init(|| Mutex::new(HashSet::new()));
-    let Ok(mut warned) = warned.lock() else {
+    let Ok(mut warned) = warned.lock_for(zccache_core::sync::STATE_TIMEOUT) else {
         // Poisoning a diagnostic-only mutex must not change compilation
         // correctness.  The cache bypass already happened.
         return;

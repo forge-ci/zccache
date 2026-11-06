@@ -455,7 +455,7 @@ fn every_mode_waits_for_child_spawn_before_writing() {
         let fixture = Fixture::legacy();
         let out = fixture.out("build-script-build");
         let cache = fixture.cache.clone();
-        let spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
+        let spawn_guard = crate::daemon::spawn_exclusion::test_spawn_shared();
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         let writer_out = out.clone();
         let writer = std::thread::spawn(move || {

@@ -5,7 +5,7 @@ use super::*;
 
 /// Handle a Clear request: wipe all caches and reset stats.
 pub(super) async fn handle_clear(state: &SharedState) -> Response {
-    let _maintenance_guard = state.disk_maintenance.lock().await;
+    let _maintenance_guard = state.disk_maintenance.acquire_for(OPERATION_TIMEOUT).await;
     let pending_drained = pending_writes::await_all(
         &state.pending_cache_writes,
         std::time::Duration::from_secs(30),
@@ -17,7 +17,10 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
             "timed out waiting for pending artifact writes before Clear"
         );
     }
-    let _publication_guard = state.artifact_publication.write().await;
+    let _publication_guard = state
+        .artifact_publication
+        .write_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     // Snapshot counts before clearing.
     let artifacts_removed = {
         let count = state.artifacts.len() as u64;
@@ -62,7 +65,10 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     state.request_validation_cache.clear();
     state.rsp_cache.clear();
     state.watched_raw_dirs.clear();
-    state.watched_dirs.lock().await.clear();
+    state
+        .watched_dirs
+        .with_for(STATE_TIMEOUT, |dirs| dirs.clear())
+        .await;
     if let Err(error) = state
         .exec_store
         .clear_namespace_async(handle_exec_probe::EXEC_PROBE_NAMESPACE)

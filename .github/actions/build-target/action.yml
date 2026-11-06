@@ -57,6 +57,35 @@ inputs:
     required: false
     default: ""
 
+  authenticode_sign:
+    description: Authenticode-sign staged Windows PE files via Azure Artifact Signing before packaging (release only; the job needs id-token write).
+    required: false
+    default: "false"
+  azure_client_id:
+    description: Entra app client ID for the OIDC azure/login used by authenticode_sign.
+    required: false
+    default: ""
+  azure_tenant_id:
+    description: Entra tenant ID for the OIDC azure/login used by authenticode_sign.
+    required: false
+    default: ""
+  azure_signing_endpoint:
+    description: Azure Artifact Signing endpoint URL.
+    required: false
+    default: ""
+  azure_signing_account:
+    description: Azure Artifact Signing account name.
+    required: false
+    default: ""
+  azure_signing_profile:
+    description: Azure Artifact Signing certificate profile name.
+    required: false
+    default: ""
+  azure_sign_publisher:
+    description: Expected certificate subject (CN) checked after signing.
+    required: false
+    default: ""
+
 outputs:
   staging_dir:
     description: Directory containing staged binaries and optional Python artifacts.
@@ -200,7 +229,7 @@ runs:
     - name: Verify Rust host toolchain
       shell: bash
       run: |
-        info="$(rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV)"
+        info="$(soldr rustc -vV)"
         printf '%s\n' "$info"
         host="$(printf '%s\n' "$info" | awk '/^host: / { print $2 }')"
         if [ "${{ inputs.cross_compile }}" = "true" ] && [ "$host" != "x86_64-unknown-linux-gnu" ]; then
@@ -382,7 +411,7 @@ runs:
       env:
         PYO3_PYTHON: python
       run: |
-        HOST_TARGET=$(rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV | awk '/^host: / { print $2 }')
+        HOST_TARGET=$(soldr rustc -vV | awk '/^host: / { print $2 }')
         if [ "$HOST_TARGET" != "${{ inputs.target }}" ]; then
           export PYO3_CROSS=1
           export PYO3_CROSS_PYTHON_VERSION="${{ inputs.python_version }}"
@@ -722,7 +751,14 @@ runs:
         }
         trap cleanup EXIT
 
-        rustc_bin="$(rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc)"
+        # Keep the staged wrapper under test while soldr owns compiler dispatch.
+        # Pass an absolute shim path; putting it on PATH would recurse in soldr.
+        rustc_bin="$smoke_root/rustc"
+        cat > "$rustc_bin" <<'SH'
+        #!/usr/bin/env sh
+        exec env ZCCACHE_DISABLE=1 soldr rustc "$@"
+        SH
+        chmod +x "$rustc_bin"
         probe="$(staging/zccache${{ inputs.binary_ext }} "$rustc_bin" -vV)"
         printf '%s\n' "$probe"
         if ! printf '%s\n' "$probe" | grep -q '^host: '; then
@@ -732,6 +768,32 @@ runs:
 
         staging/zccache${{ inputs.binary_ext }} start
         staging/zccache${{ inputs.binary_ext }} status
+
+    # Azure Artifact Signing (Authenticode). Windows lanes cross-build on
+    # Linux, so the signer is a SHA-256-pinned jsign jar driven by the OIDC
+    # azure/login session (no client secret). This runs after the release
+    # stamp (which rewrites the bytes) and BEFORE the archive is packaged;
+    # the PyPI wheels are assembled from these same staged bytes, so the
+    # archive, SHA256SUMS, manifest.json and wheel RECORDs all describe the
+    # signed files. The script fails the step if any staged PE is unsigned.
+    # Logging in immediately before signing keeps the OIDC assertion fresh.
+    - name: Azure login for Authenticode signing
+      if: inputs.authenticode_sign == 'true'
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        allow-no-subscriptions: true
+
+    - name: Authenticode-sign staged Windows binaries
+      if: inputs.authenticode_sign == 'true'
+      shell: bash
+      env:
+        AZURE_SIGNING_ENDPOINT: ${{ inputs.azure_signing_endpoint }}
+        AZURE_SIGNING_ACCOUNT: ${{ inputs.azure_signing_account }}
+        AZURE_SIGNING_PROFILE: ${{ inputs.azure_signing_profile }}
+        AZURE_SIGN_PUBLISHER: ${{ inputs.azure_sign_publisher }}
+      run: python ci/sign_windows_release.py sign --staging-dir staging
 
     - name: Package standalone archive
       shell: bash

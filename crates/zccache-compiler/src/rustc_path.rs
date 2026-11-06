@@ -26,6 +26,13 @@ impl RustcPathSyntax {
         }
     }
 
+    pub(crate) fn parent(self, path: &str) -> Option<&str> {
+        match self {
+            Self::Unix => Utf8UnixPath::new(path).parent().map(|p| p.as_str()),
+            Self::Windows => Utf8WindowsPath::new(path).parent().map(|p| p.as_str()),
+        }
+    }
+
     /// `-C linker=dylint-link` — the one signal that identifies a Dylint
     /// lint cdylib.
     ///

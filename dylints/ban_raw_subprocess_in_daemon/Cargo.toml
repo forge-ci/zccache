@@ -2,7 +2,7 @@
 name = "ban_raw_subprocess_in_daemon"
 # Bust the Dylint library cache when matcher or scope rules change.
 # See ban_std_pathbuf for the same workaround rationale.
-version = "0.3.0"
+version = "0.4.0"
 description = "Require kernal-api for all zccache-daemon child creation"
 edition = "2021"
 publish = false
@@ -13,10 +13,14 @@ crate-type = ["cdylib"]
 [dependencies]
 # Match the dylint_linting pin used by the sibling dylints — same toolchain
 # (rust-toolchain.toml here), same upstream commit.
-dylint_linting = "=6.0.3"
+dylint_linting = "=6.2.0"
 
 [dev-dependencies]
-dylint_testing = "=6.0.3"
+dylint_testing = "=6.2.0"
+serde_json = "1"
+tokio = { version = "1", features = ["process"] }
+kernal-api = { version = "=0.1.33", default-features = false }
+zccache-core = { path = "../../crates/zccache-core" }
 
 [package.metadata.rust-analyzer]
 rustc_private = true

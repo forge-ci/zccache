@@ -392,11 +392,18 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
     };
     // Resolve env-dep values from the request env NOW (the borrow doesn't
     // survive into the store task): the compile ran under exactly this env.
+    let env_dep_key_root = state.dep_graph.load().get_key_root(context_key);
     let rustc_env_dep_values: Vec<(String, Option<String>)> = rustc_env_dep_names
         .iter()
         .map(|name| {
-            let value =
-                rustc_env_dep_cache_value(client_env, name, source_path, &scan_result.resolved);
+            let value = rustc_env_dep_store_value(
+                client_env,
+                name,
+                source_path,
+                &scan_result.resolved,
+                env_dep_key_root.as_ref().map(NormalizedPath::as_path),
+                rustc_all_outputs.as_deref().unwrap_or_default(),
+            );
             (name.clone(), value)
         })
         .collect();

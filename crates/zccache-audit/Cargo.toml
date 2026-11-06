@@ -11,6 +11,7 @@ description = "Durable audit schema types for zccache integrations"
 publish = false
 
 [dependencies]
+thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zccache-core = { workspace = true }

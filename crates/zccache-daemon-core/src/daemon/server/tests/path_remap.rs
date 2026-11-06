@@ -448,3 +448,55 @@ mod context_key_salt {
         );
     }
 }
+
+/// #1982: a C compile run inside a build script's `OUT_DIR` keys relative to
+/// that directory, so two target-dir paths produce the same request key.
+#[test]
+fn build_script_cc_compile_keys_relative_to_out_dir() {
+    let cc = Path::new("/usr/bin/cc");
+    let ws = std::env::temp_dir().join("ws");
+    let keyed = |target: &str| {
+        let out_dir = ws.join(target).join("debug/build/openssl-sys-0123/out");
+        let env = vec![
+            ("ZCCACHE_PATH_REMAP".to_string(), "auto".to_string()),
+            (
+                "OUT_DIR".to_string(),
+                out_dir.to_string_lossy().into_owned(),
+            ),
+        ];
+        let root = build_script_out_dir_root(cc, &out_dir.join("build/src"), Some(&env))
+            .expect("OUT_DIR root");
+        assert_eq!(root.as_path(), out_dir.as_path());
+        let include = out_dir.join("build/src/include");
+        normalize_request_arg(&format!("-I{}", include.display()), Some(root.as_path()))
+    };
+    assert_eq!(keyed("tA"), keyed("tB"));
+}
+
+#[test]
+fn out_dir_key_root_needs_auto_remap_a_cc_compiler_and_a_cwd_inside_it() {
+    let ws = std::env::temp_dir().join("ws");
+    let out_dir = ws.join("t/debug/build/zstd-sys-0123/out");
+    let inside = out_dir.join("src");
+    let env = |extra: &[(&str, &str)]| {
+        let mut env = vec![(
+            "OUT_DIR".to_string(),
+            out_dir.to_string_lossy().into_owned(),
+        )];
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        env
+    };
+    let auto = env(&[("ZCCACHE_PATH_REMAP", "auto")]);
+    let cc = Path::new("/usr/bin/cc");
+    assert!(build_script_out_dir_root(cc, &inside, Some(&env(&[]))).is_none());
+    assert!(build_script_out_dir_root(Path::new("/bin/rustc"), &inside, Some(&auto)).is_none());
+    // cc-rs compiling registry sources writes into OUT_DIR but runs elsewhere.
+    assert!(build_script_out_dir_root(cc, &ws.join("registry"), Some(&auto)).is_none());
+    let ws_str = ws.to_string_lossy().into_owned();
+    let explicit = env(&[
+        ("ZCCACHE_PATH_REMAP", "auto"),
+        ("ZCCACHE_WORKTREE_ROOT", ws_str.as_str()),
+    ]);
+    assert!(build_script_out_dir_root(cc, &inside, Some(&explicit)).is_none());
+    assert!(build_script_out_dir_root(cc, &inside, Some(&auto)).is_some());
+}

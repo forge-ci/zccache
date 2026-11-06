@@ -13,6 +13,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | `zccache-fscache` | [metadata-cache.md](architecture/metadata-cache.md) |
 | `zccache-watcher` | [metadata-cache.md](architecture/metadata-cache.md) (watcher section) |
 | `zccache-artifact` | [artifact-store.md](architecture/artifact-store.md) |
+| Compiler-store snapshot export/import and writer exclusion | [artifact-store.md](architecture/artifact-store.md#compiler-store-transport-snapshots-ciyml362) |
 | Cross-filesystem COW materialization | [artifact-store.md](architecture/artifact-store.md), [portability.md](architecture/portability.md) |
 | `ZCCACHE_MODE` materialization modes (#1683) | [artifact-store.md](architecture/artifact-store.md#materialization-mode-zccache_mode-1683), [embedded-service.md](architecture/embedded-service.md) |
 | Private compiler staging paths | [artifact-store.md](architecture/artifact-store.md), [portability.md](architecture/portability.md) |
@@ -21,6 +22,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | `zccache-compiler` | [overview.md](architecture/overview.md) (2.9), [data-flow.md](architecture/data-flow.md) |
 | Nested Dylint compiler caching | [data-flow.md](architecture/data-flow.md#nested-dylint-driver-caching) |
 | `zccache-core` | [overview.md](architecture/overview.md) |
+| Async state, lock/wait budgets and deadlock prevention | [runtime.md](architecture/runtime.md#bounded-synchronization-and-async-state) |
 | Embedded host-daemon integration | [embedded-service.md](architecture/embedded-service.md) |
 | Embedded maintenance limits and shutdown | [embedded-service.md](architecture/embedded-service.md#maintenance-limits-and-task-ownership) |
 | Embedded bring-up timing and warm-state persistence (#1652) | [embedded-service.md](architecture/embedded-service.md#bring-up-and-warm-state-1652) |
@@ -36,7 +38,9 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | Compile journal record shape | [journal-schema.md](journal-schema.md) |
 | `ZCCACHE_CACHE_DIR` contract + `zccache cache-root` | [runtime.md § Cache root invariants](architecture/runtime.md#cache-root-invariants) |
 | zccache vs sccache feature matrix | [FEATURE-MATRIX.md](FEATURE-MATRIX.md) — generated from [feature-matrix.yaml](feature-matrix.yaml) by `ci/render_feature_matrix.py` |
+| Strict PCH serving + input mtime replay (#1952) | [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952) — `handle_compile/pch_gate.rs`, `zccache-fingerprint/src/pch_inputs` |
 | mtime snapshot/replay (`zccache snapshot`/`replay`, #1595) | `crates/zccache-fingerprint/README.md` — `mtime_replay` module; CLI in `cli/commands/mtime.rs` |
+| Slow Bosn lane cache restores (setup-soldr under act) | [bosn-cache-restore.md](bosn-cache-restore.md) — measured breakdown; CPU-weight root cause |
 
 ## Where to document new features
 

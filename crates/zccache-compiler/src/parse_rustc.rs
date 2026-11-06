@@ -227,9 +227,32 @@ fn rustc_primary_output_filename(shape: &RustcOutputShape<'_>) -> String {
         return rustc_bin_filename(name, suffix, target, host);
     }
     if is_staticlib {
-        return format!("lib{name}{suffix}.a");
+        return rustc_staticlib_filename(name, suffix, target, host);
     }
     format!("lib{name}{suffix}.rlib")
+}
+
+/// Static-archive file-name pattern for `--crate-type staticlib`, keyed on
+/// the *target* (zccache#1937). rustc takes `staticlib_prefix`/`suffix` from
+/// the target spec: MSVC-like targets (`*-windows-msvc`, `*-unknown-uefi`)
+/// write `<name>.lib`; every other target, `*-windows-gnu` included, writes
+/// `lib<name>.a`. With no `--target` the compile is host-native and a Windows
+/// host is taken to be MSVC (rustup's default), matching the daemon's
+/// `msvc_target_writes_pdb` policy.
+fn rustc_staticlib_filename(
+    crate_name: &str,
+    extra: &str,
+    target: Option<&str>,
+    host: RustcHost,
+) -> String {
+    let msvc_like = target
+        .map(|triple| triple.ends_with("-msvc") || triple.split('-').any(|part| part == "uefi"))
+        .unwrap_or(host == RustcHost::Windows);
+    if msvc_like {
+        format!("{crate_name}{extra}.lib")
+    } else {
+        format!("lib{crate_name}{extra}.a")
+    }
 }
 
 fn rustc_bin_filename(
@@ -435,8 +458,7 @@ pub fn parse_rustc_plan_with_syntax(
     let mut linker: Option<String> = None;
     let mut target: Option<&str> = None;
     let mut emit_types: Vec<String> = Vec::new();
-    let mut explicit_link_output: Option<String> = None;
-    let mut explicit_output: Option<String> = None;
+    let mut explicit_outputs: Vec<(String, String)> = Vec::new();
     let mut unknown_flags: Vec<String> = Vec::new();
     let mut is_test_harness = false;
 
@@ -474,38 +496,22 @@ pub fn parse_rustc_plan_with_syntax(
         // --emit <types> or --emit=<types>
         if arg == "--emit" {
             if let Some(next) = args.get(i + 1) {
-                emit_types.extend(next.split(',').map(|s| {
-                    // Handle --emit=dep-info=path form
-                    s.split('=').next().unwrap_or(s).to_string()
-                }));
-                for part in next.split(',') {
-                    if let Some((kind, path)) = part.split_once('=') {
-                        if kind == "link" && path != "-" {
-                            explicit_link_output = Some(path.to_string());
-                        }
-                        if path != "-" && !path.is_empty() && explicit_output.is_none() {
-                            explicit_output = Some(path.to_string());
-                        }
-                    }
-                }
+                crate::record_rustc_emit_options(
+                    &mut emit_types,
+                    &mut explicit_outputs,
+                    next,
+                    str::to_owned,
+                );
                 i += 2;
                 continue;
             }
         } else if let Some(val) = arg.strip_prefix("--emit=") {
-            emit_types.extend(
-                val.split(',')
-                    .map(|s| s.split('=').next().unwrap_or(s).to_string()),
+            crate::record_rustc_emit_options(
+                &mut emit_types,
+                &mut explicit_outputs,
+                val,
+                str::to_owned,
             );
-            for part in val.split(',') {
-                if let Some((kind, path)) = part.split_once('=') {
-                    if kind == "link" && path != "-" {
-                        explicit_link_output = Some(path.to_string());
-                    }
-                    if path != "-" && !path.is_empty() && explicit_output.is_none() {
-                        explicit_output = Some(path.to_string());
-                    }
-                }
-            }
             i += 1;
             continue;
         }
@@ -603,10 +609,15 @@ pub fn parse_rustc_plan_with_syntax(
             continue;
         }
 
-        // Positional arg — source file candidate (.rs)
-        if arg.ends_with(".rs") {
-            source_file = Some(arg.clone());
+        // Only the single modeled source may enter the artifact cache.
+        // Ignoring another positional input can reuse a valid artifact for
+        // an invocation the compiler would reject before compilation.
+        if !arg.ends_with(".rs") || source_file.is_some() {
+            return RustcPlan::NonCacheable {
+                reason: "unsupported Rust positional input layout".to_string(),
+            };
         }
+        source_file = Some(arg.clone());
 
         i += 1;
     }
@@ -715,7 +726,7 @@ pub fn parse_rustc_plan_with_syntax(
     // - `--emit metadata` (no link) → rmeta sidecar
     // - `proc-macro` → host-side dylib (.so/.dylib/.dll, lib prefix on unix)
     // - `bin` → executable (no extension on unix, .exe on Windows)
-    // - `staticlib` → static archive (.a)
+    // - `staticlib` → static archive (.lib on MSVC targets, .a elsewhere)
     // - everything else cacheable → rlib
     let has_link_emit = emit_types.iter().any(|t| t == "link");
     let is_proc_macro = crate_types.iter().any(|t| t == "proc-macro");
@@ -725,6 +736,8 @@ pub fn parse_rustc_plan_with_syntax(
     // Derive output path
     let primary_emit = if emit_types.iter().any(|kind| kind == "link") {
         Some("link")
+    } else if metadata_only {
+        Some("metadata")
     } else {
         emit_types
             .iter()
@@ -743,42 +756,56 @@ pub fn parse_rustc_plan_with_syntax(
             })
             .map(String::as_str)
     };
-    let output = if let Some(o) = output_file {
-        RustcOutputPlan::Explicit(o)
-    } else if let Some(o) = explicit_link_output {
-        RustcOutputPlan::Explicit(o)
-    } else if let Some(o) = explicit_output {
-        RustcOutputPlan::Explicit(o)
+    let name = crate_name
+        .as_deref()
+        .unwrap_or_else(|| syntax.file_stem(&source).unwrap_or("unknown"));
+    let suffix = if out_dir.is_some() || output_file.is_some() {
+        extra_filename.as_deref().unwrap_or("")
     } else {
-        // The two remaining cases differ only in how the crate name and the
-        // `-C extra-filename` suffix are resolved; the filename dispatch
-        // itself is identical, so it lives in one place.
-        //
-        // `--crate-name` defaults to the source file stem, mirroring rustc: a
-        // bare `rustc --crate-type lib --emit metadata foo.rs` writes
-        // `libfoo.rmeta`, whether or not `--out-dir` redirects the directory.
-        // Without `--out-dir` rustc writes into the cwd and no `extra-filename`
-        // suffix applies; with `--out-dir` only the suffix resolution changes.
-        let name = crate_name
-            .as_deref()
-            .unwrap_or_else(|| syntax.file_stem(&source).unwrap_or("unknown"));
-        let (name, suffix) = if out_dir.is_some() {
-            (name, extra_filename.as_deref().unwrap_or(""))
-        } else {
-            (name, "")
-        };
-        let filename = rustc_primary_output_filename(&RustcOutputShape {
-            host,
-            primary_emit,
-            metadata_only,
-            name,
+        ""
+    };
+    let filename = rustc_primary_output_filename(&RustcOutputShape {
+        host,
+        primary_emit,
+        metadata_only,
+        name,
+        suffix,
+        target,
+        is_proc_macro,
+        is_bin,
+        is_dylint_cdylib,
+        is_staticlib: crate_types.iter().any(|t| t == "staticlib"),
+    });
+    let implicit_count = if output_file.is_some() {
+        emit_types
+            .iter()
+            .filter(|kind| {
+                !explicit_outputs
+                    .iter()
+                    .any(|(explicit, _)| explicit == *kind)
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    } else {
+        0
+    };
+    let explicit_primary = explicit_outputs
+        .into_iter()
+        .rev()
+        .find(|(kind, _)| Some(kind.as_str()) == primary_emit);
+    let output = if let Some((_, path)) = explicit_primary {
+        RustcOutputPlan::Explicit(path)
+    } else if let Some(output) = output_file {
+        crate::rustc_explicit_output_plan(
+            &output,
+            primary_emit.unwrap_or("link"),
+            implicit_count,
+            &filename,
             suffix,
-            target,
-            is_proc_macro,
             is_bin,
-            is_dylint_cdylib,
-            is_staticlib: crate_types.iter().any(|t| t == "staticlib"),
-        });
+            syntax,
+        )
+    } else {
         match out_dir {
             Some(directory) => RustcOutputPlan::InDirectory {
                 directory,

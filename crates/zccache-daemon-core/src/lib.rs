@@ -6,6 +6,9 @@
 //! module structure is preserved, so internal `crate::daemon::…` paths resolve
 //! unchanged. The `zccache` facade re-exports these modules to keep the public
 //! `zccache::daemon::…` / `zccache::embedded::…` paths stable.
+// #2027: compiler children are spawned only through
+// `daemon::server::compiler_spawn` (see this crate's clippy.toml).
+#![deny(clippy::disallowed_methods)]
 
 // Subsystem-crate aliases (mirrors the former `zccache` facade so the moved
 // daemon code's `crate::core` / `crate::ipc` / … paths keep resolving).

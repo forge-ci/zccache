@@ -1,4 +1,4 @@
-"""Behavioural tests for release-auto.yml's `detect-bump` step.
+"""Behavioural tests for auto-release.yml's `detect-bump` step.
 
 The interesting property is not that the YAML contains a string -- it is that
 the *shell logic* takes the right branch. So these tests extract the real
@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github" / "workflows" / "release-auto.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "auto-release.yml"
 
 RETRY_WARNING_MARKER = "::warning title=Release skipped"
 UNRELEASED_WARNING_MARKER = "::warning title=Version"

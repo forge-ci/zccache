@@ -77,6 +77,71 @@ fn packed_dwarf_declaration_is_target_and_link_kind_aware() {
 mod dylint_sidecar_tests {
     use super::*;
 
+    fn building_libraries_case() -> (crate::depgraph::RustcParsedArgs, std::path::PathBuf) {
+        let cwd = Path::new("/repo");
+        let out_dir = "/repo/target/dylint/tests/nightly/debug/deps";
+        let args = vec![
+            "--crate-name=lint".to_string(),
+            "--crate-type=cdylib".to_string(),
+            "--emit=link".to_string(),
+            format!("--out-dir={out_dir}"),
+            "-Clinker=/tools/dylint-link".to_string(),
+            "src/lib.rs".to_string(),
+        ];
+        let parsed = crate::depgraph::parse_rustc_args(&args, cwd);
+        (parsed, Path::new(out_dir).join("liblint.so"))
+    }
+
+    fn dylint_env(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut env = vec![
+            ("CARGO_PKG_NAME".to_string(), "lint".to_string()),
+            (
+                "RUSTUP_TOOLCHAIN".to_string(),
+                "nightly-2026-08-15-x86_64-unknown-linux-gnu".to_string(),
+            ),
+        ];
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        env
+    }
+
+    /// zccache#2023: Dylint 6.2.0's dylint-link writes no toolchain copy while
+    /// cargo-dylint builds libraries, so the link's only output is the
+    /// cdylib — and that output set is complete, so the link stays cacheable.
+    #[test]
+    fn dylint_building_libraries_predicts_no_toolchain_copy() {
+        let cwd = Path::new("/repo");
+        let (parsed, primary) = building_libraries_case();
+        let env = dylint_env(&[("DYLINT_BUILDING_LIBRARIES", "1")]);
+
+        let outputs = rustc_expected_output_paths(&parsed, &primary, cwd, Some(&env));
+        assert_eq!(outputs, vec![NormalizedPath::new(&primary)]);
+        assert!(dylint_cdylib_has_complete_output_identity(
+            &parsed,
+            &primary,
+            cwd,
+            Some(&env)
+        ));
+    }
+
+    /// `DYLINT_LINK_ENABLE_COPY_LIBRARY` forces dylint-link to copy again, and
+    /// `"0"` disables a switch (dylint_internal's truthiness rule).
+    #[test]
+    fn dylint_copy_override_and_zero_values_restore_the_toolchain_copy() {
+        let cwd = Path::new("/repo");
+        let (parsed, primary) = building_libraries_case();
+        for extra in [
+            &[
+                ("DYLINT_BUILDING_LIBRARIES", "1"),
+                ("DYLINT_LINK_ENABLE_COPY_LIBRARY", "1"),
+            ][..],
+            &[("DYLINT_BUILDING_LIBRARIES", "0")][..],
+        ] {
+            let env = dylint_env(extra);
+            let outputs = rustc_expected_output_paths(&parsed, &primary, cwd, Some(&env));
+            assert_eq!(outputs.len(), 2, "{extra:?}: {outputs:?}");
+        }
+    }
+
     /// soldr#2349: this used to bail out with `if is_windows() { return; }`
     /// because `dylint_library_sidecar_output_path` unconditionally
     /// returned `None` on a Windows host, making `outputs.len()` 1 instead
@@ -821,3 +886,91 @@ mod pdb_sidecar_tests {
         assert!(!msvc_target_writes_pdb(&aarch_gnu));
     }
 }
+
+#[test]
+fn explicit_o_output_family_matches_rustc_emit_precedence() {
+    let cwd = Path::new("/repo");
+    for (emit, primary, expected) in [
+        ("metadata", "out/custom.output", vec!["out/custom.output"]),
+        ("dep-info", "out/custom.output", vec!["out/custom.output"]),
+        (
+            "metadata,metadata",
+            "out/custom.output",
+            vec!["out/custom.output"],
+        ),
+        (
+            "metadata=kind.rmeta,obj=kind.obj",
+            "kind.rmeta",
+            vec!["kind.rmeta", "kind.obj"],
+        ),
+        ("metadata=kind.rmeta", "kind.rmeta", vec!["kind.rmeta"]),
+        (
+            "metadata=kind.rmeta,obj",
+            "kind.rmeta",
+            vec!["kind.rmeta", "out/custom.output"],
+        ),
+        (
+            "metadata,obj",
+            "out/libprobe.rmeta",
+            vec!["out/custom.o", "out/libprobe.rmeta"],
+        ),
+        (
+            "dep-info,metadata",
+            "out/libprobe.rmeta",
+            vec!["out/custom.d", "out/libprobe.rmeta"],
+        ),
+        (
+            "metadata,link=kind.rlib",
+            "kind.rlib",
+            vec!["kind.rlib", "out/custom.output"],
+        ),
+    ] {
+        let parsed = crate::depgraph::parse_rustc_args(
+            &[
+                "--crate-name=probe".into(),
+                "--crate-type=lib".into(),
+                format!("--emit={emit}"),
+                "-o".into(),
+                "out/custom.output".into(),
+                "--out-dir=ignored".into(),
+                "probe.rs".into(),
+            ],
+            cwd,
+        );
+        let mut actual = rustc_expected_output_paths(&parsed, &cwd.join(primary), cwd, None);
+        actual.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        let mut expected: Vec<_> = expected
+            .into_iter()
+            .map(|p| NormalizedPath::new(cwd.join(p)))
+            .collect();
+        expected.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        assert_eq!(actual, expected, "emit={emit}");
+    }
+}
+
+#[test]
+fn explicit_o_collection_does_not_capture_stale_conventional_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let primary = temp.path().join("custom.output");
+    std::fs::write(&primary, b"current").unwrap();
+    std::fs::write(temp.path().join("libprobe.rmeta"), b"stale").unwrap();
+    let parsed = crate::depgraph::parse_rustc_args(
+        &[
+            "--crate-name=probe".into(),
+            "--crate-type=lib".into(),
+            "--emit=metadata".into(),
+            "-o".into(),
+            "custom.output".into(),
+            "probe.rs".into(),
+        ],
+        temp.path(),
+    );
+    let outputs = collect_rustc_output_files(&parsed, &primary, temp.path());
+    assert_eq!(
+        outputs.iter().map(|o| o.path.clone()).collect::<Vec<_>>(),
+        vec![NormalizedPath::new(primary)]
+    );
+}
+
+#[path = "repeated_emit.rs"]
+mod repeated_emit;

@@ -8,23 +8,19 @@ use kernal_api::{
     ProcessSessionOptions,
 };
 
-use super::{CompilePriority, CompilePriorityDecision};
+use super::{CompilePriority, CompilePriorityDecision, ProcessLiveness};
 
 /// Bound on queued output chunks before the session backpressures the pipes.
 const SESSION_MAX_QUEUED_CHUNKS: usize = 256;
 /// Bound on one stdin or output chunk.
 const SESSION_MAX_CHUNK_BYTES: usize = 8 * 1024;
 
-/// Session bounds shared by every daemon-owned child. `None` keeps strict EOF
-/// waiting; `Some(grace)` abandons a descendant-held pipe after `grace`.
-fn session_options(post_exit_grace: Option<std::time::Duration>) -> ProcessSessionOptions {
+/// Every daemon-owned child has a finite post-exit pipe budget.
+fn session_options(post_exit_grace: std::time::Duration) -> ProcessSessionOptions {
     ProcessSessionOptions {
         max_queued_chunks: SESSION_MAX_QUEUED_CHUNKS,
         max_chunk_bytes: SESSION_MAX_CHUNK_BYTES,
-        post_exit_drain: post_exit_grace.map_or(
-            ProcessPostExitDrain::WaitForEof,
-            ProcessPostExitDrain::AbandonAfter,
-        ),
+        post_exit_drain: ProcessPostExitDrain::AbandonAfter(post_exit_grace),
         kill_on_drop: true,
     }
 }
@@ -36,15 +32,16 @@ pub(crate) async fn async_builder_output_with_priority_timeout(
     priority: CompilePriority,
     timeout: std::time::Duration,
     command_description: String,
+    policy: ProcessLiveness,
 ) -> io::Result<Output> {
-    let wait = async_builder_output_with_priority_decision(builder, priority, command_description);
-    match kernal_api::async_engine::timeout(timeout, wait).await {
-        Ok((result, _decision)) => result,
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("child process timed out after {timeout:?}"),
-        )),
-    }
+    let (result, _decision) = async_builder_output_with_priority_decision(
+        builder,
+        priority,
+        command_description,
+        policy.with_total(timeout)?,
+    )
+    .await;
+    result
 }
 
 /// Kernel-session process path for linker and tool invocations.
@@ -56,28 +53,31 @@ pub(crate) async fn async_builder_output_with_priority_timeout(
 pub(crate) async fn async_builder_output_with_priority(
     builder: kernal_api::SpawnSpec,
     priority: CompilePriority,
+    policy: ProcessLiveness,
 ) -> io::Result<Output> {
-    async_builder_output_with_priority_and_post_exit_grace(
+    let (decision, _ticket) = priority.resolve_and_track();
+    async_builder_compiler_output_with_effective_priority(
         builder,
-        priority,
-        Some(std::time::Duration::from_secs(2)),
+        decision.effective,
+        None,
+        "linker/tool".into(),
+        None,
+        policy,
     )
     .await
 }
 
-/// Kernel-session process path with an explicit post-exit pipe policy.
-/// `None` retains ordinary EOF waiting for known leaf tools; a bounded grace
-/// protects compiler/linker-style children from inherited descendant pipes.
+/// Explicit finite post-exit drain policy for a generic tool.
 pub(crate) async fn async_builder_output_with_priority_and_post_exit_grace(
     builder: kernal_api::SpawnSpec,
     priority: CompilePriority,
-    post_exit_grace: Option<std::time::Duration>,
+    post_exit_grace: std::time::Duration,
+    policy: ProcessLiveness,
 ) -> io::Result<Output> {
-    let (decision, _ticket) = priority.resolve_and_track();
-    async_builder_output_with_effective_priority_and_post_exit_grace(
+    async_builder_output_with_priority(
         builder,
-        decision.effective,
-        post_exit_grace,
+        priority,
+        policy.with_post_exit_grace(post_exit_grace)?,
     )
     .await
 }
@@ -88,6 +88,7 @@ pub(crate) async fn async_builder_output_with_priority_decision(
     builder: kernal_api::SpawnSpec,
     priority: CompilePriority,
     command_description: String,
+    policy: ProcessLiveness,
 ) -> (io::Result<Output>, CompilePriorityDecision) {
     let (decision, _ticket) = priority.resolve_and_track();
     let result = async_builder_compiler_output_with_effective_priority(
@@ -96,95 +97,10 @@ pub(crate) async fn async_builder_output_with_priority_decision(
         None,
         command_description,
         None,
+        policy,
     )
     .await;
     (result, decision)
-}
-
-async fn async_builder_output_with_effective_priority_and_post_exit_grace(
-    builder: kernal_api::SpawnSpec,
-    priority: CompilePriority,
-    post_exit_grace: Option<std::time::Duration>,
-) -> io::Result<Output> {
-    use kernal_api::StreamMode;
-
-    let session = builder
-        .stdin(StreamMode::Null)
-        .stdout(StreamMode::Piped)
-        .stderr(StreamMode::Piped)
-        // The native semantic builder installs the equivalent containment on
-        // every supported host, including the Windows Job Object path.  This
-        // is deliberately not the old Tokio pre-spawn predicate: that
-        // predicate only described which hosts needed a post-spawn shim.
-        .kill_when_owner_dies(kernel_session_kill_when_owner_dies())
-        // Match the former post-spawn helper: privilege denial while raising
-        // priority is diagnostic only and never prevents compilation.
-        .priority_best_effort(kernel_process_priority(priority))
-        // zccache#1562: acquire the shared materialization exclusion on the
-        // actor's native spawning thread and hold it only across fork/exec.
-        // No non-Send guard crosses this caller's await.
-        .spawn_admission(kernel_spawn_admission())
-        .spawn_session(session_options(post_exit_grace))
-        .await?;
-    let drain = async {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        while let Some(event) = session.next_output().await {
-            match event {
-                ProcessOutputEvent::Chunk(ProcessOutputChunk::Stdout(bytes)) => {
-                    stdout.extend_from_slice(&bytes);
-                }
-                ProcessOutputEvent::Chunk(ProcessOutputChunk::Stderr(bytes)) => {
-                    stderr.extend_from_slice(&bytes);
-                }
-                ProcessOutputEvent::Completion(completion) => {
-                    match completion_outcome(completion) {
-                        SessionCompletion::Eof(_) => {}
-                        SessionCompletion::Abandoned(stream) => {
-                            tracing::warn!(
-                                ?stream,
-                                "child output pipe remained open after post-exit grace"
-                            );
-                        }
-                        SessionCompletion::Error { error, .. } => return Err(error),
-                    }
-                }
-            }
-        }
-        Ok::<_, io::Error>((stdout, stderr))
-    };
-    let mut drain = std::pin::pin!(drain);
-    let wait = session.wait();
-    let mut wait = std::pin::pin!(wait);
-    match kernal_api::fair_race!((drain.as_mut()), (wait.as_mut())).await {
-        kernal_api::async_engine::FairRace2::First(captured) => {
-            let (stdout, stderr) = match captured {
-                Ok(captured) => captured,
-                Err(error) => {
-                    // A reader failure can precede direct-child exit. Do not
-                    // leave that child behind while `join(wait, drain)` waits
-                    // forever for a pipe that will never report completion.
-                    cleanup_failed_session(&session, "output read failure").await;
-                    return Err(error);
-                }
-            };
-            let status = wait.as_mut().await?.exit_status();
-            Ok(Output {
-                status,
-                stdout,
-                stderr,
-            })
-        }
-        kernal_api::async_engine::FairRace2::Second(exit) => {
-            let status = exit?.exit_status();
-            let (stdout, stderr) = drain.await?;
-            Ok(Output {
-                status,
-                stdout,
-                stderr,
-            })
-        }
-    }
 }
 
 /// Streaming compiler-session counterpart. Output chunks are forwarded as
@@ -197,6 +113,7 @@ pub(crate) async fn async_builder_output_streaming_with_priority_decision(
     priority: CompilePriority,
     sender: kernal_api::async_engine::Sender<crate::daemon::compile_output::RawOutputChunk>,
     command_description: String,
+    policy: ProcessLiveness,
 ) -> (io::Result<Output>, CompilePriorityDecision) {
     let (decision, _ticket) = priority.resolve_and_track();
     let result = async_builder_compiler_output_with_effective_priority(
@@ -205,6 +122,7 @@ pub(crate) async fn async_builder_output_streaming_with_priority_decision(
         Some(sender),
         command_description,
         None,
+        policy,
     )
     .await;
     (result, decision)
@@ -217,6 +135,7 @@ pub(crate) async fn async_builder_output_with_priority_stdin(
     stdin_bytes: Option<&[u8]>,
     sender: Option<kernal_api::async_engine::Sender<crate::daemon::compile_output::RawOutputChunk>>,
     command_description: String,
+    policy: ProcessLiveness,
 ) -> io::Result<Output> {
     let (decision, _ticket) = priority.resolve_and_track();
     async_builder_compiler_output_with_effective_priority(
@@ -225,6 +144,7 @@ pub(crate) async fn async_builder_output_with_priority_stdin(
         sender,
         command_description,
         stdin_bytes,
+        policy,
     )
     .await
 }
@@ -238,13 +158,13 @@ async fn async_builder_compiler_output_with_effective_priority(
     sender: Option<kernal_api::async_engine::Sender<crate::daemon::compile_output::RawOutputChunk>>,
     command_description: String,
     stdin_bytes: Option<&[u8]>,
+    policy: ProcessLiveness,
 ) -> io::Result<Output> {
-    use kernal_api::async_engine::{MissedTickBehavior, PeriodicTimer};
     use kernal_api::StreamMode;
 
-    let post_exit_grace = compiler_post_exit_grace();
     let input = stdin_bytes.unwrap_or_default();
-    let session = builder
+    let started = std::time::Instant::now();
+    let spawn = builder
         .stdin(if input.is_empty() {
             StreamMode::Null
         } else {
@@ -255,8 +175,52 @@ async fn async_builder_compiler_output_with_effective_priority(
         .kill_when_owner_dies(kernel_session_kill_when_owner_dies())
         .priority_best_effort(kernel_process_priority(priority))
         .spawn_admission(kernel_spawn_admission())
-        .spawn_session(session_options(post_exit_grace))
-        .await?;
+        .spawn_session(session_options(policy.post_exit_grace));
+    let session = kernal_api::async_engine::timeout(policy.total, spawn)
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "process spawn exceeded its liveness budget; cancellation requested",
+            )
+        })??;
+    let remaining = policy.total.saturating_sub(started.elapsed());
+    match kernal_api::async_engine::timeout(
+        remaining,
+        run_owned_session(&session, sender, command_description, input, policy),
+    )
+    .await
+    {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => {
+            cleanup_failed_session(&session, "process session error", policy.cleanup).await;
+            Err(error)
+        }
+        Err(_) => {
+            let cleanup = terminate_session(&session, policy.cleanup).await;
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                match cleanup {
+                    Ok(_) => {
+                        "process runtime budget exceeded; child termination confirmed".to_string()
+                    }
+                    Err(error) => {
+                        format!("process runtime budget exceeded; cleanup unconfirmed: {error}")
+                    }
+                },
+            ))
+        }
+    }
+}
+
+async fn run_owned_session(
+    session: &kernal_api::ProcessSession,
+    sender: Option<kernal_api::async_engine::Sender<crate::daemon::compile_output::RawOutputChunk>>,
+    command_description: String,
+    input: &[u8],
+    policy: ProcessLiveness,
+) -> io::Result<Output> {
+    use kernal_api::async_engine::{MissedTickBehavior, PeriodicTimer};
     let session_pid = session.id();
     let write_input = async {
         if !input.is_empty() {
@@ -272,8 +236,8 @@ async fn async_builder_compiler_output_with_effective_priority(
     };
     let mut write_input = std::pin::pin!(write_input);
     let mut input_done = false;
-    let stall_window = crate::daemon::child_watchdog::stall_window();
-    let sample_period = crate::daemon::child_watchdog::stall_tick();
+    let stall_window = policy.stall_window;
+    let sample_period = policy.sample_period;
     let mut cpu_samples = PeriodicTimer::new_unbounded(sample_period)?;
     cpu_samples.set_missed_tick_behavior(MissedTickBehavior::Skip);
     // The facade timer ticks immediately; the stall monitor's first sample is
@@ -291,8 +255,7 @@ async fn async_builder_compiler_output_with_effective_priority(
     memory_samples.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_progress = std::time::Instant::now();
     let mut last_cpu = session.cpu_time().await.ok().flatten();
-    let mut last_descendant_cpu =
-        crate::platform::process::inspect::descendant_cpu_ticks(session_pid);
+    let mut last_tree_cpu = live_tree_cpu_ticks(session_pid);
     let mut stdout_bytes = 0usize;
     let mut stderr_bytes = 0usize;
     let mut stdout = Vec::new();
@@ -316,6 +279,7 @@ async fn async_builder_compiler_output_with_effective_priority(
                     &mut stderr_bytes,
                     &mut stdout,
                     &mut stderr,
+                    policy.stall_window,
                 )
                 .await
                 {
@@ -351,7 +315,7 @@ async fn async_builder_compiler_output_with_effective_priority(
                 &command_description,
                 session_pid,
                 status,
-                post_exit_grace,
+                Some(policy.post_exit_grace),
                 observed_exit_at.map(|instant: std::time::Instant| instant.elapsed()),
                 orphaned_pipe,
                 stdout_eof,
@@ -364,6 +328,9 @@ async fn async_builder_compiler_output_with_effective_priority(
                 &mut stderr,
             )
             .await;
+            if let Some(error) = stdout_read_error.or(stderr_read_error) {
+                return Err(error);
+            }
             return Ok(Output {
                 status,
                 stdout,
@@ -407,6 +374,7 @@ async fn async_builder_compiler_output_with_effective_priority(
                         &mut stderr_bytes,
                         &mut stdout,
                         &mut stderr,
+                        policy.stall_window,
                     )
                     .await
                     {
@@ -414,7 +382,6 @@ async fn async_builder_compiler_output_with_effective_priority(
                             last_progress = std::time::Instant::now();
                         }
                         CompilerSessionEvent::ConsumerDisconnected(error) => {
-                            cleanup_failed_session(&session, "output consumer disconnected").await;
                             return Err(error);
                         }
                         CompilerSessionEvent::StreamEof(stream) => {
@@ -422,12 +389,18 @@ async fn async_builder_compiler_output_with_effective_priority(
                         }
                         CompilerSessionEvent::StreamAbandoned => orphaned_pipe = true,
                         CompilerSessionEvent::PipeReadError { stream, error } => {
+                            let primary = session_fault_error(
+                                error.kind(),
+                                &error.to_string(),
+                                error.raw_os_error(),
+                            );
                             record_compiler_pipe_error(
                                 stream,
                                 error,
                                 &mut stdout_read_error,
                                 &mut stderr_read_error,
                             );
+                            return Err(primary);
                         }
                     }
                 }
@@ -437,12 +410,14 @@ async fn async_builder_compiler_output_with_effective_priority(
             },
             kernal_api::async_engine::FairRace5::Fourth(()) => {
                 let now_cpu = session.cpu_time().await.ok().flatten();
-                let now_descendant_cpu =
-                    crate::platform::process::inspect::descendant_cpu_ticks(session_pid);
+                let now_tree_cpu = live_tree_cpu_ticks(session_pid);
                 let cpu_advanced =
-                    stall_cpu_advanced(last_cpu, now_cpu, last_descendant_cpu, now_descendant_cpu);
+                    stall_cpu_advanced(last_cpu, now_cpu, last_tree_cpu, now_tree_cpu);
                 last_cpu = now_cpu;
-                last_descendant_cpu = now_descendant_cpu;
+                last_tree_cpu = now_tree_cpu;
+                if cpu_advanced {
+                    last_progress = std::time::Instant::now();
+                }
                 let since_progress = last_progress.elapsed();
                 if crate::daemon::child_watchdog::should_kill_stalled(
                     since_progress,
@@ -457,7 +432,7 @@ async fn async_builder_compiler_output_with_effective_priority(
                         stdout_bytes,
                         stderr_bytes,
                     );
-                    let killed_status = terminate_session(&session).await?;
+                    let killed_status = terminate_session(session, policy.cleanup).await?;
                     killed_for_stall = true;
                     // Killing the direct child does not consume the
                     // session's queued output. Use the same post-exit
@@ -481,7 +456,13 @@ pub(super) async fn forward_compiler_session_event(
     stderr_bytes: &mut usize,
     stdout: &mut Vec<u8>,
     stderr: &mut Vec<u8>,
+    send_timeout: std::time::Duration,
 ) -> CompilerSessionEvent {
+    // Inject the public kernel fault value only in the isolated fault fixture,
+    // after its real child has published readiness. Exercise the production
+    // event/error/cleanup path without relying on an OS pipe race.
+    #[cfg(test)]
+    let event = super::liveness_tests::inject_ready_pipe_fault(event);
     match event {
         ProcessOutputEvent::Chunk(chunk) => {
             let output = match chunk {
@@ -501,19 +482,32 @@ pub(super) async fn forward_compiler_session_event(
                 }
             };
             match sender {
-                Some(sender) => match sender.send(output).await {
-                    Ok(()) => CompilerSessionEvent::Progress,
-                    Err(_) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "compiler output consumer disconnected",
-                    )),
-                },
+                Some(sender) => {
+                    match kernal_api::async_engine::timeout(send_timeout, sender.send(output)).await
+                    {
+                        Ok(Ok(())) => CompilerSessionEvent::Progress,
+                        Ok(Err(_)) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "compiler output consumer disconnected",
+                        )),
+                        Err(_) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "compiler output consumer exceeded the send budget",
+                        )),
+                    }
+                }
                 None => CompilerSessionEvent::Progress,
             }
         }
         ProcessOutputEvent::Completion(completion) => match completion_outcome(completion) {
             SessionCompletion::Eof(stream) => CompilerSessionEvent::StreamEof(stream),
-            SessionCompletion::Abandoned(_) => CompilerSessionEvent::StreamAbandoned,
+            SessionCompletion::Abandoned(stream) => {
+                tracing::warn!(
+                    ?stream,
+                    "child output pipe exceeded the post-exit drain budget"
+                );
+                CompilerSessionEvent::StreamAbandoned
+            }
             SessionCompletion::Error { stream, error } => {
                 CompilerSessionEvent::PipeReadError { stream, error }
             }
@@ -664,21 +658,42 @@ async fn emit_compiler_session_diagnostics(
     }
 }
 
+/// Supplement the identity-bound session sample with the existing canonical
+/// kernel tick observation while this owner retains the child session. The
+/// published running-process 4.10.16 Linux Duration conversion quantizes
+/// subsecond CPU progress; raw tick deltas preserve busy-child liveness.
+/// PID reuse can at worst defer a stall decision: termination still uses the
+/// identity-bound session, never this observational PID.
+fn live_tree_cpu_ticks(pid: u32) -> Option<u64> {
+    let direct = crate::platform::process::inspect::cpu_ticks(pid)?;
+    let descendants = crate::platform::process::inspect::descendant_cpu_ticks(pid).unwrap_or(0);
+    Some(direct.saturating_add(descendants))
+}
+
 /// Whether the compiler burned CPU since the last stall sample, counting its
 /// live descendants: a driver that waits on its real compiler is not wedged.
 /// The live descendants' total drops when one exits (cc1plus hands over to
 /// `as`), so any change is progress; a wedged tree's total stays constant.
+///
+/// The identity-bound session sample is unavailable on some hosts (macOS:
+/// running-process reports `None` for every async child). Treating that as
+/// assumed progress while a PID tick sample *is* available meant a silent
+/// child was never reaped there. Fall back to the tick sample, which is the
+/// former watchdog's macOS signal; assume progress only when neither exists.
 pub(super) fn stall_cpu_advanced(
     previous: Option<std::time::Duration>,
     current: Option<std::time::Duration>,
-    previous_descendants: Option<u64>,
-    current_descendants: Option<u64>,
+    previous_tree: Option<u64>,
+    current_tree: Option<u64>,
 ) -> bool {
-    session_cpu_time_advanced(previous, current)
-        || matches!(
-            (previous_descendants, current_descendants),
-            (Some(previous), Some(current)) if current != previous
-        )
+    let tree = match (previous_tree, current_tree) {
+        (Some(previous), Some(current)) => Some(current != previous),
+        _ => None,
+    };
+    match tree {
+        Some(tree_advanced) if previous.is_none() || current.is_none() => tree_advanced,
+        _ => session_cpu_time_advanced(previous, current) || tree == Some(true),
+    }
 }
 
 /// Match the former watchdog's conservative platform policy: unavailable
@@ -707,20 +722,10 @@ pub(super) fn kernel_process_priority(priority: CompilePriority) -> kernal_api::
     }
 }
 
-/// Preserve the compiler watchdog's environment contract: zero means disable
-/// the post-exit watchdog (ordinary EOF), whereas the session's `Some(ZERO)`
-/// intentionally means abandon immediately.
-fn compiler_post_exit_grace() -> Option<std::time::Duration> {
-    let grace = crate::daemon::child_watchdog::post_exit_grace();
-    (!grace.is_zero()).then_some(grace)
-}
-
 /// Construct the actor-thread admission hook required to protect staged
 /// materialization descriptors during every semantic session fork/exec.
 fn kernel_spawn_admission() -> kernal_api::SpawnAdmission {
-    kernal_api::SpawnAdmission::new(|| {
-        Ok::<_, io::Error>(crate::daemon::spawn_exclusion::spawn_shared())
-    })
+    crate::daemon::spawn_exclusion::spawn_admission()
 }
 
 /// The semantic session builder, unlike the legacy Tokio bridge, owns the
@@ -731,8 +736,12 @@ pub(super) fn kernel_session_kill_when_owner_dies() -> bool {
 
 /// Cleanup after an existing operation error; never replace that error or
 /// promise reaping when native termination cannot be confirmed.
-async fn cleanup_failed_session(session: &kernal_api::ProcessSession, context: &'static str) {
-    if let Err(cleanup_error) = terminate_session(session).await {
+async fn cleanup_failed_session(
+    session: &kernal_api::ProcessSession,
+    context: &'static str,
+    bound: std::time::Duration,
+) {
+    if let Err(cleanup_error) = terminate_session(session, bound).await {
         tracing::warn!(%cleanup_error, context, "child cleanup unconfirmed");
     }
 }
@@ -742,15 +751,19 @@ async fn cleanup_failed_session(session: &kernal_api::ProcessSession, context: &
 /// establish successful cleanup; the caller must retain that uncertainty.
 pub(super) async fn terminate_session(
     session: &kernal_api::ProcessSession,
+    bound: std::time::Duration,
 ) -> io::Result<std::process::ExitStatus> {
     let cleanup = async {
+        if let Some(exit) = session.poll().await? {
+            return Ok(exit.exit_status());
+        }
         session.kill().await?;
         session
             .wait()
             .await
             .map(kernal_api::ProcessSessionExit::exit_status)
     };
-    kernal_api::async_engine::timeout(std::time::Duration::from_secs(5), cleanup)
+    kernal_api::async_engine::timeout(bound, cleanup)
         .await
         .map_err(|_| {
             io::Error::new(

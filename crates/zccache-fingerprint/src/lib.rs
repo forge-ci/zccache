@@ -30,6 +30,7 @@ pub mod error;
 pub mod file_lock;
 pub mod hash_cache;
 pub mod mtime_replay;
+pub mod pch_inputs;
 pub mod persist;
 pub mod scan;
 pub mod two_layer;

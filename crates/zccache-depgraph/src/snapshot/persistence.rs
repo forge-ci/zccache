@@ -54,8 +54,8 @@ const MAX_EVICTION_ROUNDS: usize = 16;
 /// `(path prefix, remaining count)`. Scoped to a path prefix so a test that
 /// injects failures cannot break unrelated saves running concurrently in the
 /// same process (e.g. under `cargo test`, which runs tests as threads).
-static INJECTED_SAVE_FAILURES: std::sync::Mutex<Option<(String, usize)>> =
-    std::sync::Mutex::new(None);
+static INJECTED_SAVE_FAILURES: zccache_core::blocking_sync::Mutex<Option<(String, usize)>> =
+    zccache_core::blocking_sync::Mutex::new(None);
 
 /// Test seam: make the next `count` saves whose target path lies under
 /// `scope` fail *after* the tmp file has been created, exactly like a
@@ -63,14 +63,14 @@ static INJECTED_SAVE_FAILURES: std::sync::Mutex<Option<(String, usize)>> =
 #[doc(hidden)]
 pub fn inject_save_failures_for_tests(scope: &Path, count: usize) {
     let mut slot = INJECTED_SAVE_FAILURES
-        .lock()
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *slot = (count > 0).then(|| (scope.to_string_lossy().into_owned(), count));
 }
 
 fn take_injected_failure(path: &Path) -> bool {
     let mut slot = INJECTED_SAVE_FAILURES
-        .lock()
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((scope, remaining)) = slot.as_mut() else {
         return false;

@@ -173,7 +173,12 @@ pub fn install(opts: InstallOptions) -> Result<InstallReport, SymbolsError> {
         .enable_all()
         .build()
         .map_err(SymbolsError::Runtime)?;
-    runtime.block_on(install_async(opts))
+    crate::core::wait::block_on_for(
+        &runtime,
+        install_async(opts),
+        crate::core::wait::WHOLE_COMMAND,
+    )
+    .map_err(|error| SymbolsError::Runtime(io::Error::new(io::ErrorKind::TimedOut, error)))?
 }
 
 pub async fn install_async(opts: InstallOptions) -> Result<InstallReport, SymbolsError> {
@@ -380,7 +385,7 @@ fn acquire_exclusive(
                 source: err,
             }),
         },
-        LockBehavior::Wait => kernal_api::platform::fs::lock_exclusive(file)
+        LockBehavior::Wait => crate::core::wait::lock_exclusive_for(file, crate::core::wait::PROBE)
             .map(Some)
             .map_err(|err| SymbolsError::Io {
                 path: PathBuf::from(LOCK_FILENAME),

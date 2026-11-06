@@ -945,7 +945,8 @@ def test_perf_workflow_has_dedicated_cow_materialization_gate():
         encoding="utf-8"
     )
 
-    assert "\n  pull_request:\n" in workflow
+    assert "\n  pull_request:\n" not in workflow  # deferred off the PR queue
+    assert "\n  push:\n" in workflow and "\n  workflow_dispatch:\n" in workflow
     job = workflow.split("\n  cow-materialization-budget:\n", 1)[1].split(
         "\n  build-perf-benchmark:\n", 1
     )[0]
@@ -958,10 +959,12 @@ def test_perf_workflow_has_dedicated_cow_materialization_gate():
     assert "    if: github.ref == 'refs/heads/main'" in speed_floor_job
     assert "name: COW materialization hit budget" in job
     assert (
-        "soldr cargo test -p zccache-daemon-core "
-        "--features test-support "
-        "perf_cow_materialization_128_hits_under_two_seconds" in job
+        "soldr cargo test -p zccache-daemon-core --features test-support --lib -- \\\n"
+        "            --exact daemon::server::persist::tests::"
+        "cow_materialization_probes_the_volume_once_not_per_delivery" in job
     )
+    assert "perf_cow_materialization_128_hits_under_two_seconds" not in job
+    assert "grep -Eq 'test result: ok\\. 1 passed'" in job
     assert "--no-cache" not in job + build_job + speed_floor_job
     assert (
         "--language c --test perf_c_zccache_vs_bare \\\n"

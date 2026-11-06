@@ -182,7 +182,7 @@ def test_build_target_selects_native_or_cross_release_cache_policy() -> None:
 
 
 def test_release_workflow_uses_bootstrap_zccache_for_cross_builds() -> None:
-    release_workflow = _repo_text(".github/workflows/release-auto.yml")
+    release_workflow = _repo_text(".github/workflows/auto-release.yml")
     action = _repo_text(".github/actions/build-target/action.yml")
 
     assert "bootstrap-zccache:" in release_workflow
@@ -227,7 +227,7 @@ def test_release_tests_exec_cached_in_every_native_wheel_family() -> None:
     not produce one (the musl build legs set `include_python: "false"`), so an
     alpine smoke leg could only ever fail and block the release.
     """
-    workflow = _repo_text(".github/workflows/release-auto.yml")
+    workflow = _repo_text(".github/workflows/auto-release.yml")
 
     assert "test-wheels:" in workflow
     for platform in (
@@ -260,7 +260,7 @@ def test_cross_builds_go_through_the_blessed_soldr_surface() -> None:
     lanes must use the latter.
     """
     action = _repo_text(".github/actions/build-target/action.yml")
-    release_workflow = _repo_text(".github/workflows/release-auto.yml")
+    release_workflow = _repo_text(".github/workflows/auto-release.yml")
     build_workflow = _repo_text(".github/workflows/build.yml")
 
     # The purge: no second toolchain provider, no legacy cross drivers.
@@ -360,7 +360,7 @@ def test_locked_mimalloc_pprof_selects_arm64_c11_atomics() -> None:
 
 
 def test_release_workflow_dry_run_builds_without_publishing() -> None:
-    workflow = _repo_text(".github/workflows/release-auto.yml")
+    workflow = _repo_text(".github/workflows/auto-release.yml")
 
     assert "dry-run:" in workflow
     assert "type: boolean" in workflow
@@ -372,9 +372,20 @@ def test_build_target_forces_msvc_host_toolchain_for_windows() -> None:
     action = _repo_text(".github/actions/build-target/action.yml")
 
     assert "1.95.0-x86_64-pc-windows-msvc" in action
-    assert 'rustup run "$RELEASE_RUST_TOOLCHAIN" rustc -vV' in action
+    assert 'info="$(soldr rustc -vV)"' in action
+    assert "HOST_TARGET=$(soldr rustc -vV" in action
     assert "Windows release builds must use the MSVC host toolchain" in action
-    assert 'rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc' in action
+    assert 'rustup run "$RELEASE_RUST_TOOLCHAIN" rustc' not in action
+
+
+def test_build_target_wrapper_smoke_routes_compiler_through_soldr() -> None:
+    action = _repo_text(".github/actions/build-target/action.yml")
+
+    assert 'rustc_bin="$smoke_root/rustc"' in action
+    assert 'exec env ZCCACHE_DISABLE=1 soldr rustc "$@"' in action
+    assert 'chmod +x "$rustc_bin"' in action
+    assert 'probe="$(staging/zccache${{ inputs.binary_ext }} "$rustc_bin" -vV)"' in action
+    assert 'rustup which --toolchain "$RELEASE_RUST_TOOLCHAIN" rustc' not in action
 
 
 def test_build_target_smoke_requires_valid_version_output() -> None:
@@ -446,7 +457,7 @@ def test_release_and_build_workflows_disable_cook_cache_for_linux_cross_matrix()
     }
 
     build_workflow = _repo_text(".github/workflows/build.yml")
-    release_workflow = _repo_text(".github/workflows/release-auto.yml")
+    release_workflow = _repo_text(".github/workflows/auto-release.yml")
 
     for workflow in (build_workflow, release_workflow):
         assert "prebuild_deps: ${{ matrix.prebuild_deps || 'soldr-cook' }}" in workflow
@@ -463,7 +474,7 @@ def test_release_and_build_workflows_disable_cook_cache_for_linux_cross_matrix()
 
 
 def test_release_workflow_uses_manual_dispatch_to_resume_existing_github_release() -> None:
-    workflow = _repo_text(".github/workflows/release-auto.yml")
+    workflow = _repo_text(".github/workflows/auto-release.yml")
 
     assert "RUN_ATTEMPT: ${{ github.run_attempt }}" in workflow
     assert 'if [ "${RUN_ATTEMPT:-1}" != "1" ]; then' in workflow

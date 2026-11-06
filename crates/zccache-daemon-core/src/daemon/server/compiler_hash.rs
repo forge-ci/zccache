@@ -87,15 +87,11 @@ struct ProbeOutput {
 /// bound the sync `-vV` probe. Capture, descendant containment, reader
 /// cancellation, and the aggregate byte limit all belong to kernal-api.
 fn output_within(cmd: kernal_api::SpawnSpec, timeout: std::time::Duration) -> ProbeOutcome {
-    const PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
-
-    // zccache#1562: running-process owns spawn *and* wait here, so the shared
-    // materialization/spawn guard has to bracket the whole bounded run rather
-    // than the spawn alone. A shared guard only blocks materialization (the
-    // exclusive side), never other spawns; this probe is a cold path taken
-    // once per compiler identity, normally ~10 ms, and bounded by `timeout`.
-    let _spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
-    match kernal_api::run_bounded_command(cmd, Some(timeout), PROBE_OUTPUT_LIMIT) {
+    // Never hold spawn admission while waiting for a child (soldr#3836).
+    // A queued materializer blocks the actor's later read acquisition, which
+    // prevents it from answering this probe. await_publishable covers foreign
+    // spawners' inherited writable descriptors after publication.
+    match zccache_core::wait::output_for(cmd, timeout) {
         Ok(output) => ProbeOutcome::Completed(ProbeOutput {
             success: output.exit.raw_code() == 0,
             stdout: output.stdout,
@@ -109,24 +105,27 @@ async fn output_within_async(
     cmd: kernal_api::SpawnSpec,
     timeout: std::time::Duration,
 ) -> ProbeOutcome {
-    const PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
-
-    // Keep the shared spawn/materialization exclusion inside the blocking
-    // operation. Holding its synchronous guard across `.await` would make the
-    // async probe non-Send and, more importantly, would not cover the actual
-    // native child creation on the kernel blocking lane.
-    match kernal_api::async_engine::launch_blocking(move || {
-        let _spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
-        kernal_api::run_bounded_command(cmd, Some(timeout), PROBE_OUTPUT_LIMIT)
-    })
-    .await
-    {
-        Ok(Ok(output)) => ProbeOutcome::Completed(ProbeOutput {
-            success: output.exit.raw_code() == 0,
+    // The canonical session acquires admission on the process actor only
+    // around native spawn, then releases it before waiting for the child.
+    // Erase the future type to keep the compile pipeline's Send check finite.
+    let probe: std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::io::Result<std::process::Output>> + Send>,
+    > = Box::pin(
+        crate::daemon::process::async_builder_output_with_priority_timeout(
+            cmd,
+            crate::daemon::process::CompilePriority::Normal,
+            timeout,
+            "compiler identity probe".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
+        ),
+    );
+    match probe.await {
+        Ok(output) => ProbeOutcome::Completed(ProbeOutput {
+            success: output.status.success(),
             stdout: output.stdout,
         }),
-        Ok(Err(kernal_api::BoundedProcessError::TimedOut)) => ProbeOutcome::TimedOut,
-        Ok(Err(_)) | Err(_) => ProbeOutcome::SpawnFailed,
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => ProbeOutcome::TimedOut,
+        Err(_) => ProbeOutcome::SpawnFailed,
     }
 }
 
@@ -280,7 +279,7 @@ impl CompilerHashCache {
         // FastLED/fbuild#1466: single-flight the `--version` probe per path
         // so a cold burst of compiles spawns it once; waiters re-check.
         let probe_gate = self.probes.get(&key);
-        let _probe_guard = probe_gate.lock_owned().await;
+        let _probe_guard = probe_gate.acquire_for(OPERATION_TIMEOUT).await;
         let previous = self.entries.get(&key).map(|entry| entry.clone());
         if let Some(entry) = &previous {
             if entry.mtime == mtime && entry.size == size {
@@ -597,7 +596,7 @@ fn warn_rustc_identity_fallback(path: &Path, reason: &'static str) {
 }
 
 fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
@@ -626,7 +625,7 @@ fn rustc_identity(path: &Path) -> Option<RustcIdentity> {
 }
 
 async fn rustc_identity_async(path: std::path::PathBuf) -> Option<RustcIdentity> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => Some(
@@ -666,7 +665,7 @@ async fn rustc_identity_async(path: std::path::PathBuf) -> Option<RustcIdentity>
 /// stubbed binaries (unit tests) or broken toolchains.
 #[allow(dead_code)] // Direct helper retained for the identity-output unit test.
 pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "-vV");
     // The running-process boundary makes this cold-path probe consoleless.
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
@@ -700,7 +699,7 @@ pub(super) fn hash_rustc_identity(path: &Path) -> Option<ContentHash> {
 /// (e.g. some `cl.exe` invocations) that only print version info to
 /// stderr — see the TODO below.
 pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(path).arg("--version");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(path, "--version");
     let timeout = rustc_probe_timeout();
     match output_within(cmd, timeout) {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -727,7 +726,7 @@ pub(super) fn hash_cc_identity(path: &Path) -> Option<ContentHash> {
 /// Async sibling of [`hash_cc_identity`]. See that function's doc comment
 /// for the rationale (issue #1166).
 pub(super) async fn hash_cc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("--version");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "--version");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -756,7 +755,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
     client_env: Vec<(String, String)>,
 ) -> Option<ContentHash> {
     let cmd = client_env.into_iter().fold(
-        kernal_api::SpawnSpec::new(&path).arg("-V"),
+        super::compiler_spawn::compiler_identity_probe_spawn(&path, "-V"),
         |spec, (key, value)| spec.env(key, value),
     );
     let timeout = rustc_probe_timeout();
@@ -774,7 +773,7 @@ pub(super) async fn hash_dylint_driver_identity_async(
 
 #[allow(dead_code)] // The cache calls `rustc_identity_async` to retain provenance.
 pub(super) async fn hash_rustc_identity_async(path: std::path::PathBuf) -> Option<ContentHash> {
-    let cmd = kernal_api::SpawnSpec::new(&path).arg("-vV");
+    let cmd = super::compiler_spawn::compiler_identity_probe_spawn(&path, "-vV");
     let timeout = rustc_probe_timeout();
     match output_within_async(cmd, timeout).await {
         ProbeOutcome::Completed(output) if output.success && !output.stdout.is_empty() => {
@@ -792,6 +791,10 @@ pub(super) async fn hash_rustc_identity_async(path: std::path::PathBuf) -> Optio
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: test fixtures spawn helper processes, not compilers"
+)]
 mod probe_timeout_tests {
     //! Issue #972: the `<compiler> -vV` identity probe must be bounded so a
     //! hung wrapper compiler cannot block cache-key computation.
@@ -924,3 +927,7 @@ mod dirty_flag_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/compiler_probe_spawn_guard.rs"]
+mod probe_spawn_guard_tests;

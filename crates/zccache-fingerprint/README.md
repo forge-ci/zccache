@@ -236,3 +236,12 @@ match cache.check(&files)? {
     }
 }
 ```
+
+## PCH input validation and replay (#1952)
+
+`pch_inputs` reads the `INPUT_FILE` / `INPUT_FILE_HASH` records of a clang PCH
+(spelling, size, mtime, xxh3 content hash) and decides whether that PCH can be
+served into the current workspace. An mtime-only mismatch on content-verified
+input under the caller's replay root is repaired by setting the recorded mtime;
+anything else is refused. The daemon calls it before serving a cached PCH; see
+[artifact-store.md](../../docs/architecture/artifact-store.md#strict-pch-serving-1952).

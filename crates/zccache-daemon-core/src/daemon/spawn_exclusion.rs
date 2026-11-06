@@ -34,22 +34,44 @@
 //! The critical sections contain no `.await`: the guard is a `std` lock held
 //! across a synchronous spawn or a synchronous copy + rename only.
 
-use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::PoisonError;
+use zccache_core::blocking_sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-static SPAWN_MATERIALIZE_LOCK: RwLock<()> = RwLock::new(());
+// Shared holds cover fork/exec only. Exclusive holds include a whole artifact
+// copy and publication, so allow eight times the short critical-section budget.
+// Acquisition uses the operation queue budget: legitimate copies can exceed
+// the shared hold budget, and every actual holder has its own watchdog ticket.
+static SPAWN_MATERIALIZE_LOCK: RwLock<()> = RwLock::with_hold_limits(
+    (),
+    zccache_core::sync::STATE_TIMEOUT,
+    zccache_core::sync::STATE_TIMEOUT.saturating_mul(8),
+);
 
 /// Shared guard for one child spawn. Hold it for the spawn call only.
-pub(crate) fn spawn_shared() -> RwLockReadGuard<'static, ()> {
+#[track_caller]
+fn spawn_shared() -> RwLockReadGuard<'static, ()> {
     SPAWN_MATERIALIZE_LOCK
-        .read()
+        .read_for(zccache_core::sync::OPERATION_TIMEOUT)
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Opaque actor-thread admission. Product callers never receive the shared
+/// guard, so it cannot be retained around a probe or child wait.
+pub(crate) fn spawn_admission() -> kernal_api::SpawnAdmission {
+    kernal_api::SpawnAdmission::new(|| Ok::<_, std::io::Error>(spawn_shared()))
+}
+
+#[cfg(test)]
+pub(crate) fn test_spawn_shared() -> RwLockReadGuard<'static, ()> {
+    spawn_shared()
 }
 
 /// Exclusive guard for one materialization copy + publish. Hold it from before
 /// the sibling temporary is opened for writing until after the rename.
+#[track_caller]
 pub(crate) fn materialize_exclusive() -> RwLockWriteGuard<'static, ()> {
     SPAWN_MATERIALIZE_LOCK
-        .write()
+        .write_for(zccache_core::sync::OPERATION_TIMEOUT)
         .unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -89,3 +111,7 @@ pub(crate) fn await_publishable(path: &std::path::Path) {
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "spawn_exclusion_watchdog_tests.rs"]
+mod watchdog_tests;

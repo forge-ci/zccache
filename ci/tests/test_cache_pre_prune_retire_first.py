@@ -90,23 +90,39 @@ def _run_transition(caches: list[dict[str, object]], extra: int = 0) -> dict:
     return json.loads(result.stdout)
 
 
-def test_live_1850_inventory_cannot_also_bootstrap_integration() -> None:
+def test_live_1850_inventory_retires_old_lock_caches_instead_of_freezing() -> None:
     """RED before #1850: peak 11.5 GB > 9.2 GB because superseded soldr
-    generations were charged a re-seed and the digest-pinned build-cache
-    fallbacks selected nothing."""
+    generations were charged a re-seed. Until #1996 the Integration producer
+    then left it over target with nothing left to delete, so writes froze;
+    now the plan retires the oldest old-lock build/cook caches until the
+    re-forecast fits (CACHE-026)."""
     caches = _live_1850_caches()
     plan = _run_transition(caches, LIVE_1850_EXTRA_BYTES)
 
-    # Keep the historical evidence unchanged: the new Integration producer
-    # no longer fits this old footprint, even after known dead generations.
-    assert plan["ok"] is False
+    assert plan["ok"] is False  # as-is it does not fit ...
     assert plan["projectedPeakBytes"] > TARGET
-    assert plan["deleteIds"] == []
+    assert plan["deleteIds"] == []  # forecast-dependent deletes still wait
+    over = set(plan["overTargetRetireIds"])
+    assert over and plan["projectedPeakAfterRetireBytes"] <= TARGET  # ... after retiring, it does
     by_id = {c["id"]: c["key"] for c in caches}
-    # The soldr 0.9.25 cook generations that a 0.9.26 sibling supersedes (#1852
-    # adds superseded mini/prepare generations and the retired arm64 f6caf leg).
+    assert over <= set(plan["retireFirstIds"])
+    assert all(OLD_LOCK in by_id[i] for i in over)
+    assert all(by_id[i].startswith(("cook-base-", "setup-soldr-buildcache-")) for i in over)
+    # Oldest first: nothing kept is older than something retired.
+    created = {c["id"]: c["created_at"] for c in caches}
+    candidates = [
+        c for c in caches
+        if c["id"] not in set(plan["retireFirstIds"]) - over
+        and c["key"].startswith(("cook-base-", "setup-soldr-buildcache-"))
+        and OLD_LOCK in c["key"]
+    ]
+    kept = [c for c in candidates if c["id"] not in over]
+    assert all(created[i] <= k["created_at"] for i in over for k in kept)
+    # The superseded soldr 0.9.25 cook generations (#1850/#1852) are still in
+    # the base retire-first set, independent of the over-target escalation.
+    base = set(plan["retireFirstIds"]) - over
     cooks = sorted(
-        by_id[i] for i in plan["retireFirstIds"]
+        by_id[i] for i in base
         if by_id[i].startswith("cook-base") and "f6cafa616" not in by_id[i]
     )
     assert cooks == [
@@ -114,16 +130,12 @@ def test_live_1850_inventory_cannot_also_bootstrap_integration() -> None:
         "cook-base-v2-linux-x64-glibc-rustc1.95.0-f9e7e4902-l" + OLD_LOCK + "-soldrv0.9.25",
         "cook-base-v2-linux-x64-glibc-rustc1.95.0-fnone-l" + OLD_LOCK + "-soldrv0.9.25",
     ]
-    # The x64 soldr0.9.25 f6cafa616 (#1838) family has no newer sibling.
-    assert not any(
-        "f6cafa616" in by_id[i] and "linux-x64" in by_id[i] for i in plan["retireFirstIds"]
-    )
-    # Dead generations are still identified, but a failed forecast withholds
-    # all forecast-dependent deletes.
-    assert all(OLD_LOCK in by_id[i] for i in plan["retireFirstIds"] if "cook-base" in by_id[i])
+    assert not any("f6cafa616" in by_id[i] and "linux-x64" in by_id[i] for i in base)
 
 
-def test_live_1850_prune_then_forecast_is_stable_after_retire_first_deletes() -> None:
+def test_live_1850_reforecast_after_retire_first_deletes_passes() -> None:
+    """The workflow deletes retireFirstIds, then re-forecasts. That second
+    forecast must pass (before #1996 it repeated the failure forever)."""
     caches = _live_1850_caches()
     first = _run_transition(caches, LIVE_1850_EXTRA_BYTES)
     dead = set(first["retireFirstIds"])
@@ -131,11 +143,10 @@ def test_live_1850_prune_then_forecast_is_stable_after_retire_first_deletes() ->
     survivors = [c for c in caches if c["id"] not in dead]
     freed = sum(int(c["size_in_bytes"]) for c in caches if c["id"] in dead)
     second = _run_transition(survivors, LIVE_1850_EXTRA_BYTES)
-    assert second["ok"] is False  # Integration still cannot fit after dead-only deletes
-    assert second["deleteIds"] == []
+    assert second["ok"] is True
     assert second["retireFirstIds"] == []
     assert second["currentBytes"] == first["currentBytes"] - freed
-    assert second["projectedPeakBytes"] == first["projectedPeakBytes"]
+    assert second["projectedPeakBytes"] == first["projectedPeakAfterRetireBytes"] <= TARGET
 
 
 def test_build_cache_fallbacks_are_digest_agnostic_and_keep_musl_check_profiles() -> None:
@@ -152,15 +163,17 @@ def test_build_cache_fallbacks_are_digest_agnostic_and_keep_musl_check_profiles(
 
 
 def test_genuinely_over_budget_generation_still_fails_closed_after_retire_first() -> None:
-    """Retire-first must not turn the forecast into a rubber stamp: dead
-    generations are still reported, but a peak above target stays a failure
-    and withholds the forecast-dependent deletes."""
+    """Retire-first must not turn the forecast into a rubber stamp: when even
+    retiring every superseded old-lock cache leaves the peak above target, the
+    plan stays a failure, says so (CACHE-026), and withholds the
+    forecast-dependent and over-target deletes."""
     caches = _live_1850_caches() + [
         {
             "id": 9_000,
-            "key": f"cook-base-v2-linux-x64-glibc-rustc1.95.0-fnone-l{OLD_LOCK}-soldrv0.9.26-bloat",
+            # Current-lock, so no amount of superseded retirement removes it.
+            "key": f"cook-base-v2-linux-x64-glibc-rustc1.95.0-fnone-l{NEW_LOCK}-soldrv0.9.26-bloat",
             "ref": "refs/heads/main",
-            "size_in_bytes": 1_500_000_000,
+            "size_in_bytes": 9_000_000_000,
             "created_at": "2026-09-30T00:00:00Z",
         }
     ]
@@ -170,6 +183,10 @@ def test_genuinely_over_budget_generation_still_fails_closed_after_retire_first(
     assert plan["deleteIds"] == []
     assert plan["projectedPeakBytes"] > TARGET
     assert len(plan["retireFirstIds"]) >= 3  # dead generations still retirable
+    assert "after retiring all" in plan["reason"] and "CACHE-026" in plan["reason"]
+    assert plan["overTargetRetireIds"] == []
+    assert plan["overTargetCandidateIds"]
+    assert plan["projectedPeakAfterRetireBytes"] > TARGET
 
 
 def test_superseded_soldr_cook_bases_retire_first_even_on_the_current_lock() -> None:
@@ -190,3 +207,76 @@ def test_superseded_soldr_cook_bases_retire_first_even_on_the_current_lock() -> 
     assert plan["ok"] is True
     assert plan["retireFirstIds"] == [1, 3]
     assert 2 not in plan["deleteIds"]
+
+
+# --- #1996: live inventory of 2026-10-26 (51 entries, 8.79 GB) --------------
+# Every build/cook entry is keyed to Cargo.lock f0b451a5 / soldr v0.9.38; main
+# moved to 24e5a458 on 2026-10-22 and cache-pre-prune failed closed on every
+# push since ("projected peak 10240744545 exceeds transition target"), with
+# ZCCACHE_CACHE_WRITES=false freezing every main-push cache write.
+LIVE_1996_CACHES = ROOT / "ci/tests/data/zccache_caches_2026-10-26.json"
+LIVE_1996_LOCK_LF = "24e5a458d8ed8ce7"
+LIVE_1996_LOCK_CRLF = "b7d60dd91261700d"
+LIVE_1996_OLD_LOCKS = ("f0b451a55dc2de6d", "2b403828b00c09ec", "47f8cd0149dac684", "8a3283ede99dde73")
+
+
+def _plan_1996(caches: list[dict[str, object]]) -> dict:
+    total = sum(int(c["size_in_bytes"]) for c in caches)
+    script = (
+        "const fs=require('node:fs');"
+        "const {planLockTransitionPrePrune}=require(process.argv[1]);"
+        "const {caches,total}=JSON.parse(fs.readFileSync(0,'utf8'));"
+        f"const h={{linux:'{LIVE_1996_LOCK_LF}',macos:'{LIVE_1996_LOCK_LF}',windows:['{LIVE_1996_LOCK_CRLF}']}};"
+        "process.stdout.write(JSON.stringify(planLockTransitionPrePrune(caches,h,total,total)));"
+    )
+    result = subprocess.run(
+        ["node", "-e", script, str(ROOT / "ci/cache_cleanup_plan.js")],
+        input=json.dumps({"caches": caches, "total": total}),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_live_1996_frozen_inventory_retires_superseded_and_projects_under_target() -> None:
+    caches = json.loads(LIVE_1996_CACHES.read_text(encoding="utf-8"))
+    assert len(caches) == 51
+    plan = _plan_1996(caches)
+    # The frozen forecast, reproduced exactly.
+    assert plan["projectedPeakBytes"] == 10_240_744_545
+    assert plan["ok"] is False
+    # #1996: retire superseded old-lock caches instead of deleting nothing.
+    by_id = {c["id"]: c for c in caches}
+    over = plan["overTargetRetireIds"]
+    assert over, plan["reason"]
+    assert set(over) <= set(plan["retireFirstIds"])
+    for cache_id in over:
+        key = by_id[cache_id]["key"]
+        assert key.startswith(("cook-base-", "setup-soldr-buildcache-")), key
+        assert any(lock in key for lock in LIVE_1996_OLD_LOCKS), key
+    assert plan["projectedPeakAfterRetireBytes"] <= TARGET
+
+    # What the workflow does next: delete retire-first, re-forecast. It fits,
+    # so cache writes resume on this push instead of staying frozen.
+    dead = set(plan["retireFirstIds"])
+    second = _plan_1996([c for c in caches if c["id"] not in dead])
+    assert second["ok"] is True, second["reason"]
+    assert second["projectedPeakBytes"] == plan["projectedPeakAfterRetireBytes"]
+    assert second["projectedPeakBytes"] <= TARGET
+    # The current Integration build cache (newest, largest) is not among the
+    # superseded entries retired first.
+    integration = next(c["id"] for c in caches if c["key"].endswith("-integration-f0b451a55dc2de6d"))
+    assert integration not in over
+
+
+def test_retire_never_touches_a_current_lock_entry() -> None:
+    caches = json.loads(LIVE_1996_CACHES.read_text(encoding="utf-8"))
+    current = {
+        "id": 1, "ref": "refs/heads/main", "size_in_bytes": 970_114_689,
+        "key": f"setup-soldr-buildcache-v2-linux-x64-3081971d3321c28a-integration-{LIVE_1996_LOCK_LF}",
+        "created_at": "2026-01-01T00:00:00Z",  # oldest of all, still never a candidate
+    }
+    plan = _plan_1996(caches + [current])
+    assert 1 not in plan.get("overTargetRetireIds", [])
+    assert 1 not in plan["retireFirstIds"]

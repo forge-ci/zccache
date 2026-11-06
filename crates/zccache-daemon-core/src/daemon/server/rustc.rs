@@ -503,21 +503,76 @@ pub(super) fn rustc_depfile_output_path(
     if !rustc_args.emit_types.iter().any(|kind| kind == "dep-info") {
         return None;
     }
-    if let Some((_, path)) = rustc_args
+    rustc_aux_output_path(rustc_args, "dep-info", cwd)
+}
+
+/// Enumerate only requested emit destinations, never neighboring stale files.
+fn rustc_aux_output_path(
+    args: &crate::depgraph::RustcParsedArgs,
+    kind: &str,
+    cwd: &Path,
+) -> Option<NormalizedPath> {
+    if let Some((_, path)) = args
         .explicit_emit_paths
         .iter()
-        .find(|(kind, _)| kind == "dep-info")
+        .rev()
+        .find(|(k, _)| k == kind)
     {
         return Some(path.clone());
     }
-    let crate_name = rustc_args.effective_crate_name();
-    let extra_filename = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let output_dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-    Some(
-        output_dir
-            .join(format!("{crate_name}{extra_filename}.d"))
-            .into(),
-    )
+    let extension = match kind {
+        "metadata" => "rmeta",
+        "dep-info" => "d",
+        "obj" => "o",
+        "asm" => "s",
+        "llvm-ir" => "ll",
+        "llvm-bc" | "bitcode" => "bc",
+        "mir" => "mir",
+        // The target-aware primary parser already owns linked output naming.
+        _ => return None,
+    };
+    let suffix = args.extra_filename.as_deref().unwrap_or("");
+    let prefix = if kind == "metadata" { "lib" } else { "" };
+    let filename = format!(
+        "{prefix}{}{suffix}.{extension}",
+        args.effective_crate_name()
+    );
+    let path = if let Some(output) = &args.output_file {
+        let count = args
+            .emit_types
+            .iter()
+            .filter(|kind| !args.explicit_emit_paths.iter().any(|(k, _)| k == *kind))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let syntax = match HostFamily::current() {
+            HostFamily::Windows => crate::compiler::RustcPathSyntax::Windows,
+            _ => crate::compiler::RustcPathSyntax::Unix,
+        };
+        match crate::compiler::rustc_explicit_output_plan(
+            &output.to_string_lossy(),
+            kind,
+            count,
+            &filename,
+            suffix,
+            false,
+            syntax,
+        ) {
+            crate::compiler::RustcOutputPlan::Explicit(path) => {
+                NormalizedPath::new(path).into_path_buf()
+            }
+            crate::compiler::RustcOutputPlan::InDirectory {
+                directory,
+                filename,
+            } => Path::new(&directory).join(filename),
+        }
+    } else {
+        args.out_dir.as_deref().unwrap_or(cwd).join(filename)
+    };
+    Some(if path.is_absolute() {
+        path.into()
+    } else {
+        cwd.join(path).into()
+    })
 }
 
 #[derive(Clone)]
@@ -536,60 +591,13 @@ pub(super) fn rustc_expected_output_paths(
     let explicit_link = rustc_args
         .explicit_emit_paths
         .iter()
+        .rev()
         .find(|(kind, _)| kind == "link")
         .map(|(_, path)| path.clone());
     let mut paths = vec![explicit_link.unwrap_or_else(|| NormalizedPath::new(primary_output_path))];
-    let crate_name = rustc_args.effective_crate_name();
-    let ext_suffix = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-
-    for emit_type in &rustc_args.emit_types {
-        if rustc_args
-            .explicit_emit_paths
-            .iter()
-            .any(|(kind, _)| kind == emit_type)
-        {
-            continue;
-        }
-        let candidate = match emit_type.as_str() {
-            "metadata" => Some(dir.join(format!("lib{crate_name}{ext_suffix}.rmeta"))),
-            // The parser's primary output is authoritative for `link`: it
-            // already accounts for bin, staticlib, proc-macro, target, and
-            // explicit `--emit=link=...` naming. Inferring an rlib here would
-            // create a false required output for those crate types.
-            "link" => None,
-            "dep-info" => Some(dir.join(format!("{crate_name}{ext_suffix}.d"))),
-            "obj" => Some(dir.join(format!("{crate_name}{ext_suffix}.o"))),
-            "asm" => Some(dir.join(format!("{crate_name}{ext_suffix}.s"))),
-            "llvm-ir" => Some(dir.join(format!("{crate_name}{ext_suffix}.ll"))),
-            "llvm-bc" | "bitcode" => Some(dir.join(format!("{crate_name}{ext_suffix}.bc"))),
-            "mir" => Some(dir.join(format!("{crate_name}{ext_suffix}.mir"))),
-            _ => None,
-        };
-        if let Some(path) = candidate {
-            push_unique_output_path(&mut paths, path.into());
-        }
-    }
-
-    for (kind, explicit_path) in &rustc_args.explicit_emit_paths {
-        let replacement = paths.iter().position(|path| match kind.as_str() {
-            "metadata" => path.extension().and_then(|ext| ext.to_str()) == Some("rmeta"),
-            "link" => matches!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("rlib" | "a" | "exe") | None
-            ),
-            "dep-info" => path.extension().and_then(|ext| ext.to_str()) == Some("d"),
-            "obj" => path.extension().and_then(|ext| ext.to_str()) == Some("o"),
-            "asm" => path.extension().and_then(|ext| ext.to_str()) == Some("s"),
-            "llvm-ir" => path.extension().and_then(|ext| ext.to_str()) == Some("ll"),
-            "llvm-bc" | "bitcode" => path.extension().and_then(|ext| ext.to_str()) == Some("bc"),
-            "mir" => path.extension().and_then(|ext| ext.to_str()) == Some("mir"),
-            _ => false,
-        });
-        if let Some(index) = replacement {
-            paths[index] = explicit_path.clone();
-        } else {
-            push_unique_output_path(&mut paths, explicit_path.clone());
+    for kind in &rustc_args.emit_types {
+        if let Some(path) = rustc_aux_output_path(rustc_args, kind, cwd) {
+            push_unique_output_path(&mut paths, path);
         }
     }
 
@@ -673,6 +681,40 @@ impl HostFamily {
     }
 }
 
+/// Dylint's own truthiness rule (`dylint_internal::env::enabled`): set and
+/// not `"0"`.
+fn dylint_env_enabled(env: &[(String, String)], name: &str) -> bool {
+    env.iter().any(|(key, value)| key == name && value != "0")
+}
+
+/// Whether `dylint-link` writes the `<crate>@<toolchain>` copy itself.
+///
+/// zccache#2023: Dylint 6.2.0's `dylint-link` skips the copy while
+/// `cargo-dylint` builds libraries (`DYLINT_BUILDING_LIBRARIES`) and leaves
+/// it to `cargo-dylint` after the build, unless
+/// `DYLINT_LINK_ENABLE_COPY_LIBRARY` forces it back on. Dylint 6.0.x never
+/// sets `DYLINT_BUILDING_LIBRARIES` and always copies, so this is `true`
+/// for it.
+fn dylint_link_writes_toolchain_copy(env: &[(String, String)]) -> bool {
+    !dylint_env_enabled(env, "DYLINT_BUILDING_LIBRARIES")
+        || dylint_env_enabled(env, "DYLINT_LINK_ENABLE_COPY_LIBRARY")
+}
+
+/// A `dylint-link` cdylib whose linker writes no toolchain copy: its output
+/// set is the cdylib alone, which is complete.
+fn dylint_link_skips_toolchain_copy(
+    rustc_args: &crate::depgraph::RustcParsedArgs,
+    client_env: Option<&[(String, String)]>,
+) -> bool {
+    let is_dylint_link = rustc_args
+        .linker
+        .as_ref()
+        .and_then(|linker| linker.file_stem())
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("dylint-link"));
+    is_dylint_link && client_env.is_some_and(|env| !dylint_link_writes_toolchain_copy(env))
+}
+
 /// The `<crate>@<toolchain>` copy `dylint-link` writes beside the lint
 /// cdylib — `lib`-prefixed on unix, bare on Windows — the second half of
 /// the Dylint output set, without which a replayed hit would leave dylint
@@ -701,6 +743,9 @@ fn dylint_library_sidecar_output_path(
         return None;
     }
     let env = client_env?;
+    if !dylint_link_writes_toolchain_copy(env) {
+        return None;
+    }
     let env_value = |name: &str| {
         env.iter()
             .find_map(|(key, value)| (key == name).then_some(value.as_str()))
@@ -881,6 +926,7 @@ pub(super) fn dylint_cdylib_has_complete_output_identity(
     client_env: Option<&[(String, String)]>,
 ) -> bool {
     rustc_args.crate_types != ["cdylib"]
+        || dylint_link_skips_toolchain_copy(rustc_args, client_env)
         || dylint_library_sidecar_output_path(
             rustc_args,
             primary_output_path,
@@ -911,80 +957,20 @@ pub(super) fn collect_rustc_output_files(
         size: primary_meta.len(),
     }];
 
-    // Find additional outputs based on --emit types
-    let crate_name = rustc_args.effective_crate_name();
-    let ext_suffix = rustc_args.extra_filename.as_deref().unwrap_or("");
-    let dir = rustc_args.out_dir.as_deref().unwrap_or(cwd);
-
-    for emit_type in &rustc_args.emit_types {
-        let candidate = match emit_type.as_str() {
-            "metadata" => {
-                let path = dir.join(format!("lib{crate_name}{ext_suffix}.rmeta"));
-                if path != primary_output_path && path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            }
-            "link" => {
-                // Could be rlib or staticlib
-                let rlib = dir.join(format!("lib{crate_name}{ext_suffix}.rlib"));
-                let staticlib = dir.join(format!("lib{crate_name}{ext_suffix}.a"));
-                if rlib != primary_output_path && rlib.exists() {
-                    Some(rlib)
-                } else if staticlib != primary_output_path && staticlib.exists() {
-                    Some(staticlib)
-                } else {
-                    None
-                }
-            }
-            "dep-info" => {
-                let path = dir.join(format!("{crate_name}{ext_suffix}.d"));
-                if path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if let Some(path) = candidate {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            // Avoid duplicates
-            if !outputs.iter().any(|existing| existing.name == name) {
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    if meta.is_file() {
-                        outputs.push(RustcOutputFile {
-                            name,
-                            path: path.into(),
-                            size: meta.len(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    for (_, path) in &rustc_args.explicit_emit_paths {
-        if path != primary_output_path && path.exists() {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            if !outputs.iter().any(|existing| existing.name == name) {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    if meta.is_file() {
-                        outputs.push(RustcOutputFile {
-                            name,
-                            path: path.clone(),
-                            size: meta.len(),
-                        });
-                    }
+    for path in rustc_expected_output_paths(rustc_args, primary_output_path, cwd, None) {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if !outputs.iter().any(|existing| existing.name == name) {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if meta.is_file() {
+                    outputs.push(RustcOutputFile {
+                        name,
+                        path,
+                        size: meta.len(),
+                    });
                 }
             }
         }

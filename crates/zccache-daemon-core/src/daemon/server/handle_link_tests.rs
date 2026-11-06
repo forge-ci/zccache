@@ -92,7 +92,11 @@ chmod 640 "$output.debug"
     }
 
     // Drain publication and flush the index before testing a restart hit.
-    let publication = server.state.artifact_publication.write().await;
+    let publication = server
+        .state
+        .artifact_publication
+        .write_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     for entry in server.state.artifacts.iter() {
         server.state.artifact_store.insert(entry.key(), &entry.meta);
     }

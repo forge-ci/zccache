@@ -1,7 +1,7 @@
 """Guards the release recovery contract documented in CLAUDE.md § Publishing.
 
 The claim that "a failed release run publishes nothing, so re-dispatching is
-safe" rests on three properties of `release-auto.yml`:
+safe" rests on three properties of `auto-release.yml`:
 
 1. every publish job requires `result == 'success'` from each upstream, so the
    `always()` in those conditions cannot make them permissive;
@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github" / "workflows" / "release-auto.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "auto-release.yml"
 
 JOB_RE = re.compile(r"^  [a-z][a-z0-9_-]*:$")
 

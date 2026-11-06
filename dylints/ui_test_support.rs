@@ -2,7 +2,7 @@
 pub(crate) struct CurrentDirGuard(std::path::PathBuf);
 
 impl CurrentDirGuard {
-    fn set(path: &std::path::Path) -> Self {
+    pub(crate) fn set(path: &std::path::Path) -> Self {
         let previous = std::env::current_dir().expect("current dir should be readable");
         std::env::set_current_dir(path).expect("current dir should switch to manifest dir");
         Self(previous)

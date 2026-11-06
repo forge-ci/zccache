@@ -3,9 +3,11 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use zccache_core::blocking_sync::Mutex;
 
+use crate::core::sync::{State, STATE_TIMEOUT};
 use crate::core::NormalizedPath;
 use crate::download::{
     percentage, stable_download_id, DownloadDaemonStatus, DownloadOptions, DownloadPhase,
@@ -14,7 +16,7 @@ use crate::download::{
 use crate::download_protocol::{Request, Response};
 use dashmap::DashMap;
 use kernal_api::async_engine::CancellationSource;
-use tokio::sync::{watch, Notify, RwLock};
+use tokio::sync::{watch, Notify};
 
 #[derive(Clone)]
 struct FileLogger {
@@ -36,7 +38,7 @@ impl FileLogger {
     }
 
     fn log(&self, message: &str) {
-        if let Ok(mut file) = self.file.lock() {
+        if let Ok(mut file) = self.file.lock_for(zccache_core::sync::STATE_TIMEOUT) {
             let _ = writeln!(file, "{message}");
         }
     }
@@ -47,7 +49,7 @@ struct DownloadJob {
     url: String,
     destination: NormalizedPath,
     metadata_dir: NormalizedPath,
-    status: RwLock<DownloadStatus>,
+    status: State<DownloadStatus>,
     updates: watch::Sender<u64>,
     active_clients: AtomicUsize,
     cancel_source: CancellationSource,
@@ -202,7 +204,10 @@ async fn handle_connection(
                 match attach_job(&state, &url, destination, options).await {
                     Ok((job, initiator)) => {
                         attached_job_id = Some(job.id.clone());
-                        let status = job.status.read().await.clone();
+                        let status = job
+                            .status
+                            .with_for(STATE_TIMEOUT, |status| status.clone())
+                            .await;
                         state.logger.log(&format!(
                             "client {client_id} attached to {} initiator={initiator}",
                             job.id
@@ -231,9 +236,18 @@ async fn handle_connection(
                     .map_err(|e| e.to_string())?;
                     continue;
                 };
-                match state.jobs.get(job_id) {
+                // Own the job before suspension; a DashMap shard guard must
+                // not cover state acquisition or response transmission.
+                let job = state
+                    .jobs
+                    .get(job_id)
+                    .map(|entry| Arc::clone(entry.value()));
+                match job {
                     Some(job) => {
-                        let status = job.status.read().await.clone();
+                        let status = job
+                            .status
+                            .with_for(STATE_TIMEOUT, |status| status.clone())
+                            .await;
                         conn.send(&Response::DownloadStatusResult { status })
                             .await
                             .map_err(|e| e.to_string())?;
@@ -264,7 +278,10 @@ async fn handle_connection(
                     .map_err(|e| e.to_string())?;
                     continue;
                 };
-                let current = job.status.read().await.clone();
+                let current = job
+                    .status
+                    .with_for(STATE_TIMEOUT, |status| status.clone())
+                    .await;
                 if is_terminal(&current) {
                     send_terminal(&mut conn, current).await?;
                     continue;
@@ -281,7 +298,10 @@ async fn handle_connection(
                 } else {
                     Some(rx.changed().await)
                 };
-                let status = job.status.read().await.clone();
+                let status = job
+                    .status
+                    .with_for(STATE_TIMEOUT, |status| status.clone())
+                    .await;
                 match wait_result {
                     Some(Ok(())) => {
                         if is_terminal(&status) {
@@ -370,16 +390,24 @@ async fn attach_job(
     options: DownloadOptions,
 ) -> Result<(Arc<DownloadJob>, bool), String> {
     let download_id = stable_download_id(&destination);
-    if let Some(existing) = state.jobs.get(&download_id) {
-        let existing = Arc::clone(existing.value());
-        if existing.url != url {
-            return Err(format!(
-                "destination {} is already downloading from {}",
-                destination.display(),
-                existing.url
-            ));
+    let existing = {
+        if let Some(entry) = state.jobs.get(&download_id) {
+            if entry.url != url {
+                return Err(format!(
+                    "destination {} is already downloading from {}",
+                    destination.display(),
+                    entry.url
+                ));
+            }
+            // Retain the client while the shard still protects membership;
+            // refresh status only after the owned job leaves this scope.
+            entry.active_clients.fetch_add(1, Ordering::Relaxed);
+            Some(Arc::clone(entry.value()))
+        } else {
+            None
         }
-        existing.active_clients.fetch_add(1, Ordering::Relaxed);
+    };
+    if let Some(existing) = existing {
         refresh_client_count(&existing).await;
         return Ok((existing, false));
     }
@@ -419,37 +447,44 @@ async fn attach_job(
         url: url.to_string(),
         destination: destination.clone(),
         metadata_dir,
-        status: RwLock::new(initial_status),
+        status: State::new(initial_status),
         updates: tx,
         active_clients: AtomicUsize::new(1),
         cancel_source: CancellationSource::new(),
         cleanup_pending: AtomicBool::new(false),
     });
 
-    match state.jobs.entry(download_id.clone()) {
-        dashmap::mapref::entry::Entry::Occupied(entry) => {
-            let existing = Arc::clone(entry.get());
-            existing.active_clients.fetch_add(1, Ordering::Relaxed);
-            refresh_client_count(&existing).await;
-            Ok((existing, false))
-        }
-        dashmap::mapref::entry::Entry::Vacant(entry) => {
-            entry.insert(Arc::clone(&job));
-            state.logger.log(&format!(
-                "download created id={} destination={}",
-                job.id,
-                destination.display()
-            ));
-            let should_spawn = {
-                let status = job.status.read().await.clone();
-                !is_terminal(&status)
-            };
-            if should_spawn {
-                spawn_download_worker(Arc::clone(state), Arc::clone(&job), options);
+    // Entry guards are confined to this synchronous block. The returned
+    // Arc owns the job independently of the map before any state await.
+    let (job, initiator) = {
+        match state.jobs.entry(download_id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => {
+                entry.get().active_clients.fetch_add(1, Ordering::Relaxed);
+                (Arc::clone(entry.get()), false)
             }
-            Ok((job, true))
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(Arc::clone(&job));
+                (job, true)
+            }
         }
+    };
+    if !initiator {
+        refresh_client_count(&job).await;
+        return Ok((job, false));
     }
+    state.logger.log(&format!(
+        "download created id={} destination={}",
+        job.id,
+        destination.display()
+    ));
+    let should_spawn = job
+        .status
+        .with_for(STATE_TIMEOUT, |status| !is_terminal(status))
+        .await;
+    if should_spawn {
+        spawn_download_worker(Arc::clone(state), Arc::clone(&job), options);
+    }
+    Ok((job, true))
 }
 
 fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options: DownloadOptions) {
@@ -462,14 +497,18 @@ fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options
             move |downloaded: u64, total: Option<u64>, phase: DownloadPhase| {
                 let progress_job = Arc::clone(&progress_job);
                 tokio::spawn(async move {
-                    let mut status = progress_job.status.write().await;
-                    status.phase = phase;
-                    status.total_bytes = total;
-                    status.downloaded_bytes = downloaded;
-                    status.percentage = percentage(downloaded, total);
-                    status.active_clients =
-                        progress_job.active_clients.load(Ordering::Relaxed) as u32;
-                    let _ = progress_job.updates.send(downloaded);
+                    progress_job
+                        .status
+                        .with_for(STATE_TIMEOUT, |status| {
+                            status.phase = phase;
+                            status.total_bytes = total;
+                            status.downloaded_bytes = downloaded;
+                            status.percentage = percentage(downloaded, total);
+                            status.active_clients =
+                                progress_job.active_clients.load(Ordering::Relaxed) as u32;
+                            let _ = progress_job.updates.send(downloaded);
+                        })
+                        .await
                 });
             },
         );
@@ -484,37 +523,39 @@ fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options
         )
         .await;
 
-        let mut status = job.status.write().await;
-        match result {
-            Ok(total) => {
-                let total = total.unwrap_or(status.downloaded_bytes);
-                status.phase = DownloadPhase::Completed;
-                status.total_bytes = Some(total);
-                status.downloaded_bytes = total;
-                status.percentage = Some(100.0);
-                status.error = None;
-                state
-                    .logger
-                    .log(&format!("download completed id={} bytes={total}", job.id));
-            }
-            Err(crate::download::DownloadError::Cancelled) => {
-                status.phase = DownloadPhase::Cancelled;
-                status.error = None;
-                state
-                    .logger
-                    .log(&format!("download cancelled id={}", job.id));
-            }
-            Err(err) => {
-                status.phase = DownloadPhase::Failed;
-                status.error = Some(err.to_string());
-                state
-                    .logger
-                    .log(&format!("download failed id={} error={err}", job.id));
-            }
-        }
-        status.active_clients = job.active_clients.load(Ordering::Relaxed) as u32;
-        let _ = job.updates.send(status.downloaded_bytes);
-        drop(status);
+        job.status
+            .with_for(STATE_TIMEOUT, |status| {
+                match result {
+                    Ok(total) => {
+                        let total = total.unwrap_or(status.downloaded_bytes);
+                        status.phase = DownloadPhase::Completed;
+                        status.total_bytes = Some(total);
+                        status.downloaded_bytes = total;
+                        status.percentage = Some(100.0);
+                        status.error = None;
+                        state
+                            .logger
+                            .log(&format!("download completed id={} bytes={total}", job.id));
+                    }
+                    Err(crate::download::DownloadError::Cancelled) => {
+                        status.phase = DownloadPhase::Cancelled;
+                        status.error = None;
+                        state
+                            .logger
+                            .log(&format!("download cancelled id={}", job.id));
+                    }
+                    Err(err) => {
+                        status.phase = DownloadPhase::Failed;
+                        status.error = Some(err.to_string());
+                        state
+                            .logger
+                            .log(&format!("download failed id={} error={err}", job.id));
+                    }
+                }
+                status.active_clients = job.active_clients.load(Ordering::Relaxed) as u32;
+                let _ = job.updates.send(status.downloaded_bytes);
+            })
+            .await;
 
         if job.active_clients.load(Ordering::Relaxed) == 0 {
             state.jobs.remove(&job.id);
@@ -523,9 +564,12 @@ fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options
 }
 
 async fn refresh_client_count(job: &Arc<DownloadJob>) {
-    let mut status = job.status.write().await;
-    status.active_clients = job.active_clients.load(Ordering::Relaxed) as u32;
-    let _ = job.updates.send(status.downloaded_bytes);
+    job.status
+        .with_for(STATE_TIMEOUT, |status| {
+            status.active_clients = job.active_clients.load(Ordering::Relaxed) as u32;
+            let _ = job.updates.send(status.downloaded_bytes);
+        })
+        .await
 }
 
 async fn cancel_client(state: &Arc<SharedState>, job_id: &str) -> DownloadStatus {
@@ -535,7 +579,9 @@ async fn cancel_client(state: &Arc<SharedState>, job_id: &str) -> DownloadStatus
         .get(job_id)
         .map(|entry| Arc::clone(entry.value()))
     {
-        job.status.read().await.clone()
+        job.status
+            .with_for(STATE_TIMEOUT, |status| status.clone())
+            .await
     } else {
         DownloadStatus {
             phase: DownloadPhase::Cancelled,
@@ -561,14 +607,20 @@ async fn detach_client(state: &Arc<SharedState>, job_id: &str) {
     let prev = job.active_clients.fetch_sub(1, Ordering::Relaxed);
     let new_count = prev.saturating_sub(1);
     let downloaded_bytes = {
-        let mut status = job.status.write().await;
-        status.active_clients = new_count as u32;
-        status.downloaded_bytes
+        job.status
+            .with_for(STATE_TIMEOUT, |status| {
+                status.active_clients = new_count as u32;
+                status.downloaded_bytes
+            })
+            .await
     };
     let _ = job.updates.send(downloaded_bytes);
     if new_count == 0 {
         job.cleanup_pending.store(true, Ordering::Relaxed);
-        let status = job.status.read().await.clone();
+        let status = job
+            .status
+            .with_for(STATE_TIMEOUT, |status| status.clone())
+            .await;
         if !is_terminal(&status) {
             state.logger.log(&format!("download abandoned id={job_id}"));
             job.cancel_source.cancel();

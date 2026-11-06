@@ -14,6 +14,7 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaterializeTemporaryOpen,
     MaterializePublish,
     MaintenanceStoreLockPending,
+    MaterializationStoreLockPending,
 }
 
 struct ActiveHook {

@@ -168,7 +168,9 @@ reason = "Endpoint display wording and probe policy are product protocol policy.
 name = "tokio"
 disposition = "extend"
 kernel_capability = "runtime, task, clock, channel, I/O, and blocking-work facade"
-manifests = ["crates/zccache-cli-core/Cargo.toml", "crates/zccache-daemon-core/Cargo.toml", "crates/zccache-download/Cargo.toml", "crates/zccache-ipc/Cargo.toml", "crates/zccache/Cargo.toml"]
+# core owns the bounded synchronization and runtime-bridge adapters; raw
+# backend synchronization is denied outside those adapters by Dylint.
+manifests = ["crates/zccache-core/Cargo.toml", "crates/zccache-cli-core/Cargo.toml", "crates/zccache-daemon-core/Cargo.toml", "crates/zccache-download/Cargo.toml", "crates/zccache-ipc/Cargo.toml", "crates/zccache/Cargo.toml"]
 [[backend_dependency]]
 name = "tokio-util"
 disposition = "extend"

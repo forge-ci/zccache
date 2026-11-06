@@ -258,14 +258,14 @@ pub(super) fn new_shared_state(
             sessions: SessionManager::new(std::time::Duration::from_secs(300)),
             session_staged_profiles: DashMap::new(),
             link_output_locks: DashMap::new(),
-            system_includes: Mutex::new(system_includes_loaded),
+            system_includes: AsyncState::new(system_includes_loaded),
             system_include_probes: KeyedLocks::default(),
             system_includes_cache_path,
             dep_graph: arc_swap::ArcSwap::from_pointee(DepGraph::new()),
             artifacts,
             cache_system,
-            watcher: Mutex::new(None),
-            watched_dirs: Mutex::new(HashSet::new()),
+            watcher: AsyncState::new(None),
+            watched_dirs: AsyncState::new(HashSet::new()),
             shutdown,
             last_activity: AtomicU64::new(now),
             active_cache_requests: AtomicUsize::new(0),
@@ -302,14 +302,15 @@ pub(super) fn new_shared_state(
             pch_source_map: DashMap::new(),
             journal: CompileJournal::new(crate::core::config::log_dir_from_cache_dir(cache_dir)),
             in_flight_bytes: AtomicUsize::new(0),
-            disk_maintenance: Mutex::new(()),
+            disk_maintenance: Arc::new(Gate::new()),
             disk_maintenance_progress: tokio::sync::watch::channel(
                 DiskMaintenanceProgress::default(),
             )
             .0,
-            depgraph_persistence: StdMutex::new(()),
-            artifact_publication: Arc::new(kernal_api::async_engine::RwLock::new(())),
+            depgraph_persistence: Arc::new(Gate::new()),
+            artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
+            staged_materialization_init: Arc::new(Gate::new()),
             persist_semaphore: Arc::new(tokio::sync::Semaphore::new(persist_workers_default())),
             compile_concurrency,
             compile_resource_gate:
@@ -333,7 +334,7 @@ pub(super) fn new_shared_state(
             dep_graph_persisted: AtomicBool::new(false),
             dep_graph_load_complete: AtomicBool::new(true),
             dep_graph_load_notify: Arc::new(Notify::new()),
-            depgraph_load_warning: StdMutex::new(None),
+            depgraph_load_warning: AsyncState::new(None),
             in_flight_exec: DashMap::new(),
             pending_cache_writes: DashMap::new(),
             exec_store,
@@ -413,16 +414,13 @@ impl DaemonServer {
     /// stale or corrupt `depgraph.bin` is visible to operators. Issue #320.
     ///
     /// **Post-#640**: takes `&self` and uses the field's existing
-    /// canonical async `Mutex` via `blocking_lock` — safe to call from a
+    /// canonical async `Mutex` via `with_blocking_for` — safe to call from a
     /// `tokio::task::spawn_blocking` after `run()` has started so the
     /// daemon can move the depgraph load off the bind critical path.
     pub fn set_depgraph_load_warning(&self, warning: String) {
-        let mut guard = self
-            .state
+        self.state
             .depgraph_load_warning
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = Some(warning);
+            .with_blocking_for(STATE_TIMEOUT, |slot| *slot = Some(warning));
     }
 
     /// Get a snapshot of the phase profiler (for benchmarks).
@@ -493,8 +491,12 @@ impl DaemonServer {
         compiler: crate::core::NormalizedPath,
         paths: Vec<crate::core::NormalizedPath>,
     ) {
-        let mut cache = self.state.system_includes.lock().await;
-        cache.insert(compiler, paths);
+        self.state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |cache| {
+                cache.insert(compiler, paths);
+            })
+            .await
     }
 
     /// Test-only seam: report the number of entries currently in the
@@ -504,7 +506,10 @@ impl DaemonServer {
     #[doc(hidden)]
     #[must_use]
     pub async fn test_system_includes_len(&self) -> usize {
-        self.state.system_includes.lock().await.len()
+        self.state
+            .system_includes
+            .with_for(STATE_TIMEOUT, |cache| cache.len())
+            .await
     }
 
     /// Test-only seam: borrow the `SharedState` so tests can invoke

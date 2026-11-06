@@ -25,7 +25,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use zccache_core::blocking_sync::Mutex;
 
 /// Path of the optional bounded file sink.
 pub const LOG_FILE_ENV: &str = "ZCCACHE_LOG_FILE";
@@ -95,7 +95,7 @@ impl BoundedFileSink {
     fn rotate_if_oversized(&self) {
         let _guard = self
             .rotate_lock
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(metadata) = std::fs::metadata(&self.path) else {
             return;

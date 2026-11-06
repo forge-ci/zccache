@@ -103,3 +103,69 @@ repo = { source = ".", destination = "/work" }
 [task.gate-test]
 stack = "gate"
 cmd = "bash ci/docker/gate/run_gate_tests.sh"
+
+# Focused backend transport checks use the existing isolated gate stack.
+[task.compiler-snapshot-test]
+stack = "gate"
+cmd = "soldr toolchain ensure --json && soldr rustup component add clippy && ZCCACHE_LEGACY_PATH_VALIDATE=1 CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cache_root_writer_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features cli --lib compiler_snapshot --locked && CARGO_TARGET_DIR=/target soldr cargo clippy -p zccache-artifact -p zccache-core --all-targets --locked -- -D warnings && CARGO_TARGET_DIR=/target soldr cargo clippy -p zccache-cli-core --features cli --all-targets --locked -- -D warnings"
+
+# Bounded synchronization regressions, isolated from the developer daemon.
+[task.bounded-sync-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core -p zccache-artifact -p zccache-fingerprint -p zccache-fscache -p zccache-depgraph -p zccache-watcher --lib --locked -- --test-threads=1 && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --doc --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib probe_ --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib private_daemon --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib watch_registration --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib pending_writes --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib embedded_flush --locked"
+
+[task.bounded-sync-contention-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib bounded_lock_tests --locked"
+
+[task.bounded-wait-audit-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib bounded_send_returns --locked"
+
+[task.bounded-probe-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib probe_does_not_hold_spawn_admission --locked"
+
+[task.bounded-barrier-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib blocking_barrier_writer --locked"
+
+[task.bounded-staged-slot-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store_wait_does_not_hold_state_mutex --locked"
+
+[task.bounded-gate-ownership-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib gate_permit_keeps_weak_pool_owner_alive --locked"
+
+[task.lock-watchdog-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib watchdog --locked"
+
+[task.spawn-watchdog-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib spawn_exclusion::watchdog_tests --locked"
+
+[task.lock-watchdog-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib maintenance_schedule --locked"
+
+[task.watchdog-review-sinks]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib blocked_stderr --locked"
+
+[task.watchdog-review-admission]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib legitimate_copy_can_outlive --locked"
+
+[task.generic-liveness-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib liveness_tests --locked"
+
+[task.process-liveness-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib daemon::process:: --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec::coalesce_tests --locked"
+
+[task.bounded-gate-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_staged_materialization_leases_share_the_store_lock --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::link_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store_wait_does_not_hold_state_mutex --locked"

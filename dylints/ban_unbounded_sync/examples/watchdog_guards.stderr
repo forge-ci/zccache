@@ -1,0 +1,36 @@
+error: a protected-data guard survives await; extract owned data in sync::State::with_for before awaiting
+  --> $DIR/watchdog_guards.rs:5:9
+   |
+LL |     let nested = Some(guard);
+   |         ^^^^^^
+   |
+   = note: `#[deny(ban_guard_across_await)]` on by default
+
+error: a protected-data guard survives await; extract owned data in sync::State::with_for before awaiting
+  --> $DIR/watchdog_guards.rs:12:27
+   |
+LL | async fn concrete_wrapper(token: Wrapper) {
+   |                           ^^^^^
+
+error: a protected-data guard survives await; extract owned data in sync::State::with_for before awaiting
+  --> $DIR/watchdog_guards.rs:16:28
+   |
+LL | async fn native_unit_guard(guard: RwLockWriteGuard<'_, ()>) {
+   |                            ^^^^^
+
+error: blocking lock acquisition in async code; use sync::State::with_for
+  --> $DIR/watchdog_guards.rs:21:26
+   |
+LL |     let _function_item = Bounded::<u32>::lock_for;
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_unbounded_sync)]` on by default
+
+error: blocking lock acquisition in async code; use sync::State::with_for
+  --> $DIR/watchdog_guards.rs:22:18
+   |
+LL |     let _guard = Bounded::lock_for(lock, std::time::Duration::from_secs(1));
+   |                  ^^^^^^^^^^^^^^^^^
+
+error: aborting due to 5 previous errors
+

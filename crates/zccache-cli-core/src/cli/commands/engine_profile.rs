@@ -1,6 +1,5 @@
 //! Engine phase-profile reporting for `session-stats --json` payloads.
 
-use std::fmt;
 use std::process::ExitCode;
 
 use serde_json::Value;
@@ -164,28 +163,15 @@ pub(crate) struct PhaseRow {
     pub(crate) percent_of_total: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineProfileError {
+    #[error("failed to read stats JSON: {0}")]
     Io(std::io::Error),
+    #[error("failed to parse stats JSON: {0}")]
     Json(serde_json::Error),
+    #[error("missing phase_profile; collect stats with `zccache session-start --stats` and `zccache session-end --json`")]
     MissingPhaseProfile,
 }
-
-impl fmt::Display for EngineProfileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(err) => write!(f, "failed to read stats JSON: {err}"),
-            Self::Json(err) => write!(f, "failed to parse stats JSON: {err}"),
-            Self::MissingPhaseProfile => write!(
-                f,
-                "missing phase_profile; collect stats with `zccache session-start --stats` \
-                 and `zccache session-end --json`"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for EngineProfileError {}
 
 fn render_path(label: &str, report: &PathReport, out: &mut String) {
     let dominant = report.dominant_phase.as_deref().unwrap_or("none");
@@ -234,11 +220,7 @@ fn u64_field(map: &serde_json::Map<String, Value>, field: &str) -> u64 {
 }
 
 fn average_ns(total_ns: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        total_ns / count
-    }
+    total_ns.checked_div(count).unwrap_or(0)
 }
 
 fn ns_to_ms(ns: u64) -> f64 {

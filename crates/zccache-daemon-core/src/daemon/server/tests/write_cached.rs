@@ -58,7 +58,7 @@ fn cache_hit_materialization_waits_for_child_spawn() {
     // A semantic daemon child holds this guard from fork until exec. Keep it
     // held to make direct cache-hit materialization prove it uses the matching
     // exclusive side before opening the requested output for writing.
-    let spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
+    let spawn_guard = crate::daemon::spawn_exclusion::test_spawn_shared();
     let (started_tx, started_rx) = mpsc::sync_channel(1);
     let (done_tx, done_rx) = mpsc::sync_channel(1);
     // The writer owns its path while the parent retains this one for the
@@ -1488,6 +1488,143 @@ fn replace_artifact_cache_file_retries_through_av_scanner_lock() {
 // immediately rather than burning the retry budget. Without this assertion,
 // a misclassified `ErrorKind` could silently inflate every cache-store
 // failure path by ~1 s.
+// ── Issue #1757: destination-delivery scan window ───────────────────
+//
+// A cache hit that cannot write its requested output is reported as
+// `destination_write_failed`, and the compile pipeline answers that bucket by
+// silently re-running the compiler (`cached: false`, exit 0). On Windows a
+// real-time scanner holds the freshly written output open with
+// `FILE_SHARE_READ` only for tens to hundreds of milliseconds, so destination
+// delivery retries the same ladder as the cache-store path (#490).
+
+#[test]
+fn delivery_retry_ladder_recovers_after_bounded_setbacks() {
+    let mut attempts = 0;
+    let started = std::time::Instant::now();
+
+    let result = retry_while(
+        &mut || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(cache_read_failure(
+                    Path::new("<retry-ladder>"),
+                    std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                ))
+            } else {
+                Ok(attempts)
+            }
+        },
+        &|_| true,
+    )
+    .expect("the ladder must outlive its setbacks");
+
+    assert_eq!(result, 3, "the third attempt must be the one that lands");
+    // 50 ms + 100 ms of ladder before the third attempt.
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(140),
+        "the ladder must wait between attempts, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn delivery_retry_ladder_gives_up_after_five_attempts() {
+    let mut attempts = 0;
+    let error = retry_while(
+        &mut || -> MaterializationResult<()> {
+            attempts += 1;
+            Err(cache_read_failure(
+                Path::new("<retry-ladder>"),
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            ))
+        },
+        &|_| true,
+    )
+    .expect_err("an always-failing delivery must not retry forever");
+
+    assert_eq!(attempts, 5, "the budget is five attempts in all");
+    assert_eq!(
+        failure_io_error(&error).kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+}
+
+// Negative guard: the classifier must gate the sleep, so a genuine error is not
+// delayed by the ladder. Without this, a misclassification would add ~1 s to
+// every failing delivery.
+#[test]
+fn delivery_retry_ladder_rejects_unretryable_errors_immediately() {
+    let mut attempts = 0;
+    let started = std::time::Instant::now();
+    let error = retry_while(
+        &mut || -> MaterializationResult<()> {
+            attempts += 1;
+            Err(cache_read_failure(
+                Path::new("<retry-ladder>"),
+                std::io::Error::from(std::io::ErrorKind::NotFound),
+            ))
+        },
+        &|_| false,
+    )
+    .expect_err("a non-transient error must propagate");
+
+    assert_eq!(attempts, 1, "no second attempt may be made");
+    assert_eq!(
+        failure_io_error(&error).kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(45),
+        "non-transient errors must not enter the retry sleep — took {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn cache_hit_delivery_retries_through_av_scanner_lock() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("smoke.obj");
+    std::fs::write(&out, b"STALE").unwrap();
+
+    // FILE_SHARE_READ (0x1) only — the exact share mode a real-time scanner
+    // uses. Removing or rewriting the file fails until the handle drops.
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1)
+        .open(&out)
+        .expect("open scan handle");
+    let released = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&released);
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(handle);
+        flag.store(true, Ordering::SeqCst);
+    });
+
+    let payloads = vec![CachedPayload::Bytes(Arc::new(b"FRESH".to_vec()))];
+    write_payloads_par_with_mtime_floor_and_policies_observed(
+        std::slice::from_ref(&out),
+        &payloads,
+        &[] as &[std::path::PathBuf],
+        &[crate::compiler::DeliveryPolicy::IndependentOnly],
+        MaterializationMode::Auto,
+    )
+    .expect("a cache hit must absorb the scan window instead of missing");
+
+    worker.join().unwrap();
+    assert!(
+        released.load(Ordering::SeqCst),
+        "delivery must have waited out the scan window",
+    );
+    assert_eq!(std::fs::read(&out).unwrap(), b"FRESH");
+}
+
 #[cfg(windows)]
 #[test]
 fn replace_artifact_cache_file_does_not_retry_non_transient_errors() {

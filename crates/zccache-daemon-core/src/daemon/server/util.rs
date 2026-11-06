@@ -11,8 +11,13 @@ use super::*;
 /// index task has stopped.
 pub(super) async fn begin_artifact_publication(
     state: &SharedState,
-) -> Option<kernal_api::async_engine::OwnedRwLockReadGuard<()>> {
-    let guard = Arc::clone(&state.artifact_publication).read_owned().await;
+) -> Option<crate::core::sync::ReadPermit> {
+    if state.shutdown_requested.load(Ordering::Acquire) {
+        return None;
+    }
+    let guard = Arc::clone(&state.artifact_publication)
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     if state.shutdown_requested.load(Ordering::Acquire) {
         None
     } else {
@@ -23,8 +28,10 @@ pub(super) async fn begin_artifact_publication(
 /// Blocking-worker counterpart to [`begin_artifact_publication`].
 pub(super) fn begin_artifact_publication_blocking(
     state: &SharedState,
-) -> Option<kernal_api::async_engine::RwLockReadGuard<'_, ()>> {
-    let guard = state.artifact_publication.blocking_read();
+) -> Option<crate::core::sync::ReadPermit> {
+    let guard = state
+        .artifact_publication
+        .blocking_read_for(crate::core::sync::OPERATION_TIMEOUT);
     if state.shutdown_requested.load(Ordering::Acquire) {
         None
     } else {
@@ -187,44 +194,83 @@ pub(super) fn context_files_fresh(
     true
 }
 
-/// [`context_files_fresh`] plus the rustc env-dep gate (zccache#1021):
-/// the zero-hash fast paths must also decline when a recorded
-/// `env!()`/`option_env!()` value differs from the current request env —
-/// env values have no mtime, so the journal can't see them change.
-pub(super) fn context_files_and_env_fresh(
+/// Validate the fast entry's artifact against stat-checked input hashes and
+/// current Rust env-deps. Watcher silence alone cannot prove unchanged bytes.
+pub(super) fn context_artifact_is_fresh(
     state: &SharedState,
     context_key: &ContextKey,
     source_path: &Path,
     since: Clock,
     client_env: Option<&[(String, String)]>,
+    expected_artifact: &str,
 ) -> bool {
-    if !context_env_deps_fresh(state, context_key, source_path, client_env) {
-        return false;
-    }
-    context_files_fresh(state, context_key, source_path, since)
+    context_artifact_is_fresh_with(
+        state,
+        context_key,
+        source_path,
+        since,
+        client_env,
+        expected_artifact,
+        None,
+    )
 }
 
-/// True when every recorded env-dep value for the context matches the
-/// current request env (or the context has none recorded — the common
-/// case).
-pub(super) fn context_env_deps_fresh(
+/// Stat-validated input hashes shared by the units of one multi-file request.
+///
+/// #1987 made every fast hit stat-verify each recorded input (source plus
+/// every resolved header). The units of one `-c a.cpp b.cpp ...` request
+/// share nearly all of their headers, so without sharing, a 50-unit request
+/// over ~110 headers re-stats and re-normalizes the same paths ~5,500 times.
+/// Units of one request are checked concurrently in arbitrary order, so one
+/// verdict per path for the whole request is the same contract.
+pub(super) type InputHashMemo = dashmap::DashMap<NormalizedPath, Option<ContentHash>>;
+
+/// [`context_artifact_is_fresh`], consulting and filling `memo` when given.
+pub(super) fn context_artifact_is_fresh_with(
     state: &SharedState,
     context_key: &ContextKey,
     source_path: &Path,
+    since: Clock,
     client_env: Option<&[(String, String)]>,
+    expected_artifact: &str,
+    memo: Option<&InputHashMemo>,
 ) -> bool {
-    let Some(deps) = state.dep_graph.load().get_rustc_env_deps(context_key) else {
-        return true;
-    };
-    let includes = state
-        .dep_graph
-        .load()
-        .get_includes(context_key)
-        .unwrap_or_default();
-    deps.iter().all(|(name, recorded_hash)| {
-        let current = rustc_env_dep_cache_value(client_env, name, source_path, &includes);
-        crate::depgraph::hash_env_dep_value(current.as_deref()) == *recorded_hash
-    })
+    if !context_files_fresh(state, context_key, source_path, since) {
+        return false;
+    }
+    let recorded_out_dir = recorded_root_relative_out_dir(state, context_key, client_env);
+    let graph = state.dep_graph.load();
+    let includes = graph.get_includes(context_key).unwrap_or_default();
+    graph
+        .try_fast_hit_for_artifact_with_env(
+            context_key,
+            expected_artifact,
+            |path| {
+                let path: NormalizedPath = path.into();
+                if let Some(known) = memo.and_then(|memo| memo.get(&path).map(|entry| *entry)) {
+                    return known;
+                }
+                // No memo shard guard is held across the stat.
+                let hash = state
+                    .cache_system
+                    .metadata()
+                    .get_cached_hash_if_stat_valid(&path);
+                if let Some(memo) = memo {
+                    memo.insert(path, hash);
+                }
+                hash
+            },
+            |name| {
+                rustc_env_dep_lookup_value(
+                    recorded_out_dir.as_deref(),
+                    client_env,
+                    name,
+                    source_path,
+                    &includes,
+                )
+            },
+        )
+        .is_some()
 }
 
 /// Look up an artifact by key, falling through to the on-disk
@@ -262,14 +308,11 @@ pub(super) fn context_env_deps_fresh(
 /// index removal ahead of an already-started hit.
 pub(super) struct CachedArtifactLookup {
     cached: CachedArtifact,
-    _publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    _publication_guard: crate::core::sync::ReadPermit,
 }
 
 impl CachedArtifactLookup {
-    fn new(
-        cached: CachedArtifact,
-        publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
-    ) -> Self {
+    fn new(cached: CachedArtifact, publication_guard: crate::core::sync::ReadPermit) -> Self {
         Self {
             cached,
             _publication_guard: publication_guard,

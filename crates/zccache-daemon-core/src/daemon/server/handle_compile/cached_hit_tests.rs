@@ -81,6 +81,7 @@ async fn metadata_compatible_rustc_hit_requires_matching_verdict_and_replays_its
             rustc_metadata_compat_outputs: Some(vec![output_path.clone()]),
             rustc_archive_hardlink_eligible: Some(true),
             materialization_mode: MaterializationMode::Auto,
+            pch_mtime_replay: true,
             phases: CachedHitPhases::request_cache(0, 0),
         })
     };
@@ -217,6 +218,7 @@ async fn target_paths_get_fresh_mtime_through_shared_materializer() {
         rustc_metadata_compat_outputs: None,
         rustc_archive_hardlink_eligible: None,
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     })
     .unwrap();
@@ -336,6 +338,7 @@ async fn cached_hit_restores_user_depfile_alongside_object() {
         rustc_metadata_compat_outputs: None,
         rustc_archive_hardlink_eligible: None,
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     })
     .expect("materialize_cached_compile_hit must succeed");
@@ -440,6 +443,7 @@ async fn cached_hit_object_only_artifact_ignores_depfile_dest() {
         rustc_metadata_compat_outputs: None,
         rustc_archive_hardlink_eligible: None,
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     })
     .expect("legacy single-output hit must still succeed");
@@ -527,6 +531,7 @@ async fn warm_hit_materialization_under_budget() {
                 rustc_metadata_compat_outputs: None,
                 rustc_archive_hardlink_eligible: None,
                 materialization_mode: MaterializationMode::Auto,
+                pch_mtime_replay: true,
                 phases: CachedHitPhases::request_cache(0, 0),
             })
             .expect("materialize_cached_compile_hit must succeed");
@@ -614,6 +619,7 @@ fn materialize_with_floor_input(
         rustc_metadata_compat_outputs: None,
         rustc_archive_hardlink_eligible,
         materialization_mode: MaterializationMode::Auto,
+        pch_mtime_replay: true,
         phases: CachedHitPhases::request_cache(0, 0),
     })
     .expect("cached hit materializes");

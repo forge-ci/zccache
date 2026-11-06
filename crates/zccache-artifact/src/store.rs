@@ -207,7 +207,7 @@ impl ArtifactIndex {
 pub struct ArtifactStore {
     path: NormalizedPath,
     entries: DashMap<String, ArtifactIndex>,
-    flush_lock: std::sync::Mutex<()>,
+    flush_lock: zccache_core::blocking_sync::Mutex<()>,
     /// Set when a `load_from_disk` found the blob present but unparseable.
     ///
     /// This is the #1157 seam between the two crates. The corrupt arm lives
@@ -243,6 +243,15 @@ impl ArtifactStore {
         Ok(store)
     }
 
+    /// Strict immutable-snapshot decoding: no recovery or writes to its source.
+    pub(crate) fn from_snapshot(path: &Path, bytes: &[u8]) -> std::io::Result<Self> {
+        let rows = decode_index_rows(bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let store = Self::open_empty(path);
+        store.insert_many(rows);
+        Ok(store)
+    }
+
     /// Construct an empty store rooted at `path` without touching disk.
     ///
     /// Issue #784 phase 2d: lets `DaemonServer::bind_with_cache_dir`
@@ -260,7 +269,7 @@ impl ArtifactStore {
         Self {
             path: NormalizedPath::new(path),
             entries: DashMap::new(),
-            flush_lock: std::sync::Mutex::new(()),
+            flush_lock: zccache_core::blocking_sync::Mutex::new(()),
             started_corrupt: std::sync::atomic::AtomicBool::new(false),
             dirty: std::sync::atomic::AtomicBool::new(false),
         }
@@ -480,7 +489,7 @@ impl ArtifactStore {
     pub fn flush(&self) -> std::io::Result<()> {
         let _flush_guard = self
             .flush_lock
-            .lock()
+            .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Clear dirty BEFORE taking the snapshot, not after: a mutation that
         // lands concurrently (even mid-snapshot, per the fuzzy-snapshot note

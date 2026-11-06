@@ -6,18 +6,18 @@ use super::*;
 
 #[cfg(test)]
 static FAIL_DETACH_REMOVE_PATHS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+    zccache_core::blocking_sync::Mutex<std::collections::HashSet<PathBuf>>,
 > = std::sync::OnceLock::new();
 #[cfg(test)]
 static FAIL_DETACH_RENAME_PATHS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+    zccache_core::blocking_sync::Mutex<std::collections::HashSet<PathBuf>>,
 > = std::sync::OnceLock::new();
 
 pub(in crate::daemon::server) fn remove_output_file(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if let Ok(mut injected) = FAIL_DETACH_REMOVE_PATHS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
+        .get_or_init(|| zccache_core::blocking_sync::Mutex::new(std::collections::HashSet::new()))
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
     {
         if injected.remove(path) {
             return Err(std::io::Error::new(
@@ -32,8 +32,8 @@ pub(in crate::daemon::server) fn remove_output_file(path: &Path) -> std::io::Res
 fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if let Ok(mut injected) = FAIL_DETACH_RENAME_PATHS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
+        .get_or_init(|| zccache_core::blocking_sync::Mutex::new(std::collections::HashSet::new()))
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
     {
         if injected.remove(to) {
             return Err(std::io::Error::new(
@@ -48,8 +48,8 @@ fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 pub(in crate::daemon::server) fn fail_detach_remove_for_test(path: &Path) {
     FAIL_DETACH_REMOVE_PATHS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
+        .get_or_init(|| zccache_core::blocking_sync::Mutex::new(std::collections::HashSet::new()))
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
         .expect("detach failure injection lock")
         .insert(path.to_path_buf());
 }
@@ -57,8 +57,8 @@ pub(in crate::daemon::server) fn fail_detach_remove_for_test(path: &Path) {
 #[cfg(test)]
 pub(in crate::daemon::server) fn fail_detach_rename_for_test(path: &Path) {
     FAIL_DETACH_RENAME_PATHS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
+        .get_or_init(|| zccache_core::blocking_sync::Mutex::new(std::collections::HashSet::new()))
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
         .expect("detach rename failure injection lock")
         .insert(path.to_path_buf());
 }

@@ -450,13 +450,18 @@ pub(crate) mod ipc {
     pub(crate) fn probe_running_process(endpoint: &str) -> io::Result<()> {
         let endpoint = Endpoint::from_running_process(endpoint);
         let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
+            .enable_all()
             .build()
             .map_err(|error| io::Error::other(format!("IPC probe runtime failed: {error}")))?;
-        runtime.block_on(async {
-            drop(connect(&endpoint).await?);
-            Ok(())
-        })
+        zccache_core::wait::block_on_for(
+            &runtime,
+            async {
+                drop(connect(&endpoint).await?);
+                Ok(())
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
     #[cfg(windows)]

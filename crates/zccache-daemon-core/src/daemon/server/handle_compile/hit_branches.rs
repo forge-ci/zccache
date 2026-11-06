@@ -115,131 +115,143 @@ pub(super) async fn try_request_cache_hit(probe: RequestCacheHitProbe<'_>) -> Op
         request_cache_key_root.as_deref(),
         client_env,
     );
-    let req_entry = state.request_cache.get(&request_fp)?;
-    if req_entry.test_harness
-        && !test_harness_admission::for_request(client_env).admits_test_harness()
-    {
-        return None;
-    }
-    let request_cache_lookup_ns = t_request_cache_lookup.elapsed().as_nanos() as u64;
-    if !request_cache_entry_matches_root(&req_entry, request_cache_key_root.as_ref()) {
-        return None;
-    }
-    let fh_entry = state.fast_hit_cache.get(&req_entry.context_key)?;
-    let artifact_key_hex = &fh_entry.artifact_key_hex;
-    let source_path = req_entry
-        .source_path
-        .resolve(request_cache_key_root.as_deref());
-    let output_path = req_entry
-        .output_path
-        .resolve(request_cache_key_root.as_deref());
-    // Issue #643: rebase the cached depfile destination to the current
-    // request's key root. For cross-worktree (`HIT_WORKTREE_REQUEST`)
-    // hits, this routes the depfile to worktree B's path even though the
-    // entry was created from worktree A — same semantics as
-    // `source_path` / `output_path`.
-    let is_rustc = crate::compiler::detect_family(&compiler_path.to_string_lossy())
-        == crate::compiler::CompilerFamily::Rustc;
-    let rustc_args = effective_rustc_args(compiler_path, effective_args);
-    let current_depfile_dest: Option<NormalizedPath> = if is_rustc {
-        rustc_requested_depfile(rustc_args, cwd)
-    } else {
-        None
-    }
-    .or_else(|| {
-        req_entry
-            .depfile_path
-            .as_ref()
+    // Finish all map-guard work in this scope. The async publication wait
+    // and materializer receive owned paths and keys, never shard guards.
+    let (mut request, context_key) = {
+        let req_entry = state.request_cache.get(&request_fp)?;
+        if req_entry.test_harness
+            && !test_harness_admission::for_request(client_env).admits_test_harness()
+        {
+            return None;
+        }
+        let request_cache_lookup_ns = t_request_cache_lookup.elapsed().as_nanos() as u64;
+        if !request_cache_entry_matches_root(&req_entry, request_cache_key_root.as_ref()) {
+            return None;
+        }
+        let fh_entry = state.fast_hit_cache.get(&req_entry.context_key)?;
+        let artifact_key_hex = &fh_entry.artifact_key_hex;
+        let source_path = req_entry
+            .source_path
+            .resolve(request_cache_key_root.as_deref());
+        let output_path = req_entry
+            .output_path
+            .resolve(request_cache_key_root.as_deref());
+        // Issue #643: rebase the cached depfile destination to the current
+        // request's key root. For cross-worktree (`HIT_WORKTREE_REQUEST`)
+        // hits, this routes the depfile to worktree B's path even though the
+        // entry was created from worktree A — same semantics as
+        // `source_path` / `output_path`.
+        let is_rustc = crate::compiler::detect_family(&compiler_path.to_string_lossy())
+            == crate::compiler::CompilerFamily::Rustc;
+        let rustc_args = effective_rustc_args(compiler_path, effective_args);
+        let current_depfile_dest: Option<NormalizedPath> = if is_rustc {
+            rustc_requested_depfile(rustc_args, cwd)
+        } else {
+            None
+        }
+        .or_else(|| {
+            req_entry
+                .depfile_path
+                .as_ref()
+                .map(|path| path.resolve(request_cache_key_root.as_deref()))
+        });
+        let mtime_floor_paths: Vec<NormalizedPath> = req_entry
+            .input_paths
+            .iter()
             .map(|path| path.resolve(request_cache_key_root.as_deref()))
-    });
-    let mtime_floor_paths: Vec<NormalizedPath> = req_entry
-        .input_paths
-        .iter()
-        .map(|path| path.resolve(request_cache_key_root.as_deref()))
-        .collect();
-    let same_root = req_entry.root.as_ref() == request_cache_key_root.as_ref();
-    let t_cross_root_validate = Instant::now();
-    let inputs_match = if same_root {
-        context_files_and_env_fresh(
-            state,
-            &req_entry.context_key,
-            &source_path,
-            fh_entry.clock,
-            client_env,
-        )
-    } else {
-        request_cache_artifact_matches(
-            state,
-            &req_entry,
-            request_fp,
-            request_cache_key_root.as_ref(),
-            artifact_key_hex,
-            compile_start,
-            snap_clock,
-        )
-    };
-    let cross_root_validate_ns = if same_root {
-        0
-    } else {
-        t_cross_root_validate.elapsed().as_nanos() as u64
-    };
-    if !cache_entry_fresh_at(compile_start, fh_entry.cached_at, FAST_HIT_MAX_AGE)
-        || !cache_entry_fresh_at(compile_start, req_entry.cached_at, EPHEMERAL_CACHE_MAX_AGE)
-        || !inputs_match
-    {
-        return None;
-    }
+            .collect();
+        let same_root = req_entry.root.as_ref() == request_cache_key_root.as_ref();
+        let t_cross_root_validate = Instant::now();
+        let inputs_match = if same_root {
+            context_artifact_is_fresh(
+                state,
+                &req_entry.context_key,
+                &source_path,
+                fh_entry.clock,
+                client_env,
+                artifact_key_hex,
+            )
+        } else {
+            request_cache_artifact_matches(
+                state,
+                &req_entry,
+                request_fp,
+                request_cache_key_root.as_ref(),
+                artifact_key_hex,
+                compile_start,
+                snap_clock,
+            )
+        };
+        let cross_root_validate_ns = if same_root {
+            0
+        } else {
+            t_cross_root_validate.elapsed().as_nanos() as u64
+        };
+        if !cache_entry_fresh_at(compile_start, fh_entry.cached_at, FAST_HIT_MAX_AGE)
+            || !cache_entry_fresh_at(compile_start, req_entry.cached_at, EPHEMERAL_CACHE_MAX_AGE)
+            || !inputs_match
+        {
+            return None;
+        }
 
-    // A cold miss may have installed a provisional in-memory payload while
-    // its durable write is pending. Wait only when the artifact, requested
-    // verdict, or requested output mapping is not ready for this hit.
-    let hit_label = if same_root {
-        "HIT_REQUEST"
-    } else {
-        "HIT_WORKTREE_REQUEST"
+        // A cold miss may have installed a provisional in-memory payload while
+        // its durable write is pending. Wait only when the artifact, requested
+        // verdict, or requested output mapping is not ready for this hit.
+        let hit_label = if same_root {
+            "HIT_REQUEST"
+        } else {
+            "HIT_WORKTREE_REQUEST"
+        };
+        let rustc_requested_outputs =
+            rustc_requested_outputs(rustc_args, &output_path, cwd, client_env);
+        let rustc_archive_hardlink_eligible =
+            is_rustc.then(|| crate::compiler::rustc_archive_hardlink_eligible(rustc_args));
+        let verdict_key_hex = rustc_verdict_key_hex(is_rustc, artifact_key_hex, client_env);
+        (
+            OwnedCachedHitMaterializeRequest {
+                state: Arc::clone(state),
+                sid: *sid,
+                artifact_key_hex: artifact_key_hex.to_owned(),
+                verdict_key_hex,
+                source_path,
+                output_path: output_path.clone(),
+                secondary_output_dir: output_path.parent().unwrap_or(cwd).into(),
+                current_depfile_dest,
+                current_rustc_out_dir: None,
+                depfile_key_root: (!is_rustc)
+                    .then(|| request_cache_key_root.clone().unwrap_or_else(|| cwd.into())),
+                compile_start,
+                hit_label,
+                cached_error_label: "CACHED_ERROR_REQUEST",
+                record_compilation: true,
+                downgrade_output_metadata: false,
+                mtime_floor_paths,
+                rustc_metadata_compat_outputs: rustc_requested_outputs,
+                rustc_archive_hardlink_eligible,
+                materialization_mode: state.materialization_mode(client_env),
+                pch_mtime_replay: super::pch_gate::replay_enabled_for(client_env),
+                phases: CachedHitPhases::request_cache(
+                    request_cache_lookup_ns,
+                    cross_root_validate_ns,
+                ),
+            },
+            req_entry.context_key,
+        )
     };
-    let rustc_requested_outputs =
-        rustc_requested_outputs(rustc_args, &output_path, cwd, client_env);
-    let rustc_archive_hardlink_eligible =
-        is_rustc.then(|| crate::compiler::rustc_archive_hardlink_eligible(rustc_args));
-    let verdict_key_hex = rustc_verdict_key_hex(is_rustc, artifact_key_hex, client_env);
     await_artifact_publication_if_needed(
         state,
-        artifact_key_hex,
-        verdict_key_hex.as_deref(),
-        rustc_requested_outputs.as_deref(),
+        &request.artifact_key_hex,
+        request.verdict_key_hex.as_deref(),
+        request.rustc_metadata_compat_outputs.as_deref(),
     )
     .await;
-    let current_rustc_out_dir = if is_rustc {
-        certified_rustc_out_dir(state, &req_entry.context_key, client_env, &source_path)
-    } else {
-        None
-    };
-    materialize_cached_compile_hit_offloaded(OwnedCachedHitMaterializeRequest {
-        state: Arc::clone(state),
-        sid: *sid,
-        artifact_key_hex: artifact_key_hex.to_owned(),
-        verdict_key_hex,
-        source_path,
-        output_path: output_path.clone(),
-        secondary_output_dir: output_path.parent().unwrap_or(cwd).into(),
-        current_depfile_dest,
-        current_rustc_out_dir,
-        depfile_key_root: (!is_rustc)
-            .then(|| request_cache_key_root.clone().unwrap_or_else(|| cwd.into())),
-        compile_start,
-        hit_label,
-        cached_error_label: "CACHED_ERROR_REQUEST",
-        record_compilation: true,
-        downgrade_output_metadata: false,
-        mtime_floor_paths,
-        rustc_metadata_compat_outputs: rustc_requested_outputs,
-        rustc_archive_hardlink_eligible,
-        materialization_mode: state.materialization_mode(client_env),
-        phases: CachedHitPhases::request_cache(request_cache_lookup_ns, cross_root_validate_ns),
-    })
-    .await
-    .ok()
+    if crate::compiler::detect_family(&compiler_path.to_string_lossy())
+        == crate::compiler::CompilerFamily::Rustc
+    {
+        request.current_rustc_out_dir =
+            certified_rustc_out_dir(state, &context_key, client_env, &request.source_path);
+    }
+    materialize_cached_compile_hit_offloaded(request).await.ok()
 }
 
 pub(super) struct FastHitProbe<'a> {
@@ -310,7 +322,14 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
         (entry.artifact_key_hex.clone(), entry.clock, entry.cached_at)
     };
     if !cache_entry_fresh_at(compile_start, entry_cached_at, FAST_HIT_MAX_AGE)
-        || !context_files_and_env_fresh(state, &context_key, source_path, entry_clock, client_env)
+        || !context_artifact_is_fresh(
+            state,
+            &context_key,
+            source_path,
+            entry_clock,
+            client_env,
+            &entry_artifact_key_hex,
+        )
     {
         return None;
     }
@@ -376,6 +395,7 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
         rustc_archive_hardlink_eligible: is_rustc
             .then(|| crate::compiler::rustc_archive_hardlink_eligible(rustc_args)),
         materialization_mode: state.materialization_mode(client_env),
+        pch_mtime_replay: super::pch_gate::replay_enabled_for(client_env),
         phases: CachedHitPhases {
             parse_args_ns,
             build_context_ns,
@@ -538,6 +558,7 @@ pub(super) async fn try_depgraph_cached_hit(
         rustc_archive_hardlink_eligible: is_rustc
             .then(|| crate::compiler::rustc_archive_hardlink_eligible(rustc_args)),
         materialization_mode: state.materialization_mode(client_env),
+        pch_mtime_replay: super::pch_gate::replay_enabled_for(client_env),
         phases: CachedHitPhases {
             parse_args_ns,
             build_context_ns,

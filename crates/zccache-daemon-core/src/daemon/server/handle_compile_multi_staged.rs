@@ -32,7 +32,7 @@ struct PublishedMiss {
 
 fn insert_staged_multi_cache_visibility(
     state: &SharedState,
-    _publication_guard: &kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    _publication_guard: &crate::core::sync::ReadPermit,
     context_key: ContextKey,
     validation_clock: Clock,
     key: String,
@@ -198,12 +198,12 @@ pub(super) async fn try_handle_staged_misses(
                 });
             }
         };
-        let mut builder = kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd.as_path());
-        if let Some(response_file) = &rsp_guard {
-            builder = builder.arg(response_file.at_arg());
-        } else {
-            builder = builder.args(&compiler_args);
-        }
+        let builder = super::compiler_spawn::user_compile_spawn(
+            compiler.as_path(),
+            cwd.as_path(),
+            &compiler_args,
+            rsp_guard.as_ref(),
+        );
         let builder = apply_client_env_builder(
             builder,
             client_env,
@@ -264,6 +264,7 @@ pub(super) async fn try_handle_staged_misses(
                     builder,
                     priority,
                     command_description,
+                    crate::daemon::process::ProcessLiveness::configured(),
                 )
                 .await;
             let elapsed_ns = compiler_started.elapsed().as_nanos() as u64;

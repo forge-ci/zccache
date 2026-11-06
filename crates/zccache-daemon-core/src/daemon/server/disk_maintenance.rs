@@ -262,6 +262,25 @@ fn low_space_bytes(capacity: u64) -> u64 {
         .min(capacity)
 }
 
+/// Free space below which the disk is critical: free-space pressure may then
+/// evict live, recently used entries (subject to [`HARD_PRESSURE_MIN_AGE`]).
+///
+/// Above this floor, low free space alone only evicts entries idle longer
+/// than [`SOFT_AGE`]. A large shared disk can sit below [`low_space_bytes`]
+/// indefinitely while holding hundreds of GiB that are not the cache (a
+/// 1.8 TiB host with 40 GiB free is below its 92 GiB low-space mark). There
+/// the recovery reserve is unreachable, so treating low space as hard
+/// pressure evicted every entry older than five minutes on every pass: a
+/// restored CI cache was discarded mid-job and each job saved only its last
+/// few minutes of work (bosn#503).
+fn critical_space_bytes(capacity: u64) -> u64 {
+    capacity
+        .checked_div(100)
+        .unwrap_or(0)
+        .max(5 * GIB)
+        .min(low_space_bytes(capacity))
+}
+
 fn recovery_free_bytes(capacity: u64) -> u64 {
     let desired = capacity
         .saturating_mul(8)
@@ -341,8 +360,10 @@ fn plan_maintenance_at_least(
 
     let projected_usage = usage.saturating_sub(reclaimed);
     let projected_free = space.free_bytes.saturating_add(freed);
-    let hard = projected_usage >= budget || projected_free < low_space_bytes(space.capacity_bytes);
-    let soft = !hard && projected_usage >= budget.saturating_mul(85) / 100;
+    let space_low = projected_free < low_space_bytes(space.capacity_bytes);
+    let hard =
+        projected_usage >= budget || projected_free < critical_space_bytes(space.capacity_bytes);
+    let soft = !hard && (space_low || projected_usage >= budget.saturating_mul(85) / 100);
     let detected_pressure = if hard {
         MaintenancePressure::Hard
     } else if soft {
@@ -365,9 +386,15 @@ fn plan_maintenance_at_least(
             projected_usage.saturating_sub(budget.saturating_mul(80) / 100),
             recovery_free_bytes(space.capacity_bytes).saturating_sub(projected_free),
         ),
+        // Low (not critical) free space reclaims only idle entries: the
+        // candidate filter below admits nothing younger than SOFT_AGE.
         MaintenancePressure::Soft => (
             projected_usage.saturating_sub(budget.saturating_mul(70) / 100),
-            0,
+            if space_low {
+                recovery_free_bytes(space.capacity_bytes).saturating_sub(projected_free)
+            } else {
+                0
+            },
         ),
         MaintenancePressure::None => (0, 0),
     };
@@ -710,7 +737,7 @@ fn maintain_disk_artifacts(pass: MaintenancePass<'_>) -> io::Result<DiskMaintena
 // has queued (zccache#1775). `None` in tests that don't exercise shutdown.
 fn maintain_disk_artifacts_with_barrier(
     pass: MaintenancePass<'_>,
-    publication_barrier: Option<&Arc<kernal_api::async_engine::RwLock<()>>>,
+    publication_barrier: Option<&Arc<crate::core::sync::Barrier>>,
     shutdown_requested: Option<&AtomicBool>,
 ) -> io::Result<DiskMaintenanceReport> {
     let MaintenancePass {
@@ -800,7 +827,8 @@ fn maintain_disk_artifacts_with_barrier(
             // short destructive commit, then refresh live access and re-plan
             // under the writer so a hit/publication that raced the scan is
             // not evicted as stale.
-            let _publication_guard = publication_barrier.blocking_write();
+            let _publication_guard =
+                publication_barrier.blocking_write_for(crate::core::sync::OPERATION_TIMEOUT);
             refresh_live_access(&mut scanned, artifacts, dep_graph, now);
             let commit_space = environment.filesystem_space(artifact_dir)?;
             let commit_plan = plan_maintenance_at_least(
@@ -924,7 +952,7 @@ pub(super) async fn maintain_state_disk(
     kind: MaintenanceKind,
     runtime_handle: Option<&kernal_api::async_engine::RuntimeHandle>,
 ) -> io::Result<DiskMaintenanceReport> {
-    let _maintenance_guard = state.disk_maintenance.lock().await;
+    let _maintenance_guard = state.disk_maintenance.acquire_for(OPERATION_TIMEOUT).await;
     if state.shutdown_requested.load(Ordering::Acquire) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,

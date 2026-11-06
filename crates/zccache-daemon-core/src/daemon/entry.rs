@@ -573,7 +573,7 @@ fn run_server(args: Args) {
 
         // Issue #784 phase 2c: same shape for the on-disk
         // system-includes snapshot. The loader briefly acquires the
-        // `system_includes: Mutex<...>` via `blocking_lock()` to merge
+        // `system_includes: State<...>` via `with_blocking_for()` to merge
         // entries from the loaded cache into the live one. Same
         // shutdown-save gating as the compiler-hash loader:
         // `system_includes_loaded` tells `server::run`'s shutdown arm

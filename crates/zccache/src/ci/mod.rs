@@ -200,7 +200,7 @@ impl<P: ProgressSink> StageRunner<P> {
             Err(e) => {
                 let _ = writeln!(std::io::stderr(), "{stage}: wait error: {e}");
                 let _ = child.kill();
-                let _ = child.wait();
+                let _ = crate::core::wait::child_for(&mut child, crate::core::wait::PROBE);
                 StageOutcome::SpawnFailed
             }
         }
@@ -265,7 +265,7 @@ pub fn kill_process_tree(child: &mut Child) {
     // Reap the direct child to avoid a zombie even on platforms where the
     // group-kill above did the heavy lifting.
     let _ = child.kill();
-    let _ = child.wait();
+    let _ = crate::core::wait::child_for(child, crate::core::wait::PROBE);
 }
 
 // ---------------------------------------------------------------------------
@@ -694,7 +694,7 @@ mod tests {
 
         let waiter = std::thread::spawn(move || {
             let mut child = child;
-            let _ = child.wait();
+            let _ = crate::core::wait::child_for(&mut child, crate::core::wait::PROBE);
         });
 
         kill_pids_and_wait(&[pid], Duration::from_secs(5));
