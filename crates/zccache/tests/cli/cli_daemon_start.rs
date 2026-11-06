@@ -234,13 +234,41 @@ impl IsolatedDaemon {
             .join(format!("daemon-{FORCED_STOP_NAMESPACE}-{version}.lock"))
     }
 
-    /// Run `zccache stop` against an endpoint nothing serves, so the IPC
-    /// shutdown request is unreachable while the lock still names a PID.
-    fn stop_with_unreachable_ipc(&self) -> std::process::Output {
-        self.command("stop")
-            .env("ZCCACHE_ENDPOINT", unserved_endpoint())
-            .output()
-            .expect("failed to run zccache stop")
+    /// The endpoint `command` resolves to. The lock and identity records are
+    /// scoped to it (#1904), so an "unreachable IPC" case has to fail on this
+    /// endpoint: a different one would look up different, absent records.
+    #[cfg(unix)]
+    fn endpoint(&self) -> String {
+        zccache::ipc::endpoint_for_cache_dir(
+            &self
+                .cache_dir
+                .path()
+                .join(zccache::core::config::versioned_subdir()),
+            Some(FORCED_STOP_NAMESPACE),
+        )
+    }
+
+    /// The daemon binds before it records ownership, so `start` can return
+    /// with the lock not yet on disk.
+    #[cfg(unix)]
+    fn wait_for_lock_pid(&self) -> u32 {
+        let lock_path = self.lock_path();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&lock_path)
+                .unwrap_or_default()
+                .trim()
+                .parse()
+            {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "daemon never recorded its PID in {}",
+                lock_path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -254,27 +282,12 @@ impl Drop for IsolatedDaemon {
     }
 }
 
-fn unserved_endpoint() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let unique = format!("zccache-unserved-{}-{nanos}", std::process::id());
-    #[cfg(windows)]
-    {
-        format!(r"\\.\pipe\{unique}")
-    }
-    #[cfg(unix)]
-    {
-        std::env::temp_dir()
-            .join(format!("{unique}.sock"))
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
 /// `zccache stop` must still terminate the daemon when IPC is unreachable but
 /// the lock file points at the live, identity-verified daemon process.
+///
+/// Unix only: removing the socket path makes a live daemon unreachable, and a
+/// Windows named pipe has no equivalent.
+#[cfg(unix)]
 #[test]
 #[ignore] // Integration test — starts a real daemon. Run with `test --full`.
 fn stop_kills_locked_process_when_ipc_is_unreachable() {
@@ -287,17 +300,14 @@ fn stop_kills_locked_process_when_ipc_is_unreachable() {
     );
 
     let lock_path = daemon.lock_path();
-    let pid: u32 = std::fs::read_to_string(&lock_path)
-        .unwrap_or_else(|e| panic!("read daemon lock {}: {e}", lock_path.display()))
-        .trim()
-        .parse()
-        .expect("daemon lock holds a PID");
+    let pid = daemon.wait_for_lock_pid();
     assert!(
         zccache::ipc::is_process_alive(pid),
         "daemon {pid} must be alive before the forced stop"
     );
 
-    let output = daemon.stop_with_unreachable_ipc();
+    std::fs::remove_file(daemon.endpoint()).expect("remove daemon socket");
+    let output = daemon.command("stop").output().expect("run zccache stop");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "zccache stop failed: {stderr}");
     assert!(
@@ -334,7 +344,8 @@ fn stop_refuses_to_kill_unverified_locked_process_when_ipc_is_unreachable() {
     let mut child = spawn_sleepy_process();
     std::fs::write(&lock_path, child.id().to_string()).expect("write daemon lock");
 
-    let output = daemon.stop_with_unreachable_ipc();
+    // No daemon ever bound this endpoint, so the shutdown request is unreachable.
+    let output = daemon.command("stop").output().expect("run zccache stop");
     let survived = child.try_wait().expect("poll sleeper").is_none();
     let _ = child.kill();
     let _ = child.wait();

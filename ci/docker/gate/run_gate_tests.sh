@@ -45,7 +45,7 @@ soldr cargo test --workspace --features "$FEATURES" --no-fail-fast --doc
 
 # integration.yml "Wrapper daemon-unavailable contract (exit 125)".
 step "wrapper daemon-unavailable contract"
-soldr cargo test -p zccache --features "$FEATURES" --test cli cli_wrapper_failure_boundaries:: -- --ignored --test-threads=1
+soldr cargo test -p zccache --features "$FEATURES" --test cli -- cli_wrapper_failure_boundaries:: cli_daemon_start::stop_ --ignored --test-threads=1
 
 # integration.yml "Strict artifact-layout validation".
 step "strict artifact-layout validation"
