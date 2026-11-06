@@ -122,7 +122,7 @@ pub fn record(
     // For RerunIfChanged we need to resolve `paths` (relative to the
     // crate's manifest directory) against the workspace. Discover the
     // package-name → manifest-dir mapping once up front.
-    let manifest_dirs = discover_workspace_crates(&workspace_root);
+    let manifest_dirs = discover_workspace_crates(&workspace_root)?;
 
     // Phase 1: scan each `<fp_dir>/` for processable units.
     let fp_dirs: Vec<PathBuf> = std::fs::read_dir(&fp_root)?
@@ -436,7 +436,10 @@ fn strip_hash_suffix(s: &str) -> Option<&str> {
 /// Walk `workspace_root` for `Cargo.toml` files and build a
 /// `package_name → manifest_dir` map. Skips `target/`, `.cargo/`, `.git/`,
 /// `node_modules/`, and dot-directories.
-fn discover_workspace_crates(workspace_root: &Path) -> HashMap<String, PathBuf> {
+///
+/// Fails on any walk error rather than return a partial map. A dedicated pool
+/// keeps load on the shared one from ending this one-shot walk early.
+fn discover_workspace_crates(workspace_root: &Path) -> io::Result<HashMap<String, PathBuf>> {
     let mut map: HashMap<String, PathBuf> = HashMap::new();
     // The facade prunes directories rather than filtering every child, so a
     // *file* with one of these names is no longer dropped here. That changes
@@ -444,6 +447,9 @@ fn discover_workspace_crates(workspace_root: &Path) -> HashMap<String, PathBuf> 
     // discarded either way.
     let walker = kernal_api::platform::fs::DirectoryWalk::new(workspace_root.to_path_buf())
         .include_hidden_entries(true)
+        .parallelism(
+            kernal_api::platform::fs::DirectoryWalkParallelism::DedicatedPool { threads: 0 },
+        )
         .prune_directories(|directory| {
             directory
                 .file_name()
@@ -455,7 +461,8 @@ fn discover_workspace_crates(workspace_root: &Path) -> HashMap<String, PathBuf> 
                     )
                 })
         });
-    for entry in walker.walk().filter_map(|e| e.ok()) {
+    for entry in walker.walk() {
+        let entry = entry?;
         let path = entry.path().to_path_buf();
         if path.file_name() != Some(std::ffi::OsStr::new("Cargo.toml")) {
             continue;
@@ -466,7 +473,7 @@ fn discover_workspace_crates(workspace_root: &Path) -> HashMap<String, PathBuf> 
         let Some(dir) = path.parent() else { continue };
         map.insert(pkg_name, dir.to_path_buf());
     }
-    map
+    Ok(map)
 }
 
 /// Minimal TOML parser that pulls only `[package].name = "..."`. Avoids

@@ -107,6 +107,9 @@ Notes:
 
 - `PollingWatcher` is the public Rust API closest to the Python watcher surface.
 - `resume()` resets the baseline, matching the Python watcher lifecycle semantics.
+- A poll whose directory walk fails keeps the last complete snapshot and emits one
+  `overflow` batch per failure streak; changes are reported by the next good scan.
+  `start()` returns the error if the baseline walk fails.
 - `NotifyWatcher` remains the lower-level public Rust entrypoint for the daemon pipeline.
 - `WatcherConfig` currently carries settle-window and ignore-pattern defaults
   used by the daemon-oriented watcher pipeline.

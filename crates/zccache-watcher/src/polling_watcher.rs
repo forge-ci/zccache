@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use zccache_core::blocking_sync::Mutex;
 
-use kernal_api::platform::fs::{PatternSet, PatternSetBuilder};
+use kernal_api::platform::fs::{DirectoryWalkParallelism, PatternSet, PatternSetBuilder};
 use zccache_core::NormalizedPath;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,7 +152,12 @@ impl PollingWatcher {
             })?;
 
         match zccache_core::wait::recv_for(&ready_rx, zccache_core::wait::PROBE) {
-            Ok(()) => {}
+            Ok(Ok(())) => {}
+            Ok(Err(scan_error)) => {
+                let _ =
+                    zccache_core::wait::join_for(worker_handle, zccache_core::wait::HELPER_JOIN);
+                return Err(scan_error);
+            }
             Err(_) => {
                 let _ = worker_shutdown_tx.send(());
                 let _ =
@@ -356,10 +361,26 @@ fn run_poll_loop(
     debounce: Duration,
     batch_tx: mpsc::Sender<PollWatchBatch>,
     shutdown_rx: mpsc::Receiver<()>,
-    ready_tx: mpsc::Sender<()>,
+    ready_tx: mpsc::Sender<std::io::Result<()>>,
 ) {
-    let mut snapshot = scan_snapshot(&config);
-    let _ = ready_tx.send(());
+    // Everything later is diffed against this baseline, so it must be complete
+    // however busy the machine is. A dedicated pool cannot end early on load;
+    // it is too costly to build on every poll, where a failed scan just retries.
+    let baseline = scan_snapshot(
+        &config,
+        DirectoryWalkParallelism::DedicatedPool { threads: 0 },
+    );
+    let mut snapshot = match baseline {
+        Ok(snapshot) => {
+            let _ = ready_tx.send(Ok(()));
+            snapshot
+        }
+        Err(error) => {
+            let _ = ready_tx.send(Err(error));
+            return;
+        }
+    };
+    let mut scan_failing = false;
     let mut pending_changed: HashSet<NormalizedPath> = HashSet::new();
     let mut pending_removed: HashSet<NormalizedPath> = HashSet::new();
     let mut last_change: Option<Instant> = None;
@@ -369,7 +390,33 @@ fn run_poll_loop(
             break;
         }
 
-        let current = scan_snapshot(&config);
+        let current = match scan_snapshot(&config, DirectoryWalkParallelism::SharedPool) {
+            Ok(current) => {
+                scan_failing = false;
+                current
+            }
+            Err(error) => {
+                // A partial tree must not be diffed: its gaps read as removals.
+                // Keep the last complete snapshot so the next good scan reports
+                // whatever changed meanwhile, and flag the blind spot once.
+                if !scan_failing {
+                    scan_failing = true;
+                    tracing::warn!(%error, "watcher scan incomplete; keeping previous snapshot");
+                    let overflow = PollWatchBatch {
+                        changed: Vec::new(),
+                        removed: Vec::new(),
+                        overflow: true,
+                    };
+                    if batch_tx.send(overflow).is_err() {
+                        break;
+                    }
+                }
+                if shutdown_rx.recv_timeout(poll_interval).is_ok() {
+                    break;
+                }
+                continue;
+            }
+        };
         let (changed, removed) = diff_snapshots(&snapshot, &current);
 
         if !changed.is_empty() || !removed.is_empty() {
@@ -499,7 +546,10 @@ fn has_glob_meta(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
-fn scan_snapshot(config: &ScanConfig) -> HashMap<NormalizedPath, FileState> {
+fn scan_snapshot(
+    config: &ScanConfig,
+    parallelism: DirectoryWalkParallelism,
+) -> std::io::Result<HashMap<NormalizedPath, FileState>> {
     use rayon::prelude::*;
 
     let mut result = HashMap::new();
@@ -516,6 +566,7 @@ fn scan_snapshot(config: &ScanConfig) -> HashMap<NormalizedPath, FileState> {
         let walker = kernal_api::platform::fs::DirectoryWalk::new(base.to_path_buf())
             .follow_symbolic_links(false)
             .include_hidden_entries(true)
+            .parallelism(parallelism)
             .prune_directories(move |directory| {
                 if let Some(name) = directory.file_name().and_then(|name| name.to_str()) {
                     if exclude_names.contains(name) {
@@ -531,21 +582,19 @@ fn scan_snapshot(config: &ScanConfig) -> HashMap<NormalizedPath, FileState> {
         // match) and avoids an extra `metadata()` syscall for files we'd just
         // drop. Normalize at collection time so step 2's parallel metadata
         // fetch already operates on the watcher's canonical key type.
-        let candidates: Vec<NormalizedPath> = walker
-            .walk()
-            .flatten()
-            .filter_map(|entry| {
-                if !entry.is_file() {
-                    return None;
-                }
-                let path = entry.path().to_path_buf();
-                let rel = rel_string(&config.root, &path);
-                if config.exclude_globs.is_match(&rel) || !config.include_globs.is_match(&rel) {
-                    return None;
-                }
-                Some(NormalizedPath::new(&path))
-            })
-            .collect();
+        let mut candidates: Vec<NormalizedPath> = Vec::new();
+        for entry in walker.walk() {
+            let entry = entry?;
+            if !entry.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let rel = rel_string(&config.root, path);
+            if config.exclude_globs.is_match(&rel) || !config.include_globs.is_match(&rel) {
+                continue;
+            }
+            candidates.push(NormalizedPath::new(path));
+        }
 
         // Step 2: fetch metadata in parallel. Each `metadata()` is an
         // independent syscall — on Windows this is the dominant cost
@@ -572,7 +621,7 @@ fn scan_snapshot(config: &ScanConfig) -> HashMap<NormalizedPath, FileState> {
         result.extend(pairs);
     }
 
-    result
+    Ok(result)
 }
 
 fn diff_snapshots(

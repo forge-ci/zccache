@@ -337,3 +337,18 @@ fn record_reports_unresolved_dep_info() {
         [format!("hy-pkg-{HASH_A}/dep-lib-hy_pkg")]
     );
 }
+
+/// #2047: a walk error means the crate inventory is incomplete, so `record`
+/// must fail instead of writing a manifest over a partial tree.
+#[test]
+fn record_fails_when_workspace_walk_reports_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target");
+    std::fs::create_dir_all(target.join("debug/.fingerprint")).unwrap();
+    let manifest = target.join(MANIFEST_FILENAME);
+
+    let result = record(&target, &tmp.path().join("missing"), &manifest, "debug");
+
+    assert!(result.is_err(), "partial walk produced {result:?}");
+    assert!(!manifest.exists(), "no manifest may be written");
+}
