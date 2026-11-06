@@ -20,22 +20,29 @@ SOLDR = "se71dd067ebacc28b"
 
 # Main-ref v3 entries of the live inventory at run 42171585061.
 LIVE_V3: list[tuple[str, int]] = [
-    (f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f9e7e4902-l{LOCK}-soldrv0.9.51", 749_286_657),
-    (f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f6cafa616-l{LOCK}-soldr0.9.51", 278_758_719),
+    (
+        f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f9e7e4902-l{LOCK}-soldrv0.9.51",
+        749_286_657,
+    ),
+    (
+        f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f6cafa616-l{LOCK}-soldr0.9.51",
+        278_758_719,
+    ),
     (
         f"cook-base-v3-linux-x64-glibc-rustc1.95.0-fnone-l{LOCK}"
         "-xcheck-linux-x86-musl-soldrv0.9.51",
         573_045_421,
     ),
-    (f"setup-soldr-buildcache-v3-windows-x64-94f0dac836d70212-{LOCK_CRLF}-{SOLDR}", 374_467_472),
+    (
+        f"setup-soldr-buildcache-v3-windows-x64-94f0dac836d70212-{LOCK_CRLF}-{SOLDR}",
+        374_467_472,
+    ),
     (
         f"setup-soldr-buildcache-v3-linux-x64-8ae7e3e10fed3308-check-linux-arm-musl-{LOCK}-{SOLDR}",
         476_101_327,
     ),
 ]
-OLD_V2_BUILD = (
-    f"setup-soldr-buildcache-v2-linux-x64-c97cbff348d78f86-check-linux-x86-musl-{OLD_LOCK}"
-)
+OLD_V2_BUILD = f"setup-soldr-buildcache-v2-linux-x64-c97cbff348d78f86-check-linux-x86-musl-{OLD_LOCK}"
 
 
 def _node(expr: str, payload: object) -> dict:
@@ -87,9 +94,7 @@ def _build(key: str) -> dict | None:
 
 def test_live_v3_inventory_forecasts_instead_of_failing_closed() -> None:
     """RED before the fix: `unknown cache key format: cook-base-v3-...`."""
-    x86_musl = (
-        f"setup-soldr-buildcache-v3-linux-x64-b6333e686e3919f1-check-linux-x86-musl-{LOCK}-{SOLDR}"
-    )
+    x86_musl = f"setup-soldr-buildcache-v3-linux-x64-b6333e686e3919f1-check-linux-x86-musl-{LOCK}-{SOLDR}"
     plan = _plan(LIVE_V3 + [(x86_musl, 476_074_843), (OLD_V2_BUILD, 476_784_918)])
     assert plan["ok"], plan.get("reason")
     # Every current-lock v3 entry stays; only the old-lock v2 build its v3
@@ -101,12 +106,17 @@ def test_v3_cook_key_parses_soldr_last_with_optional_suffix() -> None:
     plain = _cook(LIVE_V3[1][0])
     assert plain is not None
     assert (plain["flags"], plain["lockHash"], plain["soldr"], plain["suffix"]) == (
-        "6cafa616", LOCK, "0.9.51", "",
+        "6cafa616",
+        LOCK,
+        "0.9.51",
+        "",
     )
     suffixed = _cook(LIVE_V3[2][0])
     assert suffixed is not None
     assert (suffixed["flags"], suffixed["soldr"], suffixed["suffix"]) == (
-        "none", "0.9.51", "xcheck-linux-x86-musl",
+        "none",
+        "0.9.51",
+        "xcheck-linux-x86-musl",
     )
 
 
@@ -114,7 +124,9 @@ def test_v3_build_key_separates_suffix_lock_and_soldr_digest() -> None:
     parts = _build(LIVE_V3[4][0])
     assert parts is not None
     assert (parts["digest"], parts["suffix"], parts["lockHash"]) == (
-        "8ae7e3e10fed3308", "check-linux-arm-musl", LOCK,
+        "8ae7e3e10fed3308",
+        "check-linux-arm-musl",
+        LOCK,
     )
     bare = _build(LIVE_V3[3][0])
     assert bare is not None
@@ -147,8 +159,12 @@ def test_v3_cook_supersedes_same_family_v2_even_at_older_soldr() -> None:
 
 
 def test_old_lock_v3_generations_are_retired_like_v2() -> None:
-    old_cook = f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f6cafa616-l{OLD_LOCK}-soldr0.9.51"
-    old_build = f"setup-soldr-buildcache-v3-linux-x64-8ae7e3e10fed3308-{OLD_LOCK}-{SOLDR}"
+    old_cook = (
+        f"cook-base-v3-linux-x64-glibc-rustc1.95.0-f6cafa616-l{OLD_LOCK}-soldr0.9.51"
+    )
+    old_build = (
+        f"setup-soldr-buildcache-v3-linux-x64-8ae7e3e10fed3308-{OLD_LOCK}-{SOLDR}"
+    )
     plan = _plan([(old_cook, 1_000), (old_build, 1_000)])
     assert plan["ok"], plan.get("reason")
     assert set(plan["staleCookIds"]) == {1}
