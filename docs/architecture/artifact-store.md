@@ -673,6 +673,13 @@ imported files so their provenance describes the bytes actually compiled.
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.
 
+GCC `.gch` consumers do not pass through this gate; their key folds the `.gch`
+bytes with its source header (`server/pch.rs`). That header must resolve the
+same way in every daemon, so an existing sibling (`cmake_pch.hxx`) wins over the
+in-memory registry, which a restart empties and which records CMake's
+`cmake_pch.hxx.cxx` stub. A `.gch` being regenerated is not its own implicit
+input, so a restored build tree keys it like a clean one (#1984).
+
 ### Requested depfiles are mandatory on C/C++ hits (#1992)
 
 Ninja reads a missing or empty `-MF` depfile as "no dependencies" and records

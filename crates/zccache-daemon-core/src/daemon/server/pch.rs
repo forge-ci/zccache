@@ -24,10 +24,8 @@ pub(super) fn pch_source_header(path: &Path) -> Option<NormalizedPath> {
     }
     // The stem of "test_pch.h.pch" is "test_pch.h"
     let header_name = path.file_stem()?;
-    // Try sibling: same directory
-    let sibling = path.with_file_name(header_name);
-    if sibling.exists() {
-        return Some(sibling.into());
+    if let Some(sibling) = pch_sibling_header(path) {
+        return Some(sibling);
     }
     // The PCH is typically in a build directory. Walk up looking for the
     // source header by matching the last path component(s).
@@ -54,18 +52,34 @@ pub(super) fn pch_source_header(path: &Path) -> Option<NormalizedPath> {
     None
 }
 
-/// Resolve the source header for a PCH binary. First checks the in-memory
-/// registry (populated when PCH generation succeeds), then falls back to the
-/// filesystem heuristic. Returns `None` for non-PCH files.
+/// `<dir>/foo.h` for `<dir>/foo.h.{pch,gch}`, if that file exists.
+fn pch_sibling_header(path: &Path) -> Option<NormalizedPath> {
+    let ext = path.extension()?.to_str()?;
+    if ext != "pch" && ext != "gch" {
+        return None;
+    }
+    let sibling = path.with_file_name(path.file_stem()?);
+    sibling.exists().then(|| sibling.into())
+}
+
+/// Resolve the source header for a PCH binary: an existing sibling header,
+/// then the in-memory registry (populated when PCH generation misses), then
+/// the directory walk. Returns `None` for non-PCH files.
 pub(super) fn resolve_pch_source(
     path: &Path,
     pch_map: &DashMap<NormalizedPath, NormalizedPath>,
 ) -> Option<NormalizedPath> {
-    // Fast path: check registry (covers build-dir separation).
+    // A sibling header wins over the registry. The registry is in-memory and
+    // only filled by a PCH miss, so preferring it gives one consumer two keys
+    // across a daemon restart when the compiled source is not the sibling, as
+    // with CMake's `cmake_pch.hxx.cxx` stub beside `cmake_pch.hxx` (#1984).
+    if let Some(sibling) = pch_sibling_header(path) {
+        return Some(sibling);
+    }
+    // Registry next (covers build-dir separation), then the directory walk.
     if let Some(src) = pch_map.get(&NormalizedPath::new(path)) {
         return Some(src.clone());
     }
-    // Fallback: filesystem heuristic.
     pch_source_header(path)
 }
 

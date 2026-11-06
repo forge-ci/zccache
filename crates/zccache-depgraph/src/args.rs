@@ -367,6 +367,11 @@ pub fn parse_gnu_args(args: &[String], cwd: &Path) -> ParsedArgs {
         result.source_file = first;
     }
 
+    // A `.gch` being regenerated is an output, not its own input (#1984).
+    if let Some(output) = &result.output_file {
+        result.force_includes.retain(|path| path != output);
+    }
+
     // Sort defines and flags for deterministic context keys.
     result.defines.sort();
     result.undefines.sort();
@@ -619,6 +624,31 @@ mod tests {
             parsed.force_includes,
             vec![dir.path().join("pch.h"), dir.path().join("pch.h.gch")]
         );
+    }
+
+    /// #1984: CMake's `.gch` compile also passes `-include <header>`. Its own
+    /// previous output, left by a restored build tree, is not an input: GCC
+    /// regenerates from source, and a restored tree would otherwise key the
+    /// compile differently from a clean one.
+    #[test]
+    fn gch_being_generated_is_not_its_own_implicit_pch_input() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pch.h"), "#define A 1\n").unwrap();
+        std::fs::write(dir.path().join("pch.h.gch"), "old gch").unwrap();
+        let parsed = parse_gnu_args(
+            &args(&[
+                "-x",
+                "c++-header",
+                "-include",
+                "pch.h",
+                "-o",
+                "pch.h.gch",
+                "-c",
+                "pch.h.cxx",
+            ]),
+            dir.path(),
+        );
+        assert_eq!(parsed.force_includes, vec![dir.path().join("pch.h")]);
     }
 
     #[test]
