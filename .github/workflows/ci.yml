@@ -458,6 +458,8 @@ jobs:
         run: soldr cargo check --workspace
       - name: Verify nested Dylint cache contract
         run: "soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ignored"
+      - name: Verify source edit after a test build fails check (#2002)
+        run: "soldr cargo test -p zccache --test cache_rust false_green_check:: -- --ignored"
 
   reflink-e2e:
     name: Reflink e2e
