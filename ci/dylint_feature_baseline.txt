@@ -1,0 +1,16 @@
+# Shrinking allowlist for the product-feature Dylint pass (#1967).
+# count<TAB>file<TAB>message; ci/lint.py fails on new findings and on stale rows.
+# Fix a finding and delete its row. Never add a row to get a pass green.
+1	crates/zccache-cli-core/src/cli/client.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+6	crates/zccache-cli-core/src/cli/commands/fetch.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+5	crates/zccache-cli-core/src/cli/commands/wrap/detach_outputs.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+3	crates/zccache-cli-core/src/cli/recovery.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+4	crates/zccache-cli-core/src/download_client/mod.rs	host-platform cfg selection (windows) is not allowed here; host selection belongs in kernal-api or an approved product adapter
+1	crates/zccache-cli-core/src/download_client/mod.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+1	crates/zccache-cli-core/src/formatter.rs	`std::env::temp_dir` writes under $TMPDIR; root it under zccache_core::config::default_cache_dir() (e.g. tmp_dir() or symbols_cache_dir()) and use the `_in` variant
+2	crates/zccache-cli-core/src/formatter.rs	host-platform cfg selection (target_os) is not allowed here; host selection belongs in kernal-api or an approved product adapter
+1	crates/zccache-cli-core/src/formatter.rs	host-platform cfg selection (unix) is not allowed here; host selection belongs in kernal-api or an approved product adapter
+1	crates/zccache-cli-core/src/platform.rs	raw `std::..::JoinHandle::join` blocks without a bound; use `wait::join_for`, which takes a mandatory timeout (soldr#3836)
+2	crates/zccache-cli/src/exec_cached.rs	use zccache_core::path::NormalizedPath instead of std::path::PathBuf
+2	crates/zccache/src/dev_daemon_identity.rs	host-platform cfg selection (unix) is not allowed here; host selection belongs in kernal-api or an approved product adapter
+1	crates/zccache/src/dev_daemon_identity.rs	native path (std::os::unix) is not allowed here; move native code into kernal-api or an approved product adapter

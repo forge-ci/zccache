@@ -1,4 +1,5 @@
 import subprocess
+from collections import Counter
 
 from ci import lint
 
@@ -17,6 +18,7 @@ def _captured_envs(monkeypatch, configured: str | None) -> list[dict[str, str]]:
     monkeypatch.setenv("SOLDR_DYLINT_TOOLCHAIN", "leaked-from-parent")
     monkeypatch.setattr(lint, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(lint, "dylint_cross_targets", lambda: [])
+    monkeypatch.setattr(lint, "dylint_product_pass", lambda env, targets: 0)
     monkeypatch.setattr(lint.subprocess, "run", fake_run)
     assert lint.lint_dylint_only() == 0
     assert envs
@@ -34,3 +36,34 @@ def test_setup_soldr_run_leaves_the_dylint_scope_to_soldr(monkeypatch) -> None:
 def test_local_run_still_pins_the_dylint_toolchain(monkeypatch) -> None:
     for env in _captured_envs(monkeypatch, None):
         assert env["SOLDR_DYLINT_TOOLCHAIN"] == lint.DYLINT_TOOLCHAIN
+
+
+def test_parse_counts_located_warnings_and_ignores_summaries() -> None:
+    output = (
+        "warning: raw wait\n   --> crates/a/src/x.rs:1:2\n"
+        "warning: `a` (lib) generated 2 warnings\n"
+        " 88.1 warning: raw wait\n  --> crates/a/src/x.rs:9:2\n"
+    )
+    assert lint.parse_feature_findings(output) == {("crates/a/src/x.rs", "raw wait"): 2}
+
+
+def test_ratchet_rejects_new_findings_and_stale_entries() -> None:
+    key = ("crates/a/src/x.rs", "raw wait")
+    assert lint.compare_feature_findings(Counter({key: 1}), Counter({key: 1})) == []
+    assert "new" in lint.compare_feature_findings(Counter({key: 2}), Counter({key: 1}))[0]
+    assert "shrink" in lint.compare_feature_findings(Counter(), Counter({key: 1}))[0]
+
+
+def test_product_pass_forces_a_real_run(monkeypatch, tmp_path) -> None:
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("", encoding="utf-8")
+    envs = []
+
+    def fake_run(command, **kwargs):
+        envs.append(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr(lint, "DYLINT_FEATURE_BASELINE", baseline)
+    monkeypatch.setattr(lint.subprocess, "run", fake_run)
+    assert lint.dylint_product_pass({}, [None]) == 0
+    assert envs[0]["SOLDR_VERDICTS"] == "off"

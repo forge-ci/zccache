@@ -1,5 +1,6 @@
 """Reject Dylint libraries omitted from formatting or CI test wiring."""
 
+import ast
 from pathlib import Path
 import re
 import sys
@@ -133,6 +134,45 @@ def check_cfg_coverage(root: Path) -> list[str]:
     return errors
 
 
+def _lint_constant(root: Path, name: str):
+    tree = ast.parse((root / "ci" / "lint.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(target, "id", None) == name for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    return None
+
+
+def check_feature_inventory(root: Path) -> list[str]:
+    """Every workspace feature is reached by the product pass or excluded."""
+    tables = {}
+    for manifest in (root / "crates").glob("*/Cargo.toml"):
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        tables[data["package"]["name"]] = data.get("features", {})
+    pending = list(_lint_constant(root, "DYLINT_PRODUCT_FEATURES") or [])
+    pending += [f"{crate}/default" for crate in tables]
+    reached: set[str] = set()
+    while pending:
+        feature = pending.pop()
+        if feature in reached:
+            continue
+        reached.add(feature)
+        crate, _, name = feature.partition("/")
+        for child in tables.get(crate, {}).get(name, []):
+            if child.startswith("dep:"):
+                continue
+            pending.append(child if "/" in child else f"{crate}/{child}")
+    excluded = set(_lint_constant(root, "DYLINT_EXCLUDED_FEATURES") or {})
+    return [
+        f"{crate}/{name}: feature hidden from Dylint; add it to "
+        "DYLINT_PRODUCT_FEATURES or DYLINT_EXCLUDED_FEATURES in ci/lint.py"
+        for crate, features in sorted(tables.items())
+        for name in sorted(features)
+        if f"{crate}/{name}" not in reached | excluded
+    ]
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Return wiring errors; kept pure so pytest can exercise fixtures."""
     expected = manifests(root)
@@ -184,6 +224,7 @@ def check(root: Path = ROOT) -> list[str]:
     for baseline in (root / "dylints").glob("*/src/baseline.txt"):
         errors.extend(check_platform_baseline(root, baseline))
     errors.extend(check_cfg_coverage(root))
+    errors.extend(check_feature_inventory(root))
     return errors
 
 
