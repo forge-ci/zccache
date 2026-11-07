@@ -2,6 +2,7 @@
 //! file size and restores the original mtime must never be served the
 //! stale cached content hash (the rustc stale-HIT false green).
 #![cfg(unix)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;
 use std::time::SystemTime;
@@ -40,7 +41,10 @@ fn lookup_since_rehashes_same_size_same_mtime_edit() {
     same_stamp_edit(&path, b"cp! ok\nfn main() {}\n");
     let clock = cache.current_clock();
     let second = cache.lookup_since(&np, clock).unwrap().hash;
-    assert_ne!(first, second, "stale hash served for edited content (#1943)");
+    assert_ne!(
+        first, second,
+        "stale hash served for edited content (#1943)"
+    );
     assert_eq!(second, zccache_hash::hash_file(&path).unwrap());
 }
 

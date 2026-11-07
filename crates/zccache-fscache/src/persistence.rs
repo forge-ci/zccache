@@ -34,7 +34,7 @@
 //! ## Forward/backward compatibility
 //!
 //! The on-disk format embeds a `version: u32` (currently
-//! [`FORMAT_VERSION`] = `1`). On a version mismatch
+//! [`FORMAT_VERSION`] = `2`; v2 added the `(ctime, inode)` identity, #1943). On a version mismatch
 //! [`MetadataCache::load_from_disk`] returns `Err`; callers (the daemon)
 //! treat that as "start with an empty cache" and log a warning. Old
 //! daemons reading a future snapshot will silently fall back to empty;
@@ -62,7 +62,7 @@ use zccache_core::NormalizedPath;
 /// `PersistedEntry` changes in a way that older daemons cannot read.
 /// Mismatches are handled by [`MetadataCache::load_from_disk`] returning
 /// `Err`; the caller (daemon) treats that as "start empty".
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Persisted form of one [`FileMetadata`] entry.
 ///
@@ -75,6 +75,7 @@ pub const FORMAT_VERSION: u32 = 1;
 struct PersistedEntry {
     mtime: SystemTime,
     size: u64,
+    identity: crate::identity::FileIdentity,
     content_hash: [u8; 32],
 }
 
@@ -124,6 +125,7 @@ impl MetadataCache {
                         PersistedEntry {
                             mtime: value.mtime,
                             size: value.size,
+                            identity: value.identity,
                             content_hash,
                         },
                     )
@@ -232,6 +234,7 @@ impl MetadataCache {
                 FileMetadata {
                     mtime: entry.mtime,
                     size: entry.size,
+                    identity: entry.identity,
                     confidence: Confidence::Medium,
                     last_verified: now,
                     content_hash: Some(entry.content_hash),
@@ -309,6 +312,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: Some([i as u8; 32]),
+                    identity: Default::default(),
                 },
             );
         }
@@ -373,6 +377,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some([7u8; 32]),
+                identity: Default::default(),
             },
         );
         cache.insert(
@@ -383,6 +388,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
