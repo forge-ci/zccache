@@ -96,6 +96,24 @@ pub(crate) async fn check_daemon_version(endpoint: &str) -> VersionCheck {
     }
 }
 
+/// Did a daemon at `endpoint` answer a request, in any version?
+///
+/// A successful connect does not prove this (#2129). A daemon binds its endpoint
+/// before it claims the cache root, so one that loses the root to a live writer
+/// briefly listens, then exits without ever serving or writing a lock record.
+/// The ready-wait after a spawn needs this; the bound also covers a Windows client
+/// that retries `ERROR_PIPE_BUSY` without limit.
+async fn daemon_answers_status(endpoint: &str) -> bool {
+    matches!(
+        tokio::time::timeout(
+            super::status_probe_timeout(),
+            check_daemon_version(endpoint)
+        )
+        .await,
+        Ok(VersionCheck::Ok | VersionCheck::DaemonNewer | VersionCheck::DaemonOlder { .. })
+    )
+}
+
 async fn spawn_and_wait(
     endpoint: &str,
     reason: &str,
@@ -421,7 +439,7 @@ pub(crate) async fn wait_for_daemon_ready_while(
     let mut last_observed_pid: Option<u32> = None;
     loop {
         tokio::time::sleep(cfg.poll_interval).await;
-        if connect_client(endpoint).await.is_ok() {
+        if daemon_answers_status(endpoint).await {
             return Ok(());
         }
         let elapsed = start.elapsed();
