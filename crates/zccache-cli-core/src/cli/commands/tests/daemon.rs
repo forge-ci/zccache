@@ -181,7 +181,7 @@ async fn ensure_daemon_is_bounded_when_status_probe_never_answers() {
     let mut listener = crate::ipc::IpcListener::bind(&ep).expect("bind listener");
     let server = tokio::spawn(async move {
         let _conn = listener.accept().await;
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -193,8 +193,15 @@ async fn ensure_daemon_is_bounded_when_status_probe_never_answers() {
     server.abort();
     std::env::remove_var("ZCCACHE_STATUS_PROBE_TIMEOUT_SECS");
 
+    // #2129: a replacement cannot bind this endpoint and nothing answers, so this
+    // is a failure after the 10 s spawn grace, bounded by the 30 s recovery budget.
+    // It used to return early only by reading the fake's connect as a ready daemon.
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        result.is_err(),
+        "a listener that never answers is not a daemon; took {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(35),
         "ensure_daemon took {elapsed:?} against an unresponsive daemon; result={result:?}"
     );
 }
