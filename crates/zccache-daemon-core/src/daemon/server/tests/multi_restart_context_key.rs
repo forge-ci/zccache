@@ -260,6 +260,10 @@ pub(super) async fn quiesce_and_persist(
     let _publication_guard =
         drain_durable_state_for_shutdown(&server.state, Some(index_writer_handle)).await;
     save_dep_graph_to_disk(server, depgraph_path);
+    // Last step of `run()`'s Shutdown arm. The next session cannot wait for
+    // `drop(server)` instead: detached work such as the post-compile watch
+    // registration keeps `Arc<SharedState>`, and so the lock, alive afterwards.
+    server.state.cache_root_lock.release();
 }
 
 /// A two-source legacy C/C++ compile must hit warm after a graceful daemon
