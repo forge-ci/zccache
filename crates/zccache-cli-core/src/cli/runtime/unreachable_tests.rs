@@ -165,12 +165,90 @@ async fn a_pid_that_exits_during_the_wait_ends_the_poll_early() {
 #[tokio::test]
 async fn a_failure_after_the_daemon_came_up_is_a_success() {
     let endpoint = unique_test_endpoint();
-    let _listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let server = tokio::spawn(answer_one_status(listener, endpoint.clone()));
 
     let outcome = settle_failed_recovery(&endpoint, "gave up".to_string()).await;
 
     assert_eq!(outcome, Ok(()));
     assert_eq!(breaker_reason_if_open(&endpoint), None);
+    server.await.expect("status server");
+}
+
+/// #2129: a loser of the cache-root race listens without ever serving. That is
+/// the outage it looks like, not a daemon that came up.
+#[tokio::test]
+async fn a_listener_that_never_answers_is_not_a_daemon() {
+    let endpoint = unique_test_endpoint();
+    let _listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+
+    let outcome = settle_failed_recovery(&endpoint, "gave up".to_string()).await;
+    assert_eq!(outcome, Err("gave up".to_string()));
+    crate::cli::recovery::clear_breaker(&endpoint);
+
+    let wait = AdaptiveWaitConfig {
+        poll_interval: Duration::from_millis(25),
+        no_daemon_grace: Duration::from_millis(150),
+        hard_ceiling: Duration::from_secs(5),
+    };
+    let error = super::super::wait_for_daemon_ready_with(&endpoint, |_| None, wait)
+        .await
+        .expect_err("a connect alone must not read as ready");
+    assert!(error.contains("no daemon lockfile"), "{error}");
+}
+
+/// The one answer a real daemon gives first, so a test can tell it from a listener.
+async fn answer_one_status(mut listener: crate::ipc::IpcListener, endpoint: String) {
+    use crate::protocol::wire_prost::{self, zccache_v1};
+
+    let mut conn = listener.accept().await.expect("accept");
+    let request: Option<crate::protocol::DecodedWireMessage<zccache_v1::Request>> =
+        conn.recv_wire().await.expect("recv");
+    let Some(crate::protocol::DecodedWireMessage::ProstV16(request)) = request else {
+        panic!("expected a prost status request");
+    };
+    let response = crate::protocol::Response::Status(crate::protocol::DaemonStatus {
+        version: crate::core::VERSION.to_string(),
+        daemon_namespace: "test".to_string(),
+        endpoint,
+        private_daemon: crate::protocol::PrivateDaemonStatus::shared(),
+        artifact_count: 0,
+        cache_size_bytes: 0,
+        metadata_entries: 0,
+        uptime_secs: 1,
+        cache_hits: 0,
+        cache_misses: 0,
+        total_compilations: 0,
+        non_cacheable: 0,
+        compile_errors: 0,
+        compile_errors_cached: 0,
+        time_saved_ms: 0,
+        total_links: 0,
+        link_hits: 0,
+        link_misses: 0,
+        link_non_cacheable: 0,
+        dep_graph_contexts: 0,
+        dep_graph_files: 0,
+        sessions_total: 0,
+        sessions_active: 0,
+        cache_dir: std::env::temp_dir().into(),
+        dep_graph_version: 0,
+        dep_graph_disk_size: 0,
+        dep_graph_persisted: false,
+        watcher_active: true,
+        watcher_degradations: 0,
+        index_writer_gone: false,
+        materialization: crate::protocol::MaterializationStatus {
+            mode: "COPY".to_string(),
+            reflink: 0,
+            hardlink: 0,
+            copy: 0,
+            reflink_fallbacks: 0,
+        },
+    });
+    let response = wire_prost::supported_control_response_to_prost(&response, &request.request_id)
+        .expect("encode status");
+    conn.send_prost(&response).await.expect("send");
 }
 
 /// A parked client failing while the winner still holds the slot fails alone.
