@@ -19,6 +19,7 @@ mod daemon_rustc_adversarial_mutations_test;
 mod daemon_rustc_cache_basic_test;
 mod daemon_rustc_cache_path_remap_test;
 mod daemon_rustc_cache_worktree_test;
+mod daemon_rustc_diagnostic_contract_test;
 mod daemon_rustc_issue_210_async_populate_test;
 mod daemon_rustc_response_file_test;
 mod daemon_rustc_restore_test;

@@ -32,9 +32,9 @@ pub(super) struct MissArtifactStoreRequest<'a> {
     /// has durably consumed them.
     pub(super) staged_persist_plan: Option<StagedCompilePlan>,
     pub(super) rustc_all_outputs: Option<&'a [RustcOutputFile]>,
-    /// Dylint input identity for the rustc verdict layer. `None` selects the
-    /// plain-rustc verdict while non-rust compilers never call the rust path.
-    pub(super) rustc_dylint_input_hash: Option<&'a str>,
+    /// Selects the rustc verdict layer. Present whenever `rustc_all_outputs`
+    /// is, since both derive from the parsed rustc args.
+    pub(super) rustc_verdict_contract: Option<crate::depgraph::RustcVerdictContract<'a>>,
     pub(super) stdout: &'a Arc<Vec<u8>>,
     pub(super) stderr: &'a Arc<Vec<u8>>,
     pub(super) exit_code: i32,
@@ -82,7 +82,7 @@ pub(super) fn store_miss_artifact(request: MissArtifactStoreRequest<'_>) -> Miss
         user_depfile_persist_temp,
         staged_persist_plan,
         rustc_all_outputs,
-        rustc_dylint_input_hash,
+        rustc_verdict_contract,
         stdout,
         stderr,
         exit_code,
@@ -136,14 +136,16 @@ pub(super) fn store_miss_artifact(request: MissArtifactStoreRequest<'_>) -> Miss
         record_pch_source_mapping(state, source_path, output_path);
 
         let t_artifact_build = Instant::now();
-        if let Some(all_outputs) = rustc_all_outputs {
+        if let (Some(all_outputs), Some(verdict_contract)) =
+            (rustc_all_outputs, rustc_verdict_contract)
+        {
             store_rustc_outputs(
                 state_arc,
                 sid,
                 source_path,
                 all_outputs,
                 &artifact_key_hex,
-                rustc_dylint_input_hash,
+                verdict_contract,
                 stdout,
                 stderr,
                 exit_code,
@@ -318,7 +320,7 @@ fn store_rustc_outputs(
     source_path: &NormalizedPath,
     all_outputs: &[RustcOutputFile],
     artifact_key_hex: &str,
-    dylint_input_hash: Option<&str>,
+    verdict_contract: crate::depgraph::RustcVerdictContract<'_>,
     stdout: &Arc<Vec<u8>>,
     stderr: &Arc<Vec<u8>>,
     exit_code: i32,
@@ -365,12 +367,9 @@ fn store_rustc_outputs(
         Arc::new(Vec::new()),
         0,
     );
-    let verdict_key_hex =
-        crate::depgraph::compute_rustc_verdict_key(artifact_key_hex, dylint_input_hash)
-            .hash()
-            .to_hex();
+    let verdict_keys = verdict_contract.keys(artifact_key_hex);
     meta.rustc_verdicts.insert(
-        verdict_key_hex,
+        verdict_keys.storage_key(stderr).to_string(),
         ArtifactVerdict {
             stdout: Arc::clone(stdout),
             stderr: Arc::clone(stderr),

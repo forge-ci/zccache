@@ -78,6 +78,7 @@ pub(super) fn make_rustc_context(source: &str, edition: &str) -> RustcCompileCon
         extra_filename: None,
         target: None,
         cap_lints: None,
+        json_selections: Vec::new(),
         extern_crates: Vec::new(),
         lint_flags: Vec::new(),
         unknown_flags: Vec::new(),

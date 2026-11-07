@@ -13,14 +13,14 @@ const DYLINT_CACHE_INPUT_HASH_ENV: &str = "ZCCACHE_DYLINT_CACHE_INPUT_HASH";
 pub(super) fn artifact_ready_for_request(
     state: &SharedState,
     key_hex: &str,
-    verdict_key_hex: Option<&str>,
+    verdict_keys: Option<&crate::depgraph::RustcVerdictKeys>,
     requested_outputs: Option<&[NormalizedPath]>,
 ) -> bool {
     let Some(cached) = state.artifacts.get(key_hex) else {
         return false;
     };
-    if let Some(verdict_key) = verdict_key_hex {
-        let Some(verdict) = cached.meta.rustc_verdicts.get(verdict_key) else {
+    if let Some(keys) = verdict_keys {
+        let Some(verdict) = keys.lookup(&cached.meta.rustc_verdicts) else {
             return false;
         };
         if verdict.exit_code != 0 {
@@ -40,12 +40,12 @@ pub(super) fn artifact_ready_for_request(
 pub(super) async fn await_artifact_publication_if_needed(
     state: &SharedState,
     key_hex: &str,
-    verdict_key_hex: Option<&str>,
+    verdict_keys: Option<&crate::depgraph::RustcVerdictKeys>,
     requested_outputs: Option<&[NormalizedPath]>,
 ) {
     let deadline = tokio::time::Instant::now() + pending_writes::PENDING_PAYLOAD_WAIT_TIMEOUT;
     while state.pending_cache_writes.contains_key(key_hex)
-        && !artifact_ready_for_request(state, key_hex, verdict_key_hex, requested_outputs)
+        && !artifact_ready_for_request(state, key_hex, verdict_keys, requested_outputs)
     {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero()
@@ -61,20 +61,25 @@ pub(super) async fn await_artifact_publication_if_needed(
     }
 }
 
-fn rustc_verdict_key_hex(
+fn rustc_verdict_keys(
     is_rustc: bool,
     artifact_key_hex: &str,
     client_env: Option<&[(String, String)]>,
-) -> Option<String> {
+    rustc_args: &[String],
+    cwd: &Path,
+) -> Option<crate::depgraph::RustcVerdictKeys> {
     is_rustc.then(|| {
-        let dylint_hash = client_env.and_then(|env| {
+        let dylint_input_hash = client_env.and_then(|env| {
             env.iter()
                 .find_map(|(name, value)| (name == DYLINT_CACHE_INPUT_HASH_ENV).then_some(value))
                 .map(String::as_str)
         });
-        crate::depgraph::compute_rustc_verdict_key(artifact_key_hex, dylint_hash)
-            .hash()
-            .to_hex()
+        let args = crate::depgraph::parse_rustc_args(rustc_args, cwd);
+        crate::depgraph::RustcVerdictContract {
+            dylint_input_hash,
+            args: &args,
+        }
+        .keys(artifact_key_hex)
     })
 }
 
@@ -206,13 +211,14 @@ pub(super) async fn try_request_cache_hit(probe: RequestCacheHitProbe<'_>) -> Op
             rustc_requested_outputs(rustc_args, &output_path, cwd, client_env);
         let rustc_archive_hardlink_eligible =
             is_rustc.then(|| crate::compiler::rustc_archive_hardlink_eligible(rustc_args));
-        let verdict_key_hex = rustc_verdict_key_hex(is_rustc, artifact_key_hex, client_env);
+        let verdict_keys =
+            rustc_verdict_keys(is_rustc, artifact_key_hex, client_env, rustc_args, cwd);
         (
             OwnedCachedHitMaterializeRequest {
                 state: Arc::clone(state),
                 sid: *sid,
                 artifact_key_hex: artifact_key_hex.to_owned(),
-                verdict_key_hex,
+                verdict_keys,
                 source_path,
                 output_path: output_path.clone(),
                 secondary_output_dir: output_path.parent().unwrap_or(cwd).into(),
@@ -241,7 +247,7 @@ pub(super) async fn try_request_cache_hit(probe: RequestCacheHitProbe<'_>) -> Op
     await_artifact_publication_if_needed(
         state,
         &request.artifact_key_hex,
-        request.verdict_key_hex.as_deref(),
+        request.verdict_keys.as_ref(),
         request.rustc_metadata_compat_outputs.as_deref(),
     )
     .await;
@@ -360,11 +366,17 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
     } else {
         None
     };
-    let verdict_key_hex = rustc_verdict_key_hex(is_rustc, &entry_artifact_key_hex, client_env);
+    let verdict_keys = rustc_verdict_keys(
+        is_rustc,
+        &entry_artifact_key_hex,
+        client_env,
+        rustc_args,
+        cwd_path,
+    );
     await_artifact_publication_if_needed(
         state,
         &entry_artifact_key_hex,
-        verdict_key_hex.as_deref(),
+        verdict_keys.as_ref(),
         rustc_requested_outputs.as_deref(),
     )
     .await;
@@ -372,7 +384,7 @@ pub(super) async fn try_fast_hit(probe: FastHitProbe<'_>) -> Option<Response> {
         state: Arc::clone(state),
         sid: *sid,
         artifact_key_hex: entry_artifact_key_hex,
-        verdict_key_hex,
+        verdict_keys,
         source_path: source_path.clone(),
         output_path: output_path.clone(),
         secondary_output_dir,
@@ -522,11 +534,12 @@ pub(super) async fn try_depgraph_cached_hit(
     // background task. If the build removes its just-produced output before
     // that task completes, a depgraph hit can otherwise fail to materialize
     // and unnecessarily recompile. The fast-hit path has the same guard.
-    let verdict_key_hex = rustc_verdict_key_hex(is_rustc, artifact_key_hex, client_env);
+    let verdict_keys =
+        rustc_verdict_keys(is_rustc, artifact_key_hex, client_env, rustc_args, cwd_path);
     await_artifact_publication_if_needed(
         state,
         artifact_key_hex,
-        verdict_key_hex.as_deref(),
+        verdict_keys.as_ref(),
         rustc_requested_outputs.as_deref(),
     )
     .await;
@@ -535,7 +548,7 @@ pub(super) async fn try_depgraph_cached_hit(
         state: Arc::clone(state),
         sid: *sid,
         artifact_key_hex: artifact_key_hex.to_owned(),
-        verdict_key_hex,
+        verdict_keys,
         source_path: source_path.clone(),
         output_path: output_path.clone(),
         secondary_output_dir,

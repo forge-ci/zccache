@@ -32,7 +32,7 @@ pub(super) struct CachedHitMaterializeRequest<'a> {
     pub(super) artifact_key_hex: &'a str,
     /// Rustc diagnostics/exit-status entry paired with the output artifact.
     /// `None` keeps the legacy single-layer path for non-rust compilers.
-    pub(super) verdict_key_hex: Option<&'a str>,
+    pub(super) verdict_keys: Option<&'a crate::depgraph::RustcVerdictKeys>,
     pub(super) source_path: &'a NormalizedPath,
     pub(super) output_path: &'a NormalizedPath,
     pub(super) secondary_output_dir: NormalizedPath,
@@ -75,7 +75,7 @@ pub(super) struct OwnedCachedHitMaterializeRequest {
     pub(super) state: Arc<SharedState>,
     pub(super) sid: SessionId,
     pub(super) artifact_key_hex: String,
-    pub(super) verdict_key_hex: Option<String>,
+    pub(super) verdict_keys: Option<crate::depgraph::RustcVerdictKeys>,
     pub(super) source_path: NormalizedPath,
     pub(super) output_path: NormalizedPath,
     pub(super) secondary_output_dir: NormalizedPath,
@@ -113,7 +113,7 @@ pub(super) async fn materialize_cached_compile_hit_offloaded(
                 state: &request.state,
                 sid: &request.sid,
                 artifact_key_hex: &request.artifact_key_hex,
-                verdict_key_hex: request.verdict_key_hex.as_deref(),
+                verdict_keys: request.verdict_keys.as_ref(),
                 source_path: &request.source_path,
                 output_path: &request.output_path,
                 secondary_output_dir: request.secondary_output_dir,
@@ -201,7 +201,7 @@ pub(super) fn materialize_cached_compile_hit(
         state,
         sid,
         artifact_key_hex,
-        verdict_key_hex,
+        verdict_keys,
         source_path,
         output_path,
         secondary_output_dir,
@@ -242,12 +242,9 @@ pub(super) fn materialize_cached_compile_hit(
     };
     let cached = lookup_artifact_with_disk_fallback(state, artifact_key_hex)
         .ok_or_else(|| missing_entry(artifact_key_hex))?;
-    let verdict = verdict_key_hex
-        .map(|key| {
-            cached
-                .meta
-                .rustc_verdicts
-                .get(key)
+    let verdict = verdict_keys
+        .map(|keys| {
+            keys.lookup(&cached.meta.rustc_verdicts)
                 .cloned()
                 .ok_or(CachedHitFailure::VerdictMissing)
         })

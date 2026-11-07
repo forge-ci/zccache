@@ -689,3 +689,21 @@ publish a compile whose depfile is unusable; the compile still succeeds,
 uncached. A hit checks the recorded payload before writing anything and the
 delivered bytes after, and any failure is a miss that invalidates the depgraph
 link, which also covers entries already persisted with bad depfiles.
+
+## Rustc diagnostic rendering keys (#1929)
+
+Cached stderr must match the rendering the request asked for. rustc's flags fall
+into two groups, pinned by the `rustc_ground_truth_*` tests in
+`crates/zccache/tests/cache_rust/daemon_rustc_diagnostic_contract_test.rs`:
+
+| Flag | Output bytes | Keyed in | Cargo's behavior |
+|---|---|---|---|
+| `--json` | Change (rustc tracks it) | Context key, as a sorted set | Constant; `--message-format=short` adds `diagnostic-short` |
+| `--error-format` | Unchanged | Verdict key; unset is `human` | Always `json` |
+| `--color` | Unchanged | Verdict key; unset is `auto` | Never passed |
+| `--diagnostic-width` | Unchanged | Verdict key, only if stderr renders something | Follows a terminal; absent when piped, as under soldr |
+
+A verdict with nothing rendered (empty stderr or only JSON artifact notices) is
+stored under a width-neutral key, so a terminal resize recompiles only crates
+that have diagnostics to re-render. `--color` stays keyed beside `--json`, where
+rustc rejects it, so that error is never answered by a cache hit.

@@ -34,8 +34,8 @@ pub use artifact_keys::{
 };
 pub use rustc_keys::{
     compute_rustc_artifact_key, compute_rustc_artifact_key_with_root,
-    compute_rustc_artifact_key_with_root_with, compute_rustc_verdict_key,
-    fold_rustc_env_deps_into_artifact_key,
+    compute_rustc_artifact_key_with_root_with, fold_rustc_env_deps_into_artifact_key,
+    RustcVerdictContract, RustcVerdictKeys,
 };
 
 #[cfg(test)]
@@ -448,6 +448,10 @@ pub struct RustcCompileContext {
     pub target: Option<String>,
     /// `--cap-lints` value.
     pub cap_lints: Option<String>,
+    /// Sorted, deduplicated `--json` selections. rustc tracks these, so they
+    /// change the crate hash and output bytes, unlike the other rendering
+    /// flags, which select a verdict (`RustcVerdictContract`, #1929).
+    pub json_selections: Vec<String>,
     /// Extern crate `(name, path)` pairs, sorted. Paths included so that
     /// `--extern a=v1.rlib` and `--extern a=v2.rlib` get different context keys.
     pub extern_crates: Vec<(String, String)>,
@@ -539,6 +543,17 @@ impl RustcCompileContext {
         }
         env_vars.sort();
 
+        let mut json_selections: Vec<String> = args
+            .json_format
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .filter(|selection| !selection.is_empty())
+            .map(str::to_string)
+            .collect();
+        json_selections.sort_unstable();
+        json_selections.dedup();
+
         Self {
             source_file: args.source_file.clone(),
             crate_name: args.crate_name.clone(),
@@ -552,6 +567,7 @@ impl RustcCompileContext {
             extra_filename: args.extra_filename.clone(),
             target: args.target.clone(),
             cap_lints: args.cap_lints.clone(),
+            json_selections,
             extern_crates,
             lint_flags: args.lint_flags.clone(),
             unknown_flags: args.unknown_flags.clone(),
@@ -592,7 +608,7 @@ impl RustcCompileContext {
     ) -> ContextKey {
         let mut hasher = kernal_api::hash::Blake3Hasher::new();
 
-        hasher.update(b"zccache-rustc-context-key-v4\0");
+        hasher.update(b"zccache-rustc-context-key-v5\0");
 
         // Compiler binary hash (different rustc versions -> different
         // output). Unconditional (non-Option field, issue #1166).
@@ -692,6 +708,13 @@ impl RustcCompileContext {
         if let Some(ref cap) = self.cap_lints {
             hasher.update(b"cap-lints\0");
             hasher.update(cap.as_bytes());
+            hasher.update(b"\0");
+        }
+
+        // `--json` selections (sorted).
+        hasher.update(b"json\0");
+        for selection in &self.json_selections {
+            hasher.update(selection.as_bytes());
             hasher.update(b"\0");
         }
 
