@@ -14,9 +14,9 @@
     clippy::unwrap_in_result
 )]
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -24,6 +24,7 @@ use zccache::artifact::{ArtifactIndex, ArtifactStore};
 use zccache::core::{config, NormalizedPath};
 use zccache::depgraph::SystemIncludeCache;
 use zccache::fscache::{Confidence, FileMetadata, MetadataCache};
+use zccache_test_support::test_child::TestChild;
 
 /// How much longer the large-state spawn may take than the small-state
 /// control before we call it a synchronous load.
@@ -118,7 +119,8 @@ fn measure_lockfile_latency(fixture: StateFixture) -> Duration {
     let _ = std::fs::remove_file(lockfile.as_path());
 
     let spawn_at = Instant::now();
-    let mut child = Command::new(daemon_bin)
+    let mut command = Command::new(daemon_bin);
+    command
         .args(["--foreground", "--endpoint", &endpoint])
         .env("ZCCACHE_CACHE_DIR", cache_dir.as_path())
         .env("ZCCACHE_DAEMON_STATE_DIR", daemon_state_dir.as_path())
@@ -127,36 +129,23 @@ fn measure_lockfile_latency(fixture: StateFixture) -> Duration {
         // daemon agree on the readiness lockfile (#1404).
         .env("ZCCACHE_DAEMON_NAMESPACE", namespace)
         .env_remove("ZCCACHE_COLOCATE")
-        .env("ZCCACHE_NO_UNLOCK", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn daemon");
-
-    let stderr = child.stderr.take().expect("take child stderr");
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.take(64 * 1024).read_to_end(&mut buf);
-        String::from_utf8_lossy(&buf).into_owned()
-    });
+        .env("ZCCACHE_NO_UNLOCK", "1");
+    let mut child = TestChild::spawn(command).expect("spawn daemon");
 
     let mut observed_at: Option<Duration> = None;
-    while spawn_at.elapsed() < HARD_CAP {
-        if lockfile.exists() {
-            observed_at = Some(spawn_at.elapsed());
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    let _ = child
+        .wait_until(HARD_CAP, || {
+            let seen = lockfile.exists();
+            if seen {
+                observed_at = Some(spawn_at.elapsed());
+            }
+            seen
+        })
+        .expect("poll daemon");
 
-    let _ = child.kill();
-    let _ = child.wait();
+    let captured = child.collect();
     let _ = std::fs::remove_file(lockfile.as_path());
-
-    let captured_stderr = stderr_handle
-        .join()
-        .unwrap_or_else(|_| String::from("<stderr thread panicked>"));
+    let captured_stderr = captured.stderr_text();
 
     match observed_at {
         Some(d) => d,
