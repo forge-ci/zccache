@@ -33,6 +33,7 @@ pub use ownership::{
     read_backend_identity_for, remove_backend_identity_for, verified_daemon_instance_for,
     verify_daemon_pid, verify_daemon_pid_for, write_backend_identity, write_backend_identity_for,
 };
+pub use platform::fs::metadata_identity;
 pub use transport::IpcClientConnection;
 pub use transport::{
     connect, unique_test_endpoint, IpcConnection, IpcListener, DEFAULT_CLIENT_RECV_TIMEOUT,
