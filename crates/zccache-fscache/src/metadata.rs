@@ -87,9 +87,10 @@ pub enum Confidence {
 
 /// Cached metadata for a single file.
 ///
-/// Change detection uses `(mtime, size)`. File replacement detection
-/// (same path, new inode) is handled by the file watcher (`notify`),
-/// not by platform-specific file identity checks.
+/// Change detection uses `(mtime, size)` plus [`crate::FileIdentity`]
+/// (Unix `ctime` + inode, #1943), all from one `stat`. `ctime` catches an
+/// in-place edit whose mtime was restored; the inode catches replacement.
+/// Where neither exists (Windows) the file watcher (`notify`) is the backstop.
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     /// File modification time.
