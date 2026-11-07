@@ -431,6 +431,10 @@ jobs:
           export PATH="${native_compiler_dir}:${PATH}"
           test -x "${native_compiler_dir}/rustc"
           soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
+      # #1967: `cargo test --workspace --lib` builds zccache-cli-core without
+      # `download-client`, so the fetch-lock expiry test runs nowhere else on Linux.
+      - name: Fetch-lock expiry regression
+        run: soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |
@@ -625,7 +629,8 @@ jobs:
         shell: bash
         run: |
           soldr cargo test -p zccache-cli-core --features cli --lib -- \
-            cli::runtime::unreachable:: racing_clients_do_not_double
+            cli::runtime::unreachable:: racing_clients_do_not_double \
+            download_client::artifact::lock::
       - name: Set up MSVC environment (vcvars64)
         uses: ilammy/msvc-dev-cmd@v1
         with:
