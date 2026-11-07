@@ -9,8 +9,7 @@ use crate::rustc_args::{parse_rustc_args, ExternCrate, RustcParsedArgs};
 use zccache_core::NormalizedPath;
 
 use super::super::{
-    compute_rustc_artifact_key, compute_rustc_artifact_key_with_root, compute_rustc_verdict_key,
-    RustcCompileContext,
+    compute_rustc_artifact_key, compute_rustc_artifact_key_with_root, RustcCompileContext,
 };
 use super::{make_context, make_rustc_context, make_rustc_context_with_env, test_compiler_hash};
 
@@ -30,6 +29,7 @@ fn windows_rustc_context_key_normalizes_equivalent_source_path_spellings() {
         extra_filename: None,
         target: None,
         cap_lints: None,
+        json_selections: Vec::new(),
         extern_crates: Vec::new(),
         lint_flags: Vec::new(),
         unknown_flags: Vec::new(),
@@ -671,9 +671,9 @@ fn rustc_dylint_hash_selects_verdict_without_rekeying_artifact_context() {
     assert_eq!(dylint_a.context_key(), dylint_b.context_key());
 
     let artifact = "0707070707070707070707070707070707070707070707070707070707070707";
-    let plain_verdict = compute_rustc_verdict_key(artifact, None);
-    let dylint_a_verdict = compute_rustc_verdict_key(artifact, Some("lint-a"));
-    let dylint_b_verdict = compute_rustc_verdict_key(artifact, Some("lint-b"));
+    let plain_verdict = verdict_keys(artifact, None, &[]);
+    let dylint_a_verdict = verdict_keys(artifact, Some("lint-a"), &[]);
+    let dylint_b_verdict = verdict_keys(artifact, Some("lint-b"), &[]);
     assert_ne!(plain_verdict, dylint_a_verdict);
     assert_ne!(dylint_a_verdict, dylint_b_verdict);
 }
@@ -849,4 +849,118 @@ fn env_dep_fold_distinguishes_values_and_unset() {
 
 fn h(byte: u8) -> zccache_hash::ContentHash {
     zccache_hash::ContentHash::from_bytes([byte; 32])
+}
+
+fn verdict_keys(
+    artifact: &str,
+    dylint_input_hash: Option<&str>,
+    flags: &[&str],
+) -> crate::context::RustcVerdictKeys {
+    let flags: Vec<String> = flags.iter().map(ToString::to_string).collect();
+    let args = crate::rustc_args::parse_rustc_args(&flags, Path::new("/work"));
+    crate::context::RustcVerdictContract {
+        dylint_input_hash,
+        args: &args,
+    }
+    .keys(artifact)
+}
+
+/// #1929: each flag rustc renders differently under selects its own verdict.
+#[test]
+fn verdict_keys_split_on_each_rendering_flag() {
+    let base = verdict_keys("artifact", None, &[]);
+    for flags in [
+        &["--error-format=json"][..],
+        &["--error-format=short"][..],
+        &["--color=always"][..],
+        &["--color=never"][..],
+    ] {
+        assert_ne!(base, verdict_keys("artifact", None, flags), "{flags:?}");
+    }
+}
+
+fn context_key_for(flags: &[&str]) -> crate::context::ContextKey {
+    let mut all = vec!["lib.rs".to_string()];
+    all.extend(flags.iter().map(ToString::to_string));
+    let args = crate::rustc_args::parse_rustc_args(&all, Path::new("/work"));
+    RustcCompileContext::from_parsed_args(&args, &[], test_compiler_hash()).context_key()
+}
+
+/// #1929: `--json` selections change output bytes, so they split the context
+/// key as an order-free set. The untracked rendering flags must not, or a
+/// format change would rebuild identical artifact bytes.
+#[test]
+fn context_key_splits_on_json_selection_only() {
+    let base = context_key_for(&["--error-format=json"]);
+    let selected = context_key_for(&["--error-format=json", "--json=artifacts,future-incompat"]);
+    assert_ne!(base, selected);
+    assert_ne!(
+        selected,
+        context_key_for(&["--error-format=json", "--json=artifacts"])
+    );
+    for equivalent in [
+        &["--error-format=json", "--json=future-incompat,artifacts"][..],
+        &[
+            "--error-format=json",
+            "--json=artifacts",
+            "--json=future-incompat",
+        ][..],
+        &[
+            "--error-format=json",
+            "--json=artifacts,artifacts,future-incompat",
+        ][..],
+    ] {
+        assert_eq!(selected, context_key_for(equivalent), "{equivalent:?}");
+    }
+    for untracked in [
+        &[][..],
+        &["--error-format=short"][..],
+        &["--color=always"][..],
+        &["--diagnostic-width=40"][..],
+    ] {
+        assert_eq!(base, context_key_for(untracked), "{untracked:?}");
+    }
+}
+
+/// #1929: spellings rustc treats alike must not lower the hit rate.
+#[test]
+fn verdict_keys_ignore_equivalent_spellings() {
+    let base = verdict_keys("artifact", None, &[]);
+    assert_eq!(
+        base,
+        verdict_keys("artifact", None, &["--error-format=human"])
+    );
+    assert_eq!(base, verdict_keys("artifact", None, &["--color=auto"]));
+}
+
+/// #1929: width selects a stored diagnostic but not a clean verdict.
+#[test]
+fn width_only_splits_verdicts_with_rendered_diagnostics() {
+    const ARTIFACT_LINE: &[u8] = b"{\"$message_type\":\"artifact\",\"emit\":\"metadata\"}\n";
+    const DIAGNOSTIC_LINE: &[u8] = b"{\"$message_type\":\"diagnostic\"}\n";
+    let unset = verdict_keys("artifact", None, &[]);
+    let narrow = verdict_keys("artifact", None, &["--diagnostic-width=40"]);
+
+    // Clean: one key across widths, for empty stderr and artifact notices.
+    assert_eq!(unset.storage_key(b""), narrow.storage_key(b""));
+    assert_eq!(
+        unset.storage_key(ARTIFACT_LINE),
+        narrow.storage_key(ARTIFACT_LINE)
+    );
+    // Rendered: per width, in JSON and human output alike.
+    assert_ne!(
+        unset.storage_key(DIAGNOSTIC_LINE),
+        narrow.storage_key(DIAGNOSTIC_LINE)
+    );
+    assert_ne!(
+        unset.storage_key(b"warning: x\n"),
+        narrow.storage_key(b"warning: x\n")
+    );
+
+    let clean = std::collections::BTreeMap::from([(unset.storage_key(b"").to_string(), 1)]);
+    assert_eq!(narrow.lookup(&clean), Some(&1));
+    let rendered =
+        std::collections::BTreeMap::from([(unset.storage_key(b"warning\n").to_string(), 2)]);
+    assert_eq!(unset.lookup(&rendered), Some(&2));
+    assert_eq!(narrow.lookup(&rendered), None);
 }

@@ -319,6 +319,24 @@ fn cosmetic_flags_excluded() {
 }
 
 #[test]
+fn repeated_json_selections_accumulate() {
+    let parsed = parse_rustc_args(
+        &args(&[
+            "--json=artifacts",
+            "--json",
+            "future-incompat",
+            "src/lib.rs",
+        ]),
+        &cwd(),
+    );
+    assert_eq!(
+        parsed.json_format.as_deref(),
+        Some("artifacts,future-incompat")
+    );
+    assert!(parsed.unknown_flags.is_empty());
+}
+
+#[test]
 fn parse_target() {
     let parsed = parse_rustc_args(
         &args(&["--target", "x86_64-unknown-linux-gnu", "src/lib.rs"]),

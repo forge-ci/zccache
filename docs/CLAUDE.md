@@ -41,6 +41,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | Compile journal record shape | [journal-schema.md](journal-schema.md) |
 | `ZCCACHE_CACHE_DIR` contract + `zccache cache-root` | [runtime.md § Cache root invariants](architecture/runtime.md#cache-root-invariants) |
 | zccache vs sccache feature matrix | [FEATURE-MATRIX.md](FEATURE-MATRIX.md) — generated from [feature-matrix.yaml](feature-matrix.yaml) by `ci/render_feature_matrix.py` |
+| Rustc diagnostic rendering keys (#1929) | [artifact-store.md](architecture/artifact-store.md#rustc-diagnostic-rendering-keys-1929) |
 | Strict PCH serving + input mtime replay (#1952) | [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952) — `handle_compile/pch_gate.rs`, `zccache-fingerprint/src/pch_inputs` |
 | mtime snapshot/replay (`zccache snapshot`/`replay`, #1595) | `crates/zccache-fingerprint/README.md` — `mtime_replay` module; CLI in `cli/commands/mtime.rs` |
 | Owned test children and per-test termination (#1971) | `crates/zccache-test-support/src/README.md`, `ci/check_nextest_termination.py` |

@@ -28,6 +28,7 @@ cargo nextest run --test cache_rust -E 'test(/^<file_stem>::/)'
 - `cow_readonly_cargo`
 - `false_green_check`
 - `daemon_dylint_cache_test`
+- `daemon_rustc_diagnostic_contract_test`
 - `daemon_rustc_adversarial_concurrency_test`
 - `daemon_rustc_adversarial_corner_cases_test`
 - `daemon_rustc_adversarial_mutations_test`

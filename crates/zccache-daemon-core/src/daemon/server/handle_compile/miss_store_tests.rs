@@ -77,7 +77,10 @@ async fn perf_staged_rust_hit_uses_provisional_payload_before_durable_publicatio
         &source_path,
         &outputs,
         &key,
-        None,
+        crate::depgraph::RustcVerdictContract {
+            dylint_input_hash: None,
+            args: &crate::depgraph::parse_rustc_args(&[], work.path()),
+        },
         &Arc::new(Vec::new()),
         &Arc::new(Vec::new()),
         0,
@@ -103,15 +106,18 @@ async fn perf_staged_rust_hit_uses_provisional_payload_before_durable_publicatio
         "publishing the provisional entry must retain its private source"
     );
 
-    let verdict_key = crate::depgraph::compute_rustc_verdict_key(&key, None)
-        .hash()
-        .to_hex();
+    let verdict_args = crate::depgraph::parse_rustc_args(&[], work.path());
+    let verdict_keys = crate::depgraph::RustcVerdictContract {
+        dylint_input_hash: None,
+        args: &verdict_args,
+    }
+    .keys(&key);
     let requested_outputs = vec![requested.clone()];
     let started = Instant::now();
     super::super::hit_branches::await_artifact_publication_if_needed(
         &state,
         &key,
-        Some(&verdict_key),
+        Some(&verdict_keys),
         Some(&requested_outputs),
     )
     .await;
@@ -124,7 +130,7 @@ async fn perf_staged_rust_hit_uses_provisional_payload_before_durable_publicatio
             state: &state,
             sid: &sid,
             artifact_key_hex: &key,
-            verdict_key_hex: Some(&verdict_key),
+            verdict_keys: Some(&verdict_keys),
             source_path: &source_path,
             output_path: &requested,
             secondary_output_dir: work.path().into(),
@@ -245,7 +251,9 @@ async fn visible_artifact_waits_for_pending_sibling_verdict() {
         super::super::hit_branches::await_artifact_publication_if_needed(
             &state_for_waiter,
             key,
-            Some(requested_verdict_key),
+            Some(&crate::depgraph::RustcVerdictKeys::from_width_neutral(
+                requested_verdict_key,
+            )),
             Some(&requested_outputs_for_waiter),
         )
         .await;
@@ -275,7 +283,9 @@ async fn visible_artifact_waits_for_pending_sibling_verdict() {
         super::super::hit_branches::artifact_ready_for_request(
             &state,
             key,
-            Some(requested_verdict_key),
+            Some(&crate::depgraph::RustcVerdictKeys::from_width_neutral(
+                requested_verdict_key
+            )),
             Some(&requested_outputs),
         ),
         "the merged sibling verdict and output must satisfy the request"
@@ -320,7 +330,9 @@ async fn visible_metadata_waits_for_pending_payload_replacement() {
         super::super::hit_branches::await_artifact_publication_if_needed(
             &state_for_waiter,
             key,
-            Some(verdict_key),
+            Some(&crate::depgraph::RustcVerdictKeys::from_width_neutral(
+                verdict_key,
+            )),
             Some(&requested_outputs_for_waiter),
         )
         .await;
@@ -347,7 +359,9 @@ async fn visible_metadata_waits_for_pending_payload_replacement() {
     assert!(super::super::hit_branches::artifact_ready_for_request(
         &state,
         key,
-        Some(verdict_key),
+        Some(&crate::depgraph::RustcVerdictKeys::from_width_neutral(
+            verdict_key
+        )),
         Some(&requested_outputs),
     ));
 }

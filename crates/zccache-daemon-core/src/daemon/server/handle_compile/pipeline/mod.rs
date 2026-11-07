@@ -702,14 +702,15 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
                             (name == "ZCCACHE_DYLINT_CACHE_INPUT_HASH").then_some(value.as_str())
                         })
                     });
-                    let verdict_key_hex =
-                        crate::depgraph::compute_rustc_verdict_key(&artifact_key_hex, dylint_hash)
-                            .hash()
-                            .to_hex();
+                    let verdict_keys = crate::depgraph::RustcVerdictContract {
+                        dylint_input_hash: dylint_hash,
+                        args: rustc_args,
+                    }
+                    .keys(&artifact_key_hex);
                     await_artifact_publication_if_needed(
                         state,
                         &artifact_key_hex,
-                        Some(&verdict_key_hex),
+                        Some(&verdict_keys),
                         Some(&requested_outputs),
                     )
                     .await;
@@ -718,7 +719,7 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
                             state: Arc::clone(state),
                             sid,
                             artifact_key_hex: artifact_key_hex.clone(),
-                            verdict_key_hex: Some(verdict_key_hex),
+                            verdict_keys: Some(verdict_keys),
                             source_path: source_path.clone(),
                             output_path: output_path.clone(),
                             secondary_output_dir: output_path

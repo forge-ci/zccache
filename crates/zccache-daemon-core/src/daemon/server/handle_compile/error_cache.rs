@@ -138,10 +138,12 @@ pub(super) async fn maybe_store_rustc_error_artifact(
         .load()
         .update(context_key, scan_result, get_hash)?;
     let artifact_key_hex = artifact_key.hash().to_hex();
-    let verdict_key_hex =
-        crate::depgraph::compute_rustc_verdict_key(&artifact_key_hex, dylint_input_hash)
-            .hash()
-            .to_hex();
+    let verdict_keys = crate::depgraph::RustcVerdictContract {
+        dylint_input_hash,
+        args: rustc_args,
+    }
+    .keys(&artifact_key_hex);
+    let verdict_key_hex = verdict_keys.storage_key(stderr).to_string();
     let verdict = ArtifactVerdict {
         stdout: Arc::clone(stdout),
         stderr: Arc::clone(stderr),

@@ -694,7 +694,12 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
                 user_depfile_persist_temp,
                 staged_persist_plan: staged_rust_persist_plan,
                 rustc_all_outputs: rustc_all_outputs.as_deref(),
-                rustc_dylint_input_hash,
+                rustc_verdict_contract: rustc_args_opt.map(|args| {
+                    crate::depgraph::RustcVerdictContract {
+                        dylint_input_hash: rustc_dylint_input_hash,
+                        args,
+                    }
+                }),
                 stdout: &stdout,
                 stderr: &stderr,
                 exit_code,

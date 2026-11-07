@@ -77,7 +77,7 @@ impl Hit {
             state: self.server.state.as_ref(),
             sid: &self.sid,
             artifact_key_hex: "artifact-key",
-            verdict_key_hex: None,
+            verdict_keys: None,
             source_path: &source,
             output_path: &output,
             secondary_output_dir: self.root().into(),

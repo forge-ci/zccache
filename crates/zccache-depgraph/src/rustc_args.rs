@@ -73,7 +73,7 @@ pub struct RustcParsedArgs {
     pub linker_args: Vec<String>,
     /// `--error-format` value.
     pub error_format: Option<String>,
-    /// `--json` value.
+    /// Comma-joined values of every `--json` flag, in command-line order.
     pub json_format: Option<String>,
     /// `--color` value.
     pub color: Option<String>,
@@ -250,7 +250,14 @@ pub fn parse_rustc_args(args: &[String], cwd: &Path) -> RustcParsedArgs {
 
         // --json <val>
         if let Some(val) = take_option(arg, "--json", args.get(i + 1), &mut i) {
-            result.json_format = Some(val);
+            // rustc accumulates repeated `--json` selections.
+            match result.json_format.as_mut() {
+                Some(selections) => {
+                    selections.push(',');
+                    selections.push_str(&val);
+                }
+                None => result.json_format = Some(val),
+            }
             continue;
         }
 
