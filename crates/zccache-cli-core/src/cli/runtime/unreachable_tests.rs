@@ -165,13 +165,49 @@ async fn a_pid_that_exits_during_the_wait_ends_the_poll_early() {
 #[tokio::test]
 async fn a_failure_after_the_daemon_came_up_is_a_success() {
     let endpoint = unique_test_endpoint();
-    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
-    let server = tokio::spawn(answer_one_status(listener, endpoint.clone()));
+    let _listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let holder = PidHolder::start();
+    seed_record(&endpoint, holder.pid(), None);
 
     let outcome = settle_failed_recovery(&endpoint, "gave up".to_string()).await;
 
     assert_eq!(outcome, Ok(()));
     assert_eq!(breaker_reason_if_open(&endpoint), None);
+}
+
+/// #1976 / #2084: a recorded daemon that accepts but stalls on `Status` is busy,
+/// not gone. It must not count as a failure, and the check that guards the
+/// retirement of the instance must see it as up.
+#[tokio::test]
+async fn a_recorded_daemon_stalling_on_status_is_preserved() {
+    let endpoint = unique_test_endpoint();
+    let mut listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let stall = tokio::spawn(async move {
+        let _held = listener.accept().await;
+        std::future::pending::<()>().await;
+    });
+    let mut holder = PidHolder::start();
+    seed_record(&endpoint, holder.pid(), None);
+
+    assert!(recorded_daemon_accepts(&endpoint).await);
+    let outcome = settle_failed_recovery(&endpoint, "gave up".to_string()).await;
+
+    stall.abort();
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(breaker_reason_if_open(&endpoint), None);
+    assert!(!holder.has_exited(), "a busy daemon must not be stopped");
+}
+
+/// The ready-wait does accept a daemon that answers.
+#[tokio::test]
+async fn a_daemon_that_answers_is_ready() {
+    let endpoint = unique_test_endpoint();
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind");
+    let server = tokio::spawn(answer_one_status(listener, endpoint.clone()));
+
+    let ready = super::super::wait_for_daemon_ready(&endpoint).await;
+
+    assert_eq!(ready, Ok(()));
     server.await.expect("status server");
 }
 
