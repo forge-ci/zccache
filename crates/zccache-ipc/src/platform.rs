@@ -4,6 +4,34 @@
 //! vocabulary are product policy. The transport objects remain the canonical
 //! protected kernal-api socket/pipe capabilities.
 
+/// Stat observations shared with the filesystem cache. Keep native metadata
+/// access in this approved adapter until kernal-api exposes the same operation
+/// on metadata the caller already holds (its path APIs would add another stat).
+pub mod fs {
+    /// `(ctime_ns, inode)` from an existing stat; `(0, 0)` when unavailable.
+    ///
+    /// This performs no I/O. Unix change time detects restored-mtime edits and
+    /// the inode detects replacement. Windows retains watcher-based detection.
+    #[must_use]
+    pub fn metadata_identity(metadata: &std::fs::Metadata) -> (u64, u64) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            (
+                (metadata.ctime() as u64)
+                    .wrapping_mul(1_000_000_000)
+                    .wrapping_add(metadata.ctime_nsec() as u64),
+                metadata.ino(),
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            (0, 0)
+        }
+    }
+}
+
 // Keep host selection for Unix-only transport tests inside this boundary.
 #[cfg(all(test, unix))]
 macro_rules! unix_transport_tests {

@@ -24,20 +24,7 @@ impl FileIdentity {
     /// Read the identity from metadata the caller already holds.
     #[must_use]
     pub fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            Self {
-                change_ns: (metadata.ctime() as u64)
-                    .wrapping_mul(1_000_000_000)
-                    .wrapping_add(metadata.ctime_nsec() as u64),
-                file_id: metadata.ino(),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = metadata;
-            Self::default()
-        }
+        let (change_ns, file_id) = zccache_ipc::metadata_identity(metadata);
+        Self { change_ns, file_id }
     }
 }

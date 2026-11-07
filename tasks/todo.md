@@ -1685,3 +1685,10 @@ one existing success; both argument parsers now share effective-option merging.
 - [ ] Review, open a PR, and land through the required merge queue.
 
 Validation evidence: original test failed at line 731 under `rust`; fixed module passed all five inherited policies. `./lint` currently stops before Rust validation because the baseline release publish order lists the non-publishable `zccache` crate. Run the prescribed local gate and workspace Clippy separately.
+
+# #2132 — repair the fscache platform boundary
+
+- [x] Inspect all four approved adapters and kernal-api 0.1.33 capabilities.
+- [x] Keep metadata extraction in the IPC adapter; add the acyclic fscache -> IPC edge.
+- [ ] Validate Dylint, Clippy, fscache regressions and formatting; preserve format and warm-path semantics.
+- [ ] Push, merge through the queue, and verify Dylint + CI summary on main's push run.

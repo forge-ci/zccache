@@ -19,6 +19,7 @@ serde = { workspace = true }
 tracing = { workspace = true }
 zccache-core = { workspace = true }
 zccache-hash = { workspace = true }
+zccache-ipc = { workspace = true }
 
 [dev-dependencies]
 # Test-only: `#[tokio::test]` needs the runtime in scope. The library
