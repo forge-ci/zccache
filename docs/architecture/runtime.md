@@ -124,6 +124,11 @@ arguments. Child/probe containment and captured-output readers stay with
 kernal-api. File-lock contention during eviction defers maintenance after two
 seconds; Clear and ordinary store-lock operations have a 30-second budget.
 
+`ci/lint.py --dylint-only` also lints every shipped feature on each OS. Findings
+from that pass are capped to warnings so no crate hides its dependents, then
+ratcheted against `ci/dylint_feature_baseline.txt`, a shrinking allowlist (#1967).
+`ci/check_dylint_wiring.py` rejects a feature that is neither linted nor excluded.
+
 `dylints/ban_unbounded_sync` registers two deny lints:
 
 - `ban_unbounded_sync` resolves APIs by DefId, rejecting raw std, Tokio,

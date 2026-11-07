@@ -9,9 +9,11 @@ Usage:
 
 import filecmp
 import os
+import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from shutil import which
 
@@ -33,6 +35,111 @@ DYLINT_OS_TARGETS = {
     "windows": "x86_64-pc-windows-msvc",
     "macos": "aarch64-apple-darwin",
 }
+
+# Late lints only see cfg-selected code too, so the default-feature pass misses
+# every feature-gated product surface (#1967). This pass selects them all;
+# ci/check_dylint_wiring.py rejects a workspace feature in neither list.
+DYLINT_PRODUCT_FEATURES = [
+    "zccache/zccache-bin",
+    "zccache/daemon-bin",
+    "zccache/download-bin",
+    "zccache/download-daemon-bin",
+    "zccache/fingerprint-bin",
+    "zccache/stamp-bin",
+    "zccache/ci-bin",
+    "zccache/crash-tools",
+    "zccache/mimalloc-allocator",
+    "zccache/heap-profile",
+    "zccache-cli/python",
+]
+DYLINT_EXCLUDED_FEATURES = {
+    "zccache/test-support": "dev-only helpers, never shipped",
+    "zccache-daemon-core/test-support": "dev-only helpers, never shipped",
+    "zccache-artifact/test-support": "dev-only helpers, never shipped",
+    "zccache/tokio-console": "diagnostic build; requires --cfg tokio_unstable",
+    "zccache-daemon-core/tokio-console": "diagnostic build; requires --cfg tokio_unstable",
+}
+DYLINT_FEATURE_BASELINE = SCRIPT_DIR / "ci" / "dylint_feature_baseline.txt"
+_DIAGNOSTIC = re.compile(r"(?:^|\s)warning: (.+)$")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_LOCATION = re.compile(r"--> (\S+?):\d+:\d+")
+
+
+def parse_feature_findings(output: str) -> Counter[tuple[str, str]]:
+    """Count capped lint diagnostics by (source file, message)."""
+    findings: Counter[tuple[str, str]] = Counter()
+    message = None
+    for line in _ANSI.sub("", output).splitlines():
+        location = _LOCATION.search(line)
+        if location and message is not None:
+            findings[(location.group(1).replace("\\", "/"), message)] += 1
+            message = None
+            continue
+        diagnostic = _DIAGNOSTIC.search(line)
+        message = diagnostic.group(1).strip() if diagnostic else None
+    return findings
+
+
+def load_feature_baseline(path: Path) -> Counter[tuple[str, str]]:
+    baseline: Counter[tuple[str, str]] = Counter()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            count, file_path, message = line.split("\t", 2)
+            baseline[(file_path, message)] = int(count)
+    return baseline
+
+
+def compare_feature_findings(
+    findings: Counter[tuple[str, str]], baseline: Counter[tuple[str, str]]
+) -> list[str]:
+    """Ratchet: new findings fail, and fixed ones must leave the baseline."""
+    errors = []
+    for key in sorted(set(findings) | set(baseline)):
+        found, allowed = findings[key], baseline[key]
+        if found > allowed:
+            errors.append(f"new ({found} > {allowed}): {key[0]}: {key[1]}")
+        elif found < allowed:
+            errors.append(f"fixed, shrink baseline ({found} < {allowed}): {key[0]}: {key[1]}")
+    return errors
+
+
+def dylint_product_pass(env: dict[str, str], targets: list[str | None]) -> int:
+    """Lint product features per OS against the shrinking baseline.
+
+    Capping lints to warnings on workspace crates keeps one crate's findings
+    from hiding its dependents. A key's count is its maximum across OSes.
+    """
+    # A soldr verdict hit skips the run and prints no diagnostics, which would
+    # read as every finding having been fixed.
+    capped = {**env, "DYLINT_RUSTFLAGS": "--cap-lints=warn", "SOLDR_VERDICTS": "off"}
+    findings: Counter[tuple[str, str]] = Counter()
+    for target in targets:
+        command = [
+            "soldr", "dylint", "--all", "--",
+            "--workspace", "--lib", "--bins",
+            "--features", ",".join(DYLINT_PRODUCT_FEATURES),
+            *(["--target", target] if target else []),
+        ]
+        result = subprocess.run(
+            command,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(SCRIPT_DIR),
+            env=capped,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        print(result.stdout)
+        if result.returncode != 0:
+            return result.returncode
+        findings |= parse_feature_findings(result.stdout)
+    errors = compare_feature_findings(
+        findings, load_feature_baseline(DYLINT_FEATURE_BASELINE)
+    )
+    for error in errors:
+        print(f"dylint product features: {error}", file=sys.stderr)
+    return 1 if errors else 0
 
 
 def dylint_manifests() -> list[str]:
@@ -245,7 +352,7 @@ def lint_dylint_only():
         )
         if result.returncode != 0:
             return result.returncode
-    return 0
+    return dylint_product_pass(env, [None, *cross_targets])
 
 
 def detect_crate(file_path):

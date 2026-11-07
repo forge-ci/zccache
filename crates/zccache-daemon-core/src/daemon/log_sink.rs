@@ -24,8 +24,9 @@
 //!   take down the process they are diagnosing.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use zccache_core::blocking_sync::Mutex;
+use zccache_core::NormalizedPath;
 
 /// Path of the optional bounded file sink.
 pub const LOG_FILE_ENV: &str = "ZCCACHE_LOG_FILE";
@@ -49,7 +50,7 @@ const ARCHIVE_SUFFIX: &str = ".1";
 /// than a hot path, and per-write open/append/close is what makes concurrent
 /// writers safe without holding a file handle across the daemon's lifetime.
 pub struct BoundedFileSink {
-    path: PathBuf,
+    path: NormalizedPath,
     max_bytes: u64,
     /// Serializes the check-size-then-rotate sequence so two threads cannot
     /// both decide to rotate and lose the archive.
@@ -79,12 +80,12 @@ impl BoundedFileSink {
             .and_then(|raw| raw.trim().parse::<u64>().ok())
             .filter(|bytes| *bytes > 0)
             .unwrap_or(DEFAULT_MAX_BYTES);
-        Some(Self::new(PathBuf::from(path), max_bytes))
+        Some(Self::new(path, max_bytes))
     }
 
-    fn new(path: PathBuf, max_bytes: u64) -> Self {
+    fn new(path: impl Into<NormalizedPath>, max_bytes: u64) -> Self {
         Self {
-            path,
+            path: path.into(),
             max_bytes,
             rotate_lock: Mutex::new(()),
         }
@@ -121,15 +122,16 @@ impl BoundedFileSink {
     }
 }
 
-fn archive_path(path: &Path) -> PathBuf {
+fn archive_path(path: &Path) -> NormalizedPath {
     let mut name = path
         .file_name()
         .map(std::ffi::OsString::from)
         .unwrap_or_default();
     name.push(ARCHIVE_SUFFIX);
-    path.parent()
-        .map(|parent| parent.join(&name))
-        .unwrap_or_else(|| PathBuf::from(name))
+    match path.parent() {
+        Some(parent) => NormalizedPath::new(parent).join(&name),
+        None => NormalizedPath::new(name),
+    }
 }
 
 /// One `tracing` event's worth of bytes.

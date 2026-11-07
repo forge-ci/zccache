@@ -197,3 +197,23 @@ def test_dylint_library_tests_share_one_target_dir() -> None:
     assert steps
     for step in steps:
         assert "CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests" in step
+
+
+def test_check_rejects_a_feature_hidden_from_the_product_pass(tmp_path: Path) -> None:
+    _scaffold(tmp_path)
+    _write(
+        tmp_path,
+        "ci/lint.py",
+        'paths.glob("*/Cargo.toml")\n'
+        'DYLINT_PRODUCT_FEATURES = ["app/shipped"]\n'
+        'DYLINT_EXCLUDED_FEATURES = {"app/dev": "dev only"}\n',
+    )
+    _write(
+        tmp_path,
+        "crates/app/Cargo.toml",
+        '[package]\nname = "app"\n[features]\n'
+        'shipped = ["implied"]\nimplied = []\ndev = []\nhidden = []\n',
+    )
+
+    errors = check_dylint_wiring.check(tmp_path)
+    assert [error.split(":")[0] for error in errors] == ["app/hidden"]
