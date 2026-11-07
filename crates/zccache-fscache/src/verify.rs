@@ -28,6 +28,7 @@ impl MetadataCache {
             confidence: Confidence::High,
             last_verified: Instant::now(),
             content_hash: None,
+            identity: crate::identity::FileIdentity::from_metadata(&fs_meta),
         })
     }
 
@@ -65,7 +66,7 @@ impl MetadataCache {
             Err(e) => return Err(e),
         };
 
-        if cached.mtime != fresh.mtime || cached.size != fresh.size {
+        if !cached.same_stamp(&fresh) {
             return Ok(VerifyResult::Stale);
         }
 
@@ -112,7 +113,7 @@ impl MetadataCache {
             Err(e) => return Err(e),
         };
 
-        let metadata_matches = entry.mtime == fresh.mtime && entry.size == fresh.size;
+        let metadata_matches = entry.same_stamp(&fresh);
 
         if metadata_matches {
             match entry.confidence {
@@ -146,10 +147,10 @@ impl MetadataCache {
         let (pre_stat, hash, post_stat) = hash_file_snapshot(path)?;
 
         // TOCTOU check: if file changed during hashing, retry up to 3 times.
-        if pre_stat.mtime != post_stat.mtime || pre_stat.size != post_stat.size {
+        if !pre_stat.same_stamp(&post_stat) {
             for _ in 0..3 {
                 let (pre, h, post) = hash_file_snapshot(path)?;
-                if pre.mtime == post.mtime && pre.size == post.size {
+                if pre.same_stamp(&post) {
                     self.insert(
                         normalized.clone(),
                         FileMetadata {

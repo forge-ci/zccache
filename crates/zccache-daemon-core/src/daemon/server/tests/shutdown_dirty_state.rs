@@ -148,6 +148,7 @@ async fn shutdown_persists_every_cache_when_dirty() {
             mtime: std::time::SystemTime::now(),
             size: 14,
             content_hash: Some([0x11; 32]),
+            identity: Default::default(),
             confidence: crate::fscache::Confidence::High,
             last_verified: std::time::Instant::now(),
         },

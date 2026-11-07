@@ -813,6 +813,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -843,6 +844,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: selected_at,
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         dg.register(make_ctx("/tmp/refreshed-between-passes.c"));
@@ -857,6 +859,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: selected_at + Duration::from_secs(1),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -884,6 +887,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -917,6 +921,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         let budget = 1;
@@ -944,6 +949,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -978,6 +984,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }

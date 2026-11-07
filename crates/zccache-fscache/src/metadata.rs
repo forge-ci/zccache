@@ -87,9 +87,10 @@ pub enum Confidence {
 
 /// Cached metadata for a single file.
 ///
-/// Change detection uses `(mtime, size)`. File replacement detection
-/// (same path, new inode) is handled by the file watcher (`notify`),
-/// not by platform-specific file identity checks.
+/// Change detection uses `(mtime, size)` plus [`crate::FileIdentity`]
+/// (Unix `ctime` + inode, #1943), all from one `stat`. `ctime` catches an
+/// in-place edit whose mtime was restored; the inode catches replacement.
+/// Where neither exists (Windows) the file watcher (`notify`) is the backstop.
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     /// File modification time.
@@ -102,6 +103,8 @@ pub struct FileMetadata {
     pub last_verified: Instant,
     /// Cached content hash (blake3, 32 bytes), if computed.
     pub content_hash: Option<[u8; 32]>,
+    /// Unix `(ctime, inode)`; detects same-size, restored-mtime edits (#1943).
+    pub identity: crate::identity::FileIdentity,
 }
 
 /// One entry selected by the read-only phase of metadata eviction.
@@ -152,6 +155,15 @@ pub struct MetadataCache {
     /// (zccache#1775). `merge_from` (background disk load) deliberately does
     /// not set this — the merged content already matches disk.
     dirty: AtomicBool,
+}
+
+impl FileMetadata {
+    /// Whether two stats describe the same file state: `(mtime, size)` plus the
+    /// unforgeable `(ctime, inode)` identity (#1943).
+    #[must_use]
+    pub fn same_stamp(&self, other: &Self) -> bool {
+        self.mtime == other.mtime && self.size == other.size && self.identity == other.identity
+    }
 }
 
 impl MetadataCache {
@@ -245,21 +257,20 @@ impl MetadataCache {
         }
 
         // Parallel stat: each file is independent.
-        let results: Vec<(NormalizedPath, SystemTime, u64)> = low_keys
+        let results: Vec<(NormalizedPath, FileMetadata)> = low_keys
             .par_iter()
             .filter_map(|path| {
                 Self::stat_file(path)
                     .ok()
-                    .map(|fresh| (path.clone(), fresh.mtime, fresh.size))
+                    .map(|fresh| (path.clone(), fresh))
             })
             .collect();
 
         // Apply promotions back (fast, in-memory only).
         let mut promoted = 0;
-        for (path, mtime, size) in results {
+        for (path, fresh) in results {
             if let Some(mut entry) = self.entries.get_mut(&path) {
-                if entry.confidence == Confidence::Low && entry.mtime == mtime && entry.size == size
-                {
+                if entry.confidence == Confidence::Low && entry.same_stamp(&fresh) {
                     entry.confidence = Confidence::High;
                     entry.last_verified = Instant::now();
                     promoted += 1;
@@ -350,7 +361,7 @@ impl MetadataCache {
         // Copy the entry out under a short read guard so the stat below runs
         // with no shard guard alive — same lock discipline as `rescan_all`
         // and `fingerprint/verify.rs` (#1908, the #724 class).
-        let (recorded_mtime, recorded_size, hash) = {
+        let (recorded_mtime, recorded_size, recorded_identity, hash) = {
             let entry = self.entries.get(path)?;
             match entry.confidence {
                 Confidence::High | Confidence::Medium => {}
@@ -359,14 +370,17 @@ impl MetadataCache {
             let hash = entry
                 .content_hash
                 .map(zccache_hash::ContentHash::from_bytes)?;
-            (entry.mtime, entry.size, hash)
+            (entry.mtime, entry.size, entry.identity, hash)
         };
 
         // One stat syscall to verify mtime + size still match.
         let fs_meta = std::fs::metadata(path).ok()?;
         let mtime = fs_meta.modified().ok()?;
         let size = fs_meta.len();
-        if mtimes_match(recorded_mtime, mtime) && recorded_size == size {
+        if mtimes_match(recorded_mtime, mtime)
+            && recorded_size == size
+            && recorded_identity == crate::identity::FileIdentity::from_metadata(&fs_meta)
+        {
             Some(hash)
         } else {
             None
@@ -608,6 +622,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some([42; 32]),
+                identity: Default::default(),
             },
         );
 
@@ -636,6 +651,9 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some([42; 32]),
+                identity: crate::identity::FileIdentity::from_metadata(
+                    &std::fs::metadata(&file).unwrap(),
+                ),
             },
         );
 
@@ -652,6 +670,7 @@ mod tests {
             confidence: Confidence::High,
             last_verified: Instant::now(),
             content_hash: None,
+            identity: Default::default(),
         };
         cache.insert(path.clone(), meta);
         assert!(cache.get(&path).is_some());
@@ -674,6 +693,7 @@ mod tests {
             confidence: Confidence::High,
             last_verified: Instant::now(),
             content_hash: None,
+            identity: Default::default(),
         };
         cache.insert(path.clone(), meta1);
         assert_eq!(cache.get(&path).unwrap().size, 100);
@@ -684,6 +704,7 @@ mod tests {
             confidence: Confidence::Medium,
             last_verified: Instant::now(),
             content_hash: None,
+            identity: Default::default(),
         };
         cache.insert(path.clone(), meta2);
         assert_eq!(cache.get(&path).unwrap().size, 999);
@@ -704,6 +725,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -731,6 +753,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         assert_eq!(cache.len(), 1);
@@ -760,6 +783,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         assert!(!cache.is_empty());
@@ -779,6 +803,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some(hash_bytes),
+                identity: Default::default(),
             },
         );
 
@@ -800,6 +825,7 @@ mod tests {
                 confidence: Confidence::Medium,
                 last_verified: Instant::now(),
                 content_hash: Some(hash_bytes),
+                identity: Default::default(),
             },
         );
 
@@ -819,6 +845,7 @@ mod tests {
                 confidence: Confidence::Low,
                 last_verified: Instant::now(),
                 content_hash: Some([1u8; 32]),
+                identity: Default::default(),
             },
         );
 
@@ -837,6 +864,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -863,6 +891,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -883,6 +912,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: old,
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         cache.insert(
@@ -893,6 +923,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         let removed = cache.trim(Duration::from_secs(60));
@@ -914,6 +945,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -935,6 +967,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: base + Duration::from_secs(i * 10),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -956,6 +989,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: selected_at,
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -971,6 +1005,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: refreshed_at,
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -991,6 +1026,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: selected_at,
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -1003,6 +1039,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: selected_at + Duration::from_secs(1),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
 
@@ -1022,6 +1059,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         let candidates = cache.oldest_eviction_candidates(1);
@@ -1049,6 +1087,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         let removed = cache.evict_oldest(0);
@@ -1067,6 +1106,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             },
         );
         let removed = cache.evict_oldest(100);
@@ -1089,6 +1129,7 @@ mod tests {
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
                     content_hash: None,
+                    identity: Default::default(),
                 },
             );
         }
@@ -1120,6 +1161,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: None,
+                identity: Default::default(),
             };
             cache.insert(path, meta);
         }
@@ -1142,6 +1184,7 @@ mod tests {
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some([0x42; 32]),
+                identity: Default::default(),
             }
         }
 
