@@ -434,7 +434,8 @@ jobs:
       # #1967: `cargo test --workspace --lib` builds zccache-cli-core without
       # `download-client`, so the fetch-lock expiry test runs nowhere else on Linux.
       - name: Fetch-lock expiry regression
-        run: soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
+        run: |
+          soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |
