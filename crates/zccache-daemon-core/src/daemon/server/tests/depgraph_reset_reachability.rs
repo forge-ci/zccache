@@ -237,6 +237,27 @@ async fn an_oscillating_schema_version_stays_warm_through_the_quarantine_sidecar
     );
 }
 
+/// The next session must not depend on the previous `SharedState` being freed:
+/// `store_outcome` detaches a watch-registration task that holds its own
+/// `Arc<SharedState>` and that the durability drain does not join. This clone
+/// stands in for that task deterministically.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn a_straggling_state_holder_does_not_block_the_next_session() {
+    let fixture = Fixture::new("straggler");
+    let _env_lock = CacheDirEnvGuard::lock();
+
+    let mut server = fixture.bind();
+    let writer = spawn_index_writer(&mut server);
+    let straggler = server.test_state_arc();
+    quiesce_and_persist(&server, writer, fixture.depgraph_path.as_path()).await;
+    drop(server);
+
+    let next = fixture.bind();
+    drop(straggler);
+    drop(next);
+}
+
 /// Restart-loop regression (#1157's own test list): repeating the reset must
 /// be idempotent — no accumulation, no second-order failure.
 #[tokio::test]

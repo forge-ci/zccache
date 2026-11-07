@@ -102,6 +102,9 @@ chmod 640 "$output.debug"
     }
     server.state.artifact_store.flush().unwrap();
     drop(publication);
+    // The persist task's `InFlightGuard` holds `Arc<SharedState>` a moment past
+    // the publication permit, so `drop(server)` alone need not free the root.
+    server.state.cache_root_lock.release();
     drop(server);
     std::fs::remove_file(&output).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
