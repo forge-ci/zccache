@@ -4265,6 +4265,7 @@ dependencies = [
 name = "zccache-test-support"
 version = "1.15.14"
 dependencies = [
+ "kernal-api",
  "tempfile",
  "zccache-audit",
  "zccache-core",
