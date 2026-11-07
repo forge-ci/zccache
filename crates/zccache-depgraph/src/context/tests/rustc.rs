@@ -29,6 +29,7 @@ fn windows_rustc_context_key_normalizes_equivalent_source_path_spellings() {
         extra_filename: None,
         target: None,
         cap_lints: None,
+        json_selections: Vec::new(),
         extern_crates: Vec::new(),
         lint_flags: Vec::new(),
         unknown_flags: Vec::new(),
