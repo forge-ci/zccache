@@ -101,9 +101,9 @@ pub(crate) async fn check_daemon_version(endpoint: &str) -> VersionCheck {
 /// A successful connect does not prove this (#2129). A daemon binds its endpoint
 /// before it claims the cache root, so one that loses the root to a live writer
 /// briefly listens, then exits without ever serving or writing a lock record.
-/// Only a claim of success needs this; the bound also covers a Windows client
+/// The ready-wait after a spawn needs this; the bound also covers a Windows client
 /// that retries `ERROR_PIPE_BUSY` without limit.
-pub(crate) async fn daemon_answers_status(endpoint: &str) -> bool {
+async fn daemon_answers_status(endpoint: &str) -> bool {
     matches!(
         tokio::time::timeout(
             super::status_probe_timeout(),

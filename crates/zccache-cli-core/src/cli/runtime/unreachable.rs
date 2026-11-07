@@ -16,9 +16,9 @@
 //! overlapping daemon.
 
 use super::{
-    acquire_spawn_slot, check_daemon_version, connect_client, daemon_answers_status,
-    probe_says_daemon_is_merely_busy, spawn_and_wait, spawn_slot_in_flight, spawn_with_slot,
-    stop_stale_daemon, stop_wedged_daemon, AdaptiveWaitConfig, VersionCheck,
+    acquire_spawn_slot, check_daemon_version, connect_client, probe_says_daemon_is_merely_busy,
+    spawn_and_wait, spawn_slot_in_flight, spawn_with_slot, stop_stale_daemon, stop_wedged_daemon,
+    AdaptiveWaitConfig, VersionCheck,
 };
 use std::time::{Duration, Instant};
 
@@ -42,6 +42,17 @@ async fn endpoint_accepts_connections(endpoint: &str) -> bool {
         .is_ok_and(|connected| connected.is_ok())
 }
 
+/// Is a daemon that won its cache root serving this endpoint, however busy?
+///
+/// A connect alone also reaches a daemon refused by the root's writer, which
+/// listens without ever serving (#2129). That daemon never writes a lock record,
+/// and a winner writes one before it serves. Asking for a `Status` answer instead
+/// would read a healthy daemon too busy to reply as dead, and stop it (#1976).
+async fn recorded_daemon_accepts(endpoint: &str) -> bool {
+    endpoint_accepts_connections(endpoint).await
+        && crate::ipc::check_running_daemon_for(endpoint).is_some()
+}
+
 /// The reason to refuse this invocation, if the breaker is open and the endpoint
 /// is still not accepting. A connect that succeeds means the outage is over, so
 /// a marker from an earlier failed attempt must not fail the build; the ladder
@@ -54,11 +65,11 @@ pub(super) async fn breaker_refusal(endpoint: &str) -> Option<String> {
 /// Decide what one client's failed recovery means for the other clients.
 ///
 /// Only a failure nobody can still repair opens the breaker. A daemon that came
-/// up in the meantime and answers is a success; a listener alone is not (#2129). While another client holds the spawn slot,
+/// up in the meantime is a success; a listener with no record is not (#2129). While another client holds the spawn slot,
 /// this client's failure says nothing about that attempt: it fails alone, with
 /// exit 125, and leaves the rest of the build free to use the result.
 pub(super) async fn settle_failed_recovery(endpoint: &str, reason: String) -> Result<(), String> {
-    if daemon_answers_status(endpoint).await {
+    if recorded_daemon_accepts(endpoint).await {
         crate::cli::recovery::clear_breaker(endpoint);
         return Ok(());
     }
@@ -193,7 +204,7 @@ pub(super) async fn recover_unreachable_daemon(endpoint: &str, pid: u32) -> Resu
     let slot = acquire_spawn_slot(endpoint);
     let retirement = if slot.is_some() {
         // An earlier slot holder may have just finished; never stop its work.
-        if daemon_answers_status(endpoint).await {
+        if recorded_daemon_accepts(endpoint).await {
             return Ok(());
         }
         Some(retire_unreachable_instance(endpoint, pid).await)
