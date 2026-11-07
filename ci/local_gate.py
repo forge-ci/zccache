@@ -299,6 +299,7 @@ def checks() -> list[Check]:
                 "Install PCH regression toolchain",
                 "Strict PCH regressions (Clang 21)",
                 "Test (full workspace)",
+                "Nextest per-test termination proof (#1971)",
                 "Wrapper daemon-unavailable contract (exit 125)",
                 "Strict artifact-layout validation",
                 "Audit isolated integration cache",
