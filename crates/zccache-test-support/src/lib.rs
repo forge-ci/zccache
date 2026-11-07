@@ -5,6 +5,8 @@ use std::time::Duration;
 use zccache_core::wait::{BoundedCommand, CommandSpec as Command, ProcessOutput as Output};
 use zccache_core::NormalizedPath;
 
+pub mod test_child;
+
 pub use zccache_audit::{CacheRootAuditGuard, RuleId};
 
 /// Median of `samples`, the load-robust statistic for perf guards: scheduler

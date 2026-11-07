@@ -17,6 +17,11 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 filter = 'test(/budget|overhead|latency|(^|::)perf_|_vs_bare|_vs_sccache|throughput/)'
 threads-required = "num-cpus"
 
+# #1971: ci/check_nextest_termination.py plants a hanging test under this profile
+# and proves nextest terminates it by name without aborting unrelated tests.
+[profile.hang-proof]
+slow-timeout = { period = "5s", terminate-after = 2, grace-period = "2s" }
+
 # zackees/ci.yml#168 (GATE-005): zccache's tests start zccache daemons and
 # touch zccache state roots, and zccache is the live compiler cache of every
 # soldr build on a developer host. Every Unix test process nextest launches

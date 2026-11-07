@@ -17,8 +17,9 @@
 )]
 
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
+use zccache_test_support::test_child::TestChild;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Let start-up work (index load, first maintenance tick) finish first.
@@ -28,19 +29,7 @@ const WINDOW: Duration = Duration::from_secs(3);
 /// periodic maintenance on a slow runner; the sampler alone used 85-90%.
 const IDLE_CPU_BUDGET: f64 = 0.15;
 
-struct Daemon {
-    child: Child,
-    reaped: bool,
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        if !self.reaped {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
+const REAP_BOUND: Duration = Duration::from_secs(30);
 
 /// Total on-CPU nanoseconds across every thread of `pid`.
 fn cpu_ns(pid: u32) -> u64 {
@@ -75,7 +64,8 @@ fn idle_daemon_stays_within_cpu_budget() {
     let log_file = tmp.path().join("daemon.log");
     let endpoint = tmp.path().join("idle-cpu.sock");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"));
+    command
         .args(["--foreground", "--endpoint"])
         .arg(&endpoint)
         .arg("--log-file")
@@ -86,17 +76,9 @@ fn idle_daemon_stays_within_cpu_budget() {
         .env("ZCCACHE_QUIET", "1")
         .env("ZCCACHE_NO_UNLOCK", "1")
         .env("ZCCACHE_NATIVE_CRASH_CAPTURE", "1")
-        .env_remove("KERNAL_API_NO_CRASH_HANDLER")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn zccache-daemon");
-    let daemon = Daemon {
-        child,
-        reaped: false,
-    };
-    let pid = daemon.child.id();
+        .env_remove("KERNAL_API_NO_CRASH_HANDLER");
+    let daemon = TestChild::spawn(command).expect("spawn zccache-daemon");
+    let pid = daemon.id();
 
     wait_for_listening(&log_file);
     std::thread::sleep(SETTLE);
@@ -148,7 +130,8 @@ fn native_fault_writes_dump_by_default() {
     std::fs::create_dir_all(&cache_dir).unwrap();
     let log_file = tmp.path().join("daemon.log");
     let endpoint = tmp.path().join("native-fault.sock");
-    let child = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"));
+    command
         .args(["--foreground", "--endpoint"])
         .arg(&endpoint)
         .arg("--log-file")
@@ -159,34 +142,30 @@ fn native_fault_writes_dump_by_default() {
         .env("ZCCACHE_QUIET", "1")
         .current_dir(tmp.path())
         .env_remove("ZCCACHE_NATIVE_CRASH_CAPTURE")
-        .env_remove("KERNAL_API_NO_CRASH_HANDLER")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn zccache-daemon");
-    let mut daemon = Daemon {
-        child,
-        reaped: false,
-    };
+        .env_remove("KERNAL_API_NO_CRASH_HANDLER");
+    let mut daemon = TestChild::spawn(command).expect("spawn zccache-daemon");
     wait_for_listening(&log_file);
-    let pid = i32::try_from(daemon.child.id()).expect("pid fits i32");
+    let pid = i32::try_from(daemon.id()).expect("pid fits i32");
     // SAFETY: pid belongs to this test's live child process.
     assert_eq!(unsafe { libc::kill(pid, libc::SIGABRT) }, 0);
-    let status = daemon.child.wait().expect("reap daemon");
-    daemon.reaped = true;
-    assert!(!status.success());
+    let code = daemon.wait_for(REAP_BOUND).expect("reap daemon");
+    assert_ne!(code, 0);
 
-    let drain = Command::new(env!("CARGO_BIN_EXE_crash-trigger"))
+    let mut drain = Command::new(env!("CARGO_BIN_EXE_crash-trigger"));
+    drain
         .arg("drain")
         .env("ZCCACHE_CACHE_DIR", &cache_dir)
-        .env("ZCCACHE_DAEMON_NAMESPACE", "native-fault-default")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .env("ZCCACHE_DAEMON_NAMESPACE", "native-fault-default");
+    let drained = TestChild::spawn(drain)
+        .expect("spawn native spool drain")
+        .finish(REAP_BOUND)
         .expect("drain native spool");
-    assert!(drain.success(), "native spool drain failed: {drain}");
+    assert_eq!(
+        drained.code,
+        Some(0),
+        "drain failed: {}",
+        drained.stderr_text()
+    );
     let crash_dir = cache_dir
         .join(zccache::core::config::versioned_subdir())
         .join("daemon-state")

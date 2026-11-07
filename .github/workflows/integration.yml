@@ -267,6 +267,9 @@ jobs:
           # telemetry from the integration runtime audit.
           uv run --no-project python ci/clear_runtime_telemetry.py \
             --cache-root "$SOLDR_CACHE_DIR/cache/zccache"
+      - name: Nextest per-test termination proof (#1971)
+        shell: bash
+        run: uv run --no-project python ci/check_nextest_termination.py --features "$ZCCACHE_INTEGRATION_FEATURES"
       - name: Wrapper daemon-unavailable contract (exit 125)
         shell: bash
         env:

@@ -43,6 +43,10 @@ soldr cargo nextest run --workspace --features "$FEATURES" --no-fail-fast
 step "doctests"
 soldr cargo test --workspace --features "$FEATURES" --no-fail-fast --doc
 
+# integration.yml "Nextest per-test termination proof (#1971)".
+step "nextest per-test termination proof"
+python3 ci/check_nextest_termination.py --features "$FEATURES"
+
 # integration.yml "Wrapper daemon-unavailable contract (exit 125)".
 step "wrapper daemon-unavailable contract"
 soldr cargo test -p zccache --features "$FEATURES" --test cli -- cli_wrapper_failure_boundaries:: cli_daemon_start::stop_ --ignored --test-threads=1

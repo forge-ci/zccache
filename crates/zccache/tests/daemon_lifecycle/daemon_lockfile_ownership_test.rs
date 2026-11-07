@@ -22,10 +22,10 @@
     clippy::unwrap_in_result
 )]
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
+use zccache_test_support::test_child::{Readiness, TestChild};
 
 /// Per-spawn hang detector, deliberately far above any real latency. The
 /// assertion is the exit status; this only stops the poll loop from spinning
@@ -59,7 +59,8 @@ fn daemon_with_unwritable_lock_file_exits_instead_of_serving() {
 
     let log_path = tmp.path().join("daemon.log");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zccache-daemon"));
+    command
         .args(["--foreground", "--endpoint", &endpoint])
         // The daemon detaches inherited stdio very early on the foreground
         // path unless it is handed a `--log-file`; without this the piped
@@ -71,41 +72,18 @@ fn daemon_with_unwritable_lock_file_exits_instead_of_serving() {
         // daemon agree on the ownership lockfile (#1404).
         .env("ZCCACHE_DAEMON_NAMESPACE", TEST_DAEMON_NAMESPACE)
         .env_remove("ZCCACHE_COLOCATE")
-        .env("ZCCACHE_NO_UNLOCK", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn daemon");
+        .env("ZCCACHE_NO_UNLOCK", "1");
+    let mut child = TestChild::spawn(command).expect("spawn daemon");
 
-    let stderr = child.stderr.take().expect("take child stderr");
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.take(64 * 1024).read_to_end(&mut buf);
-        String::from_utf8_lossy(&buf).into_owned()
-    });
-
-    let spawn_at = Instant::now();
-    let mut status = None;
-    while spawn_at.elapsed() < HARD_CAP {
-        match child.try_wait().expect("poll child") {
-            Some(exit) => {
-                status = Some(exit);
-                break;
-            }
-            None => std::thread::sleep(Duration::from_millis(25)),
-        }
-    }
-
-    // Always reap, before any assertion: after a successful `try_wait` this is
-    // a harmless no-op, and it guarantees a failing assertion can never leak a
-    // live daemon still holding the cache-root writer lock.
-    let _ = child.kill();
-    let _ = child.wait();
-
-    let piped_stderr = stderr_handle
-        .join()
-        .unwrap_or_else(|_| String::from("<stderr thread panicked>"));
+    let readiness = child.wait_until(HARD_CAP, || false).expect("poll child");
+    // Always collect before any assertion: it guarantees a failing assertion
+    // can never leak a live daemon still holding the cache-root writer lock.
+    let collected = child.collect();
+    let status = match readiness {
+        Readiness::Exited(code) => Some(code),
+        Readiness::Ready | Readiness::TimedOut => None,
+    };
+    let piped_stderr = collected.stderr_text();
     let log = std::fs::read_to_string(&log_path).unwrap_or_default();
     let captured = format!("{piped_stderr}\n--- daemon log ---\n{log}");
 
@@ -120,8 +98,8 @@ fn daemon_with_unwritable_lock_file_exits_instead_of_serving() {
     };
 
     assert!(
-        !status.success(),
-        "daemon reported a successful start ({status}) without an ownership record.            It is undiscoverable and unstoppable — `zccache stop` claims to have            stopped it while it keeps the cache-root writer lock. See            zackees/zccache#1903. Captured output:\n{}",
+        status != 0,
+        "daemon reported a successful start (exit {status}) without an ownership record.            It is undiscoverable and unstoppable — `zccache stop` claims to have            stopped it while it keeps the cache-root writer lock. See            zackees/zccache#1903. Captured output:\n{}",
         captured.trim(),
     );
 
