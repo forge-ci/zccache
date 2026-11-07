@@ -61,6 +61,7 @@ DYLINT_EXCLUDED_FEATURES = {
 }
 DYLINT_FEATURE_BASELINE = SCRIPT_DIR / "ci" / "dylint_feature_baseline.txt"
 _DIAGNOSTIC = re.compile(r"(?:^|\s)warning: (.+)$")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _LOCATION = re.compile(r"--> (\S+?):\d+:\d+")
 
 
@@ -68,7 +69,7 @@ def parse_feature_findings(output: str) -> Counter[tuple[str, str]]:
     """Count capped lint diagnostics by (source file, message)."""
     findings: Counter[tuple[str, str]] = Counter()
     message = None
-    for line in output.splitlines():
+    for line in _ANSI.sub("", output).splitlines():
         location = _LOCATION.search(line)
         if location and message is not None:
             findings[(location.group(1).replace("\\", "/"), message)] += 1

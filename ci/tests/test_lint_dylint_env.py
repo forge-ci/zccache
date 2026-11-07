@@ -67,3 +67,11 @@ def test_product_pass_forces_a_real_run(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(lint.subprocess, "run", fake_run)
     assert lint.dylint_product_pass({}, [None]) == 0
     assert envs[0]["SOLDR_VERDICTS"] == "off"
+
+
+def test_parse_handles_ci_forced_color() -> None:
+    output = (
+        "\x1b[1m\x1b[33mwarning\x1b[0m\x1b[1m: raw wait\x1b[0m\n"
+        "   \x1b[1m\x1b[94m--> \x1b[0mcrates/a/src/x.rs:1:2\n"
+    )
+    assert lint.parse_feature_findings(output) == {("crates/a/src/x.rs", "raw wait"): 1}
