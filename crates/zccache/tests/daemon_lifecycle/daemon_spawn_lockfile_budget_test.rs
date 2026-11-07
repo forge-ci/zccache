@@ -253,6 +253,7 @@ fn write_metadata_snapshot(daemon_state_dir: &NormalizedPath, pad_to: Option<u64
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
                 content_hash: Some([i as u8; 32]),
+                identity: Default::default(),
             },
         );
     }

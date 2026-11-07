@@ -143,6 +143,7 @@ fn synthetic_metadata(hash: [u8; 32]) -> crate::fscache::FileMetadata {
         mtime: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
         size: 42,
         content_hash: Some(hash),
+        identity: Default::default(),
         confidence: crate::fscache::Confidence::High,
         last_verified: std::time::Instant::now(),
     }
