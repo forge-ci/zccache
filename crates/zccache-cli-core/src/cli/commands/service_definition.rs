@@ -304,15 +304,20 @@ mod tests {
         assert_eq!(loaded, installed.definition);
     }
 
-    #[cfg(unix)]
     #[test]
     fn installed_paths_preserve_symlink_parent_resolution() {
+        // The pinned kernal-api exposes file symlinks, which also accept
+        // directory targets on Unix. Windows needs a directory-link capability.
+        if crate::platform::host::is_windows() {
+            return;
+        }
         let temp = TempDir::new().expect("tempdir");
         let logical = temp.path().join("logical");
         let physical = temp.path().join("physical");
         std::fs::create_dir_all(&logical).unwrap();
         std::fs::create_dir_all(physical.join("child")).unwrap();
-        std::os::unix::fs::symlink(physical.join("child"), logical.join("alias")).unwrap();
+        kernal_api::platform::fs::symlink_file(&physical.join("child"), &logical.join("alias"))
+            .unwrap();
         let service_root = logical.join("alias/../services");
         let daemon = fake_daemon_binary(temp.path());
 
