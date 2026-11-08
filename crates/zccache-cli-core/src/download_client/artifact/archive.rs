@@ -1,6 +1,8 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
+
+use crate::core::NormalizedPath;
 
 use super::resolve::ResolvedFetchRequest;
 use super::ArchiveFormat;
@@ -102,7 +104,7 @@ pub(crate) fn extract_archive_at(
 
 pub(super) fn extract_7z(archive_path: &Path, destination: &Path) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|e| e.to_string())?;
-    let base = destination.to_path_buf();
+    let base = NormalizedPath::new(destination);
     sevenz_rust::decompress_file_with_extract_fn(
         archive_path,
         destination,
@@ -157,15 +159,12 @@ pub(super) fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(),
                 String::from_utf8_lossy(entry.name_raw())
             ));
         }
-        let name = entry
-            .enclosed_name()
-            .map(|p| p.to_path_buf())
-            .ok_or_else(|| {
-                format!(
-                    "unsafe zip entry: {}",
-                    String::from_utf8_lossy(entry.name_raw())
-                )
-            })?;
+        let name = entry.enclosed_name().ok_or_else(|| {
+            format!(
+                "unsafe zip entry: {}",
+                String::from_utf8_lossy(entry.name_raw())
+            )
+        })?;
         let out_path = safe_join(destination, &name)?;
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -223,22 +222,20 @@ pub(super) fn extract_tar<R: Read>(reader: R, destination: &Path) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn safe_join(base: &Path, entry: &Path) -> Result<PathBuf, String> {
+pub(super) fn safe_join(base: &Path, entry: &Path) -> Result<NormalizedPath, String> {
     if entry.is_absolute() {
         return Err(format!(
             "absolute archive entry is not allowed: {}",
             entry.display()
         ));
     }
-    let mut clean = PathBuf::new();
     for component in entry.components() {
         match component {
-            Component::Normal(part) => clean.push(part),
-            Component::CurDir => {}
+            Component::Normal(_) | Component::CurDir => {}
             _ => return Err(format!("unsafe archive entry: {}", entry.display())),
         }
     }
-    Ok(base.join(clean))
+    Ok(NormalizedPath::new(base).join(entry))
 }
 
 pub(super) fn remove_path_if_exists(path: &Path) -> Result<(), String> {
