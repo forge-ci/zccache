@@ -1744,3 +1744,14 @@ Review: leave `link_helpers.rs` for a later batch. Normalizing a joined `..`
 path changes its existing lexical root classification, so its migration needs
 a separate behavior decision and regression coverage.
 
+## #2021 PathBuf allowlist burn, batch 3
+
+- Remove five production exemptions, one per commit: embedded service,
+  passthrough, cargo-registry, service definitions, and artifact archives.
+- Keep caller-supplied path spelling borrowed until filesystem calls;
+  validate archive components before normalization. Leave link_helpers alone.
+- Bump the lint version once; run formatting, workspace Clippy, full Dylint,
+  the pinned clean-tree local gate, and clud-review.
+- Open a PR with counts and `Part of #2021`, enqueue with HEAD pinned, watch
+  MERGED, and post the URL to the clud board.
+
