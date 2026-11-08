@@ -8,6 +8,8 @@ use zccache_cli_core::cli::snapshot_fp::{record, Manifest, MANIFEST_FILENAME};
 
 const SHARED_POOL_HOLD: Duration = Duration::from_millis(2500);
 
+// Worker startup failures are fatal to this test's saturation precondition.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 fn saturate_shared_pool() {
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let workers = rayon::current_num_threads();

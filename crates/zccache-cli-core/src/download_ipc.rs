@@ -12,6 +12,7 @@ pub(crate) struct DownloadIpcConnection {
 }
 
 impl DownloadIpcConnection {
+    #[cfg(any(feature = "download-client", test))]
     pub(crate) async fn connect(endpoint: &str) -> Result<Self, crate::ipc::IpcError> {
         crate::ipc::connect(endpoint)
             .await
