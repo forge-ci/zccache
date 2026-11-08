@@ -17,6 +17,7 @@ mod tool_resolution;
 mod unavailable;
 
 use crate::compiler::strict_paths::StrictPathsMode;
+use crate::core::NormalizedPath;
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -97,7 +98,7 @@ fn run_wrap_routed(args: &[String], overrides: WrapperOverrides) -> ExitCode {
         profile::set_route("disabled");
         // Evaluated before any chdir, so this is the caller's cwd. The captured
         // `cwd` local does not exist yet on this path.
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = NormalizedPath::from(std::env::current_dir().unwrap_or_default());
         return passthrough::run_passthrough(args, Some("ZCCACHE_DISABLE is set"), &cwd);
     }
 
@@ -118,7 +119,7 @@ fn run_wrap_routed(args: &[String], overrides: WrapperOverrides) -> ExitCode {
 
     let wrapped_tool = tool_resolution::resolve_compiler_path(&args[0]);
     let tool_args: Vec<String> = args.get(1..).unwrap_or(&[]).to_vec();
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = NormalizedPath::from(std::env::current_dir().unwrap_or_default());
     let client_env = env::client_env(overrides);
     let endpoint = resolve_endpoint(None);
 
@@ -141,7 +142,7 @@ fn run_wrap_routed(args: &[String], overrides: WrapperOverrides) -> ExitCode {
                 &endpoint,
                 &wrapped_tool,
                 tool_args,
-                cwd.into(),
+                cwd,
                 client_env,
             ))
         }
@@ -162,7 +163,7 @@ fn run_wrap_routed(args: &[String], overrides: WrapperOverrides) -> ExitCode {
                 &tool_args,
                 strict_paths_mode,
                 wrapped_tool,
-                cwd.into(),
+                cwd,
                 client_env,
             )
         }

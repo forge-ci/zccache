@@ -5,7 +5,6 @@
 //! rlib -- including the Windows release binaries -- also linked a cdylib
 //! nothing consumed, which fails under `+crt-static` on x64.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyOSError, PyRuntimeError};
@@ -76,7 +75,7 @@ impl NativeWatcher {
         poll_interval_ms: u64,
         debounce_ms: u64,
     ) -> PyResult<Self> {
-        let mut config = PollingWatcherConfig::new(PathBuf::from(root));
+        let mut config = PollingWatcherConfig::new(root);
         config.include_folders = include_folders.into_iter().map(Into::into).collect();
         config.include_globs = include_globs;
         config.excluded_patterns = excluded_patterns;

@@ -1730,3 +1730,17 @@ Validation and landing evidence are recorded in the follow-up PR and clud board.
 - Formatting and workspace Clippy passed; pre-push clud-review clean.
 - Cross-target Dylint passed, including the production-feature baseline on Linux, Windows and macOS.
 - The clean-tree local gate provides the full regression checks.
+## #2021 PathBuf allowlist burn, batch 2
+
+- Remove seven production exemptions, one per commit: config facade, CLI entry,
+  artifact facade, wrapper CWD, pack paths, watcher binding and
+  download worker. Skip platform adapters and all open-PR files.
+- Bump the lint version once, run formatting, Clippy, full Dylint and the pinned
+  clean-tree local gate, then complete clud-review.
+- Open a PR with counts and `Part of #2021`, enqueue with HEAD pinned, watch to
+  MERGED and post the URL to the clud board.
+
+Review: leave `link_helpers.rs` for a later batch. Normalizing a joined `..`
+path changes its existing lexical root classification, so its migration needs
+a separate behavior decision and regression coverage.
+

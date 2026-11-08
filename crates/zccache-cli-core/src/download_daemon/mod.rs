@@ -1,7 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -490,8 +489,6 @@ async fn attach_job(
 fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options: DownloadOptions) {
     tokio::spawn(async move {
         let url = job.url.clone();
-        let destination = PathBuf::from(job.destination.as_path());
-        let metadata_dir = PathBuf::from(job.metadata_dir.as_path());
         let progress_job = Arc::clone(&job);
         let progress = Arc::new(
             move |downloaded: u64, total: Option<u64>, phase: DownloadPhase| {
@@ -515,8 +512,8 @@ fn spawn_download_worker(state: Arc<SharedState>, job: Arc<DownloadJob>, options
 
         let result = crate::download::download_to_path(
             &url,
-            &destination,
-            &metadata_dir,
+            job.destination.as_path(),
+            job.metadata_dir.as_path(),
             &options,
             progress,
             job.cancel_source.token(),

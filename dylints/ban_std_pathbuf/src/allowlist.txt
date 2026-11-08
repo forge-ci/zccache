@@ -1,12 +1,5 @@
 crates/zccache-core/src/path.rs
-# `config::volume_root` constructs a path component-by-component (Prefix +
-# RootDir) which is exactly what `PathBuf::push` is for. NormalizedPath
-# doesn't expose mutation, so the assembly stays on raw PathBuf and the
-# result is wrapped into NormalizedPath at the boundary.
-crates/zccache-core/src/config/mod.rs
-crates/zccache-cli-core/src/download_client/artifact/mod.rs
 crates/zccache/src/bin/zccache-download.rs
-crates/zccache-cli-core/src/download_daemon/mod.rs
 crates/zccache-cli-core/src/cli/mod.rs
 crates/zccache-cli-core/src/cli/symbols.rs
 # The cli's `main.rs`, `python.rs`, and `snapshot_fp.rs` carry the legacy
@@ -15,7 +8,6 @@ crates/zccache-cli-core/src/cli/symbols.rs
 # bounds, and the downstream cargo-fingerprint consumers that flow through
 # raw paths. Track migration separately so the lint can keep catching new
 # violations elsewhere.
-crates/zccache/src/bin/zccache.rs
 crates/zccache/src/bin/zccache-stamp.rs
 crates/zccache-cli/src/lib.rs
 crates/zccache-cli-core/src/cli/snapshot_fp.rs
@@ -23,7 +15,6 @@ crates/zccache-cli-core/src/cli/snapshot_fp/tests.rs
 crates/zccache-cli-core/src/cli/commands/args/mod.rs
 crates/zccache-cli-core/src/cli/commands/cache_ops.rs
 crates/zccache-cli-core/src/cli/commands/symbols.rs
-crates/zccache-cli-core/src/cli/commands/wrap.rs
 crates/zccache-cli-core/src/cli/runtime/mod.rs
 crates/zccache-cli-core/src/cli/runtime/deploy.rs
 # Crash, lifecycle, and defender code crosses OS process and file-system
@@ -72,7 +63,6 @@ crates/zccache-cli-core/src/cli/commands/tests/analyze.rs
 crates/zccache-cli-core/src/cli/commands/tests/warm_lockfile.rs
 crates/zccache-core/src/config/resolve.rs
 crates/zccache-daemon-core/src/daemon/server/persist/artifact_io.rs
-crates/zccache-daemon-core/src/daemon/server/persist/pack.rs
 crates/zccache-daemon-core/src/daemon/server/persist/tests.rs
 crates/zccache-daemon-core/src/daemon/server/tests/deferred_cold_path.rs
 crates/zccache-daemon-core/src/daemon/server/tests/link_cache.rs
@@ -87,4 +77,3 @@ crates/zccache-fscache/src/verify.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-daemon-core/src/audit_writer.rs
 crates/zccache-daemon-core/src/embedded.rs
-crates/zccache-watcher-py/src/lib.rs
