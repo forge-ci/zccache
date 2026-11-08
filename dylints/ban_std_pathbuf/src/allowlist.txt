@@ -1,5 +1,4 @@
 crates/zccache-core/src/path.rs
-crates/zccache-cli-core/src/download_client/artifact/mod.rs
 crates/zccache/src/bin/zccache-download.rs
 crates/zccache-cli-core/src/download_daemon/mod.rs
 crates/zccache-cli-core/src/cli/mod.rs
