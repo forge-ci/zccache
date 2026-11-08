@@ -7,8 +7,8 @@
 //! sending the compile request to the daemon — typically because an outer
 //! shim/build system has chdir'd before exec'ing `zccache.exe`.
 
+use crate::core::NormalizedPath;
 use std::io::Write;
-use std::path::PathBuf;
 
 const LINE_TAG: &str = "ZCCACHE_DIAG_CWD";
 
@@ -24,8 +24,10 @@ pub(super) fn emit(args: &[String]) {
 
 fn emit_to(writer: &mut dyn Write, args: &[String]) -> std::io::Result<()> {
     let pid = std::process::id();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("<unavailable>"));
-    let tmp = std::env::temp_dir();
+    let cwd = std::env::current_dir()
+        .map(NormalizedPath::from)
+        .unwrap_or_else(|_| NormalizedPath::from("<unavailable>"));
+    let tmp = NormalizedPath::from(std::env::temp_dir());
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let argv0_display = std::path::Path::new(&argv0).display().to_string();
 

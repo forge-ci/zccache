@@ -24,7 +24,6 @@ crates/zccache-cli-core/src/cli/commands/args/mod.rs
 crates/zccache-cli-core/src/cli/commands/cache_ops.rs
 crates/zccache-cli-core/src/cli/commands/symbols.rs
 crates/zccache-cli-core/src/cli/commands/wrap.rs
-crates/zccache-cli-core/src/cli/defender.rs
 crates/zccache-cli-core/src/cli/runtime/mod.rs
 crates/zccache-cli-core/src/cli/runtime/deploy.rs
 # Crash, lifecycle, and defender code crosses OS process and file-system
@@ -58,7 +57,6 @@ crates/zccache-download/src/lib.rs
 # existing legacy patterns and are out of scope for #762.
 crates/zccache-cli-core/src/cli/commands/meson_cache.rs
 crates/zccache-cli-core/src/cli/commands/service_definition.rs
-crates/zccache-cli-core/src/cli/commands/wrap/diag.rs
 crates/zccache-cli-core/src/cli/commands/wrap/passthrough.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/handle_release_worktree_handles.rs
@@ -80,9 +78,7 @@ crates/zccache-daemon-core/src/daemon/server/tests/deferred_cold_path.rs
 crates/zccache-daemon-core/src/daemon/server/tests/link_cache.rs
 crates/zccache-depgraph/src/snapshot/tests/behavioral.rs
 crates/zccache-cli-core/src/download_client/artifact/archive.rs
-crates/zccache-cli-core/src/download_client/artifact/hashing.rs
 crates/zccache-cli-core/src/download_client/artifact/lock.rs
-crates/zccache-cli-core/src/download_client/artifact/marker.rs
 crates/zccache-fscache/src/verify.rs
 # Post-crate-split additions (issue #1025). These carried PathBuf boundary
 # code from before the gate existed but were masked while the Dylint job
@@ -90,6 +86,5 @@ crates/zccache-fscache/src/verify.rs
 # remove from this list as the runtime contracts allow.
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-daemon-core/src/audit_writer.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile_ephemeral.rs
 crates/zccache-daemon-core/src/embedded.rs
 crates/zccache-watcher-py/src/lib.rs

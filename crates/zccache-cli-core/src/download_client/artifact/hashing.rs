@@ -1,6 +1,8 @@
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::core::NormalizedPath;
 
 use sha2::{Digest, Sha256};
 
@@ -30,12 +32,13 @@ pub(super) fn compute_artifact_fingerprint(path: &Path) -> io::Result<ArtifactFi
     Ok(ArtifactFingerprint { sha256, bytes })
 }
 
-pub(super) fn temp_download_path(destination: &Path) -> PathBuf {
-    destination.with_extension(format!(
+pub(super) fn temp_download_path(destination: &Path) -> NormalizedPath {
+    let destination = NormalizedPath::new(destination);
+    NormalizedPath::new(destination.with_extension(format!(
         "{}part",
         destination
             .extension()
             .map(|ext| format!("{}.", ext.to_string_lossy()))
             .unwrap_or_default()
-    ))
+    )))
 }
