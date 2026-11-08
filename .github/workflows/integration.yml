@@ -269,7 +269,18 @@ jobs:
             --cache-root "$SOLDR_CACHE_DIR/cache/zccache"
       - name: Nextest per-test termination proof (#1971)
         shell: bash
-        run: uv run --no-project python ci/check_nextest_termination.py --features "$ZCCACHE_INTEGRATION_FEATURES"
+        env:
+          # Reuse the preceding build's wrapper/cache identity. Switching back
+          # to the setup cache rebuilds the workspace inside the listing budget.
+          SOLDR_CACHE_DIR: ${{ runner.temp }}/zccache-self-tests/integration
+          SOLDR_CACHE_LIFECYCLE: command
+          SOLDR_CACHE_SHUTDOWN_TIMEOUT_SECS: "30"
+          SOLDR_TARGET_BLOCK_FREE_GB: "2"
+          CARGO_BUILD_JOBS: "1"
+          SOLDR_JOBS: "1"
+        run: |
+          unset ZCCACHE_CACHE_DIR
+          uv run --no-project python ci/check_nextest_termination.py --features "$ZCCACHE_INTEGRATION_FEATURES"
       - name: Wrapper daemon-unavailable contract (exit 125)
         shell: bash
         env:

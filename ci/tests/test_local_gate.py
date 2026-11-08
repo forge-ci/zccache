@@ -14,6 +14,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 from ci import local_gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,6 +97,27 @@ def test_legacy_harness_runs_every_integration_test_command() -> None:
         ).strip()
         normalized = re.sub(r"\s*2>&1$", "", normalized).rstrip('"').strip()
         assert normalized in lane, normalized
+
+
+def test_termination_proof_reuses_the_integration_build_environment() -> None:
+    workflow = yaml.safe_load(
+        (WORKFLOWS / "integration.yml").read_text(encoding="utf-8")
+    )
+    steps = {
+        step.get("name"): step for step in workflow["jobs"]["integration"]["steps"]
+    }
+    built = steps["Test (full workspace)"]["env"]
+    proof = steps["Nextest per-test termination proof (#1971)"]
+    for key in (
+        "SOLDR_CACHE_DIR",
+        "SOLDR_CACHE_LIFECYCLE",
+        "SOLDR_CACHE_SHUTDOWN_TIMEOUT_SECS",
+        "SOLDR_TARGET_BLOCK_FREE_GB",
+        "CARGO_BUILD_JOBS",
+        "SOLDR_JOBS",
+    ):
+        assert proof.get("env", {}).get(key) == built[key], key
+    assert "unset ZCCACHE_CACHE_DIR" in proof["run"]
 
 
 def test_isolated_lanes_replay_the_real_workflows() -> None:
