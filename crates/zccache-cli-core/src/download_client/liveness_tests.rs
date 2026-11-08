@@ -25,6 +25,20 @@ fn download_pid_holder_process() {
     }
 }
 
+/// Test-helper unwrap: this module denies `clippy::{unwrap,expect}_used`
+/// outside `#[test]` bodies, and a helper that panics with context keeps the
+/// failure message without a lint allow.
+fn ok<T, E: std::fmt::Debug>(result: Result<T, E>, what: &str) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("{what}: {err:?}"),
+    }
+}
+
+fn some<T>(value: Option<T>, what: &str) -> T {
+    value.unwrap_or_else(|| panic!("{what}: was None"))
+}
+
 struct Holder {
     child: std::process::Child,
     exe: PathBuf,
@@ -33,19 +47,21 @@ struct Holder {
 impl Holder {
     /// A live process running this test binary as `exe`.
     fn start_as(exe: PathBuf) -> Self {
-        let module = module_path!().split_once("::").expect("crate path").1;
-        let child = std::process::Command::new(&exe)
-            .args([
-                "--exact",
-                &format!("{module}::download_pid_holder_process"),
-                "--ignored",
-                "--nocapture",
-            ])
-            .env(HOLDER_ENV, "1")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn pid holder");
+        let module = some(module_path!().split_once("::"), "crate path").1;
+        let child = ok(
+            std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    &format!("{module}::download_pid_holder_process"),
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(HOLDER_ENV, "1")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn(),
+            "spawn pid holder",
+        );
         Self { child, exe }
     }
 
@@ -55,9 +71,12 @@ impl Holder {
         let exe = dir.join(crate::platform::executable::native_name(
             std::ffi::OsStr::new("zccache-download-daemon"),
         ));
-        let own = std::env::current_exe().expect("own exe");
+        let own = ok(std::env::current_exe(), "own exe");
         if std::fs::hard_link(&own, &exe).is_err() {
-            std::fs::copy(&own, &exe).expect("copy test binary under the daemon name");
+            ok(
+                std::fs::copy(&own, &exe),
+                "copy test binary under the daemon name",
+            );
         }
         Self::start_as(exe)
     }
@@ -67,7 +86,7 @@ impl Holder {
     }
 
     fn is_running(&mut self) -> bool {
-        self.child.try_wait().expect("poll holder").is_none()
+        ok(self.child.try_wait(), "poll holder").is_none()
     }
 
     fn exits_within(&mut self, budget: Duration) -> bool {
@@ -83,14 +102,17 @@ impl Holder {
 
     /// Record this holder as `endpoint`'s daemon, as the daemon entry does.
     fn seed_record(&self, endpoint: &str) {
-        let mut record = current_backend_identity(endpoint)
-            .expect("capture own identity")
-            .to_record();
+        let mut record = ok(current_backend_identity(endpoint), "capture own identity").to_record();
         record.pid = self.pid();
         record.executable_path.clone_from(&self.exe);
-        write_backend_identity_for(endpoint, &DaemonIdentity::from_record(record))
-            .expect("seed identity");
-        daemon_mgmt::write_lock_file_for(endpoint, self.pid()).expect("seed lock");
+        ok(
+            write_backend_identity_for(endpoint, &DaemonIdentity::from_record(record)),
+            "seed identity",
+        );
+        ok(
+            daemon_mgmt::write_lock_file_for(endpoint, self.pid()),
+            "seed lock",
+        );
     }
 }
 
@@ -102,26 +124,30 @@ impl Drop for Holder {
 }
 
 fn own_exe_holder() -> Holder {
-    Holder::start_as(std::env::current_exe().expect("own exe"))
+    Holder::start_as(ok(std::env::current_exe(), "own exe"))
 }
 
 fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new(std::env::current_exe().expect("own exe"))
-        .arg("--list")
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn short-lived process");
+    let mut child = ok(
+        std::process::Command::new(ok(std::env::current_exe(), "own exe"))
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn(),
+        "spawn short-lived process",
+    );
     let pid = child.id();
-    child.wait().expect("reap short-lived process");
+    ok(child.wait(), "reap short-lived process");
     pid
 }
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime")
-        .block_on(future)
+    ok(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build(),
+        "runtime",
+    )
+    .block_on(future)
 }
 
 /// A real download daemon on `endpoint`, in this process.
@@ -130,14 +156,18 @@ fn start_real_daemon(endpoint: &str) -> std::thread::JoinHandle<()> {
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let thread = std::thread::spawn(move || {
         block_on(async move {
-            let mut daemon = crate::download_daemon::DownloadDaemon::bind(&endpoint).unwrap();
-            ready_tx.send(()).unwrap();
-            daemon.run().await.unwrap();
+            let mut daemon = ok(
+                crate::download_daemon::DownloadDaemon::bind(&endpoint),
+                "bind replacement daemon",
+            );
+            ok(ready_tx.send(()), "signal daemon ready");
+            ok(daemon.run().await, "run replacement daemon");
         });
     });
-    ready_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("replacement daemon failed to bind");
+    ok(
+        ready_rx.recv_timeout(Duration::from_secs(10)),
+        "replacement daemon failed to bind",
+    );
     thread
 }
 
