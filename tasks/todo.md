@@ -1,8 +1,17 @@
+# #2093 item 2 — lint config consistency
+
+- [x] Isolate worktree and confirm config drift.
+- [x] Enable cli-core workspace lints; exempt only the saturated-pool test helper.
+- [x] Enable both Python extension crates; audit daemon-core separately.
+- [ ] Validate workspace and download feature combinations, review, local gate.
+- [ ] Push, merge PR, and post board outcome.
+
 # #2117 ignored-test audit
 
 - [x] Inventory ignored tests and actual CI selection.
 - [x] Batch readonly Cargo acceptance in MSRV; document manual exclusions.
 - [ ] Review, pass the local gate, push, merge, and post to the clud board.
+
 
 # Main RED workflows — resume and land
 
