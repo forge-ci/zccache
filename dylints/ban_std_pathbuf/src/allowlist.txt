@@ -48,7 +48,6 @@ crates/zccache-download/src/lib.rs
 # existing legacy patterns and are out of scope for #762.
 crates/zccache-cli-core/src/cli/commands/meson_cache.rs
 crates/zccache-cli-core/src/cli/commands/service_definition.rs
-crates/zccache-cli-core/src/cli/commands/wrap/passthrough.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/handle_release_worktree_handles.rs
 crates/zccache-ipc/src/manifest.rs

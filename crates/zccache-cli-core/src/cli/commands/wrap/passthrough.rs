@@ -108,12 +108,13 @@ pub(super) fn run_passthrough(args: &[String], reason: Option<&str>, child_cwd: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::NormalizedPath;
 
-    fn noop_tool() -> std::path::PathBuf {
+    fn noop_tool() -> NormalizedPath {
         if crate::platform::host::is_windows() {
-            std::path::PathBuf::from("cmd.exe")
+            NormalizedPath::from("cmd.exe")
         } else {
-            std::path::PathBuf::from("true")
+            NormalizedPath::from("true")
         }
     }
 
@@ -171,15 +172,15 @@ mod tests {
         let build_dir = tempfile::tempdir().unwrap();
         let canonical_build_dir = std::fs::canonicalize(build_dir.path()).unwrap();
 
-        let (tool, tool_args): (std::path::PathBuf, Vec<String>) =
+        let (tool, tool_args): (NormalizedPath, Vec<String>) =
             if crate::platform::host::is_windows() {
                 (
-                    std::path::PathBuf::from("cmd.exe"),
+                    NormalizedPath::from("cmd.exe"),
                     vec!["/c".to_string(), "cd > zccache-cwd-probe.txt".to_string()],
                 )
             } else {
                 (
-                    std::path::PathBuf::from("/bin/sh"),
+                    NormalizedPath::from("/bin/sh"),
                     vec!["-c".to_string(), "pwd > zccache-cwd-probe.txt".to_string()],
                 )
             };
@@ -204,9 +205,12 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert_eq!(
-            std::fs::canonicalize(reported).unwrap_or_else(|_| std::path::PathBuf::from(reported)),
+            std::fs::canonicalize(reported)
+                .map(NormalizedPath::from)
+                .unwrap_or_else(|_| NormalizedPath::from(reported)),
             std::fs::canonicalize(&canonical_build_dir)
-                .unwrap_or_else(|_| canonical_build_dir.clone()),
+                .map(NormalizedPath::from)
+                .unwrap_or_else(|_| NormalizedPath::from(&canonical_build_dir)),
             "issue #1909: the child must run in {expected}, reported {reported}",
         );
     }
