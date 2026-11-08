@@ -7,8 +7,8 @@
 //! sending the compile request to the daemon — typically because an outer
 //! shim/build system has chdir'd before exec'ing `zccache.exe`.
 
-use std::io::Write;
 use crate::core::NormalizedPath;
+use std::io::Write;
 
 const LINE_TAG: &str = "ZCCACHE_DIAG_CWD";
 
