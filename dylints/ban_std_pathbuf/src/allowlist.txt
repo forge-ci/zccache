@@ -47,8 +47,6 @@ crates/zccache-download/src/lib.rs
 # lint catches *new* violations elsewhere; these files mirror the
 # existing legacy patterns and are out of scope for #762.
 crates/zccache-cli-core/src/cli/commands/meson_cache.rs
-crates/zccache-cli-core/src/cli/commands/service_definition.rs
-crates/zccache-cli-core/src/cli/commands/wrap/passthrough.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/handle_release_worktree_handles.rs
 crates/zccache-ipc/src/manifest.rs
@@ -58,7 +56,6 @@ crates/zccache-ipc/src/lib.rs
 # still caught while the remaining migrations are tracked separately.
 crates/zccache-cli-core/src/cli/commands/args/mod.rs
 crates/zccache-cli-core/src/cli/commands/args/subcommands.rs
-crates/zccache-cli-core/src/cli/commands/cargo_registry.rs
 crates/zccache-cli-core/src/cli/commands/tests/analyze.rs
 crates/zccache-cli-core/src/cli/commands/tests/warm_lockfile.rs
 crates/zccache-core/src/config/resolve.rs
@@ -67,7 +64,6 @@ crates/zccache-daemon-core/src/daemon/server/persist/tests.rs
 crates/zccache-daemon-core/src/daemon/server/tests/deferred_cold_path.rs
 crates/zccache-daemon-core/src/daemon/server/tests/link_cache.rs
 crates/zccache-depgraph/src/snapshot/tests/behavioral.rs
-crates/zccache-cli-core/src/download_client/artifact/archive.rs
 crates/zccache-cli-core/src/download_client/artifact/lock.rs
 crates/zccache-fscache/src/verify.rs
 # Post-crate-split additions (issue #1025). These carried PathBuf boundary
@@ -76,4 +72,3 @@ crates/zccache-fscache/src/verify.rs
 # remove from this list as the runtime contracts allow.
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-daemon-core/src/audit_writer.rs
-crates/zccache-daemon-core/src/embedded.rs

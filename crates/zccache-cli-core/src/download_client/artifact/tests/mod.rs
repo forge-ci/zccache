@@ -469,6 +469,25 @@ fn safe_join_rejects_parent_traversal() {
 }
 
 #[test]
+fn safe_join_rejects_parent_components_before_normalizing() {
+    for entry in ["nested/../evil", "./../evil", "nested/./../evil"] {
+        assert!(safe_join(Path::new("out"), Path::new(entry)).is_err());
+    }
+}
+
+#[test]
+fn safe_join_preserves_nested_current_directory_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let output = safe_join(root.path(), Path::new("./nested/./file")).unwrap();
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, b"archive payload").unwrap();
+    assert_eq!(
+        fs::read(root.path().join("nested/file")).unwrap(),
+        b"archive payload"
+    );
+}
+
+#[test]
 fn seven_zip_extraction_rejects_path_traversal_end_to_end() {
     use sevenz_rust::{ArchiveEntry, ArchiveWriter};
 
