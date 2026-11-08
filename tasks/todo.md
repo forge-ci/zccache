@@ -1755,3 +1755,11 @@ a separate behavior decision and regression coverage.
 - Open a PR with counts and `Part of #2021`, enqueue with HEAD pinned, watch
   MERGED, and post the URL to the clud board.
 
+
+## #2002 acceptance matrix
+
+- [x] Coverage audit and independent guard tests.
+- [x] Preserve immediate test/edit/check and same-size guard coverage.
+- [x] Bosn RED/GREEN and published Soldr qualification.
+- [x] Pre-push review (one reviewer; clean).
+- Require full local gate, required Windows CI and merge-queue receipts in the closing PR before landing.

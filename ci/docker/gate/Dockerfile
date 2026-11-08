@@ -8,8 +8,10 @@
 # the suite (clang, a C/C++ toolchain, CMake/Ninja, Python 3).
 FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60
 
-ARG SOLDR_VERSION=0.9.28
-ARG SOLDR_SHA256=00c33d9f0447c3762868f244bad5e6af78a4f9ab848069069450991a743b107f
+# #2002: use the published release embedding zccache 1.15.12 for the
+# real Soldr/Cargo freshness fixtures, not the older embedded cache.
+ARG SOLDR_VERSION=0.9.52
+ARG SOLDR_SHA256=abdf474d0f41e2389409b9f30d83a7c857b7c735fedacd115a68c1606e8c0dc9
 
 # ZCCACHE_TEST_ISOLATED is the marker ci/nextest_isolation_guard.sh accepts
 # in place of CI=true. Only isolated environments set it.

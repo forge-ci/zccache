@@ -632,6 +632,10 @@ jobs:
           soldr cargo test -p zccache-cli-core --features cli --lib -- \
             cli::runtime::unreachable:: racing_clients_do_not_double \
             download_client::artifact::lock::
+      - name: Verify source-edit cache regressions (#2002)
+        shell: bash
+        run: |
+          soldr cargo test -p zccache --features zccache-bin --test cache_rust false_green_check:: -- --ignored --test-threads=1
       - name: Set up MSVC environment (vcvars64)
         uses: ilammy/msvc-dev-cmd@v1
         with:

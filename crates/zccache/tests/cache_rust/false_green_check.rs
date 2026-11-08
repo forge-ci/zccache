@@ -24,9 +24,20 @@ impl Drop for Daemon<'_> {
 }
 
 fn cargo(project: &Path, verb: &str, target: &Path, envs: &[(&str, PathBuf)]) -> Output {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    Command::new(cargo)
-        .arg(verb)
+    Command::new("soldr")
+        // The cache root below is fixture-owned, not stale workspace state.
+        .args(["--trust-inherited-soldr-env", "cargo", verb])
+        .env("SOLDR_ALLOW_UNPINNED", "0")
+        .env("SOLDR_PORCELAIN", "0")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // Each fixture command models a new user invocation, not a recursive
+        // Soldr front door inherited from the outer `soldr cargo test`.
+        .env_remove("IN_SOLDR_PID")
+        .env_remove("IN_SOLDR_ROLE")
+        // The outer harness may build its experimental binary uncached;
+        // that policy must not disable the cache exercised by this fixture.
+        .env_remove("SOLDR_CACHE_ENABLED")
+        .env_remove("ZCCACHE_DISABLE")
         .current_dir(project)
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_TERM_COLOR", "never")
@@ -56,8 +67,26 @@ fn journal_outcomes(dir: &Path, found: &mut Vec<String>) {
 #[test]
 #[ignore = "integration: builds a real crate through RUSTC_WRAPPER"]
 fn edit_after_test_build_fails_check_like_uncached_control() {
+    edit_after_test_build("check", "AUTO", "project", false);
+}
+
+#[test]
+#[ignore = "integration: real Soldr/Cargo, watcher and materialization matrix"]
+fn edit_after_test_build_matrix_without_watcher_delivery() {
+    for verb in ["check", "build"] {
+        for mode in ["LINK", "COPY"] {
+            // The watcher ignores .cache components. No event can rescue the
+            // freshness decision in those cells; ordinary paths race delivery.
+            for project in ["project", ".cache/project"] {
+                edit_after_test_build(verb, mode, project, true);
+            }
+        }
+    }
+}
+
+fn edit_after_test_build(verb: &str, mode: &str, project_name: &str, prime: bool) {
     let fixture = tempfile::tempdir().expect("fixture");
-    let project = fixture.path().join("project");
+    let project = fixture.path().join(project_name);
     let cache = fixture.path().join("cache");
     let target = project.join("target");
     std::fs::create_dir_all(project.join("src")).expect("create project");
@@ -66,13 +95,19 @@ fn edit_after_test_build_fails_check_like_uncached_control() {
         "[package]\nname='agent_mutation_repro'\nversion='0.1.0'\nedition='2021'\n",
     )
     .expect("manifest");
+    std::fs::write(
+        project.join("rust-toolchain.toml"),
+        include_str!("../../../../rust-toolchain.toml"),
+    )
+    .expect("toolchain pin");
     let source = project.join("src/lib.rs");
     std::fs::write(&source, GOOD).expect("source");
 
     let zccache = env!("CARGO_BIN_EXE_zccache");
     let namespace = format!("i2002t-{}", std::process::id());
     let envs = [
-        ("RUSTC_WRAPPER", PathBuf::from(zccache)),
+        ("SOLDR_RUSTC_WRAPPER", PathBuf::from(zccache)),
+        ("SOLDR_ZCCACHE_MODE", PathBuf::from(mode)),
         ("ZCCACHE_CACHE_DIR", cache.clone()),
         ("ZCCACHE_DAEMON_NAMESPACE", PathBuf::from(namespace)),
     ];
@@ -80,37 +115,69 @@ fn edit_after_test_build_fails_check_like_uncached_control() {
 
     let warm = cargo(&project, "test", &target, &envs);
     assert!(warm.status.success(), "warm test failed: {warm:?}");
+    assert!(
+        cache.is_dir(),
+        "warm test did not use isolated cache: {warm:?}"
+    );
 
-    // No sleep: the check races watcher delivery, as a real edit does.
+    if prime {
+        // Populate the selected path, then force Cargo to ask the cache again.
+        // Require a hit before editing, including the ignored-watcher cells.
+        let populate = cargo(&project, verb, &target, &envs);
+        assert!(populate.status.success(), "populate failed: {populate:?}");
+        let clean = cargo(&project, "clean", &target, &envs);
+        assert!(clean.status.success(), "clean failed: {clean:?}");
+        let replay = cargo(&project, verb, &target, &envs);
+        assert!(replay.status.success(), "replay failed: {replay:?}");
+        let mut outcomes = Vec::new();
+        journal_outcomes(&cache, &mut outcomes);
+        assert_eq!(
+            outcomes.last().map(String::as_str),
+            Some("hit"),
+            "unchanged {verb}/{mode}/{project_name}: {outcomes:?}"
+        );
+    }
+
+    // No sleep: ignored paths never deliver an event, ordinary paths race it.
     std::fs::write(&source, BROKEN).expect("edit");
-    let checked = cargo(&project, "check", &target, &envs);
+    let checked = cargo(&project, verb, &target, &envs);
     let control = cargo(
         &project,
-        "check",
+        verb,
         &fixture.path().join("control-target"),
-        &[("RUSTC_WRAPPER", PathBuf::new())],
+        &[("SOLDR_RUSTC_WRAPPER", PathBuf::from("none"))],
     );
-    let stderr = String::from_utf8_lossy(&checked.stderr);
+    // Rustc may render native Windows separators in source locations.
+    let stderr = String::from_utf8_lossy(&checked.stderr).replace('\\', "/");
+    let control_stderr = String::from_utf8_lossy(&control.stderr).replace('\\', "/");
     assert_eq!(checked.status.code(), control.status.code(), "{stderr}");
     assert_eq!(checked.status.code(), Some(101), "false green: {stderr}");
     for needle in ["E0425", "missing_agent_fixture_symbol", "src/lib.rs"] {
         assert!(stderr.contains(needle), "missing {needle}: {stderr}");
-        assert!(String::from_utf8_lossy(&control.stderr).contains(needle));
+        assert!(control_stderr.contains(needle));
     }
-
-    // Unchanged source must keep its valid hit, or "no cache" would pass above.
-    std::fs::write(&source, GOOD).expect("restore");
-    let clean = cargo(&project, "clean", &target, &envs);
-    assert!(clean.status.success(), "clean failed: {clean:?}");
-    let replay = cargo(&project, "check", &target, &envs);
-    assert!(replay.status.success(), "replay failed: {replay:?}");
 
     let mut outcomes = Vec::new();
     journal_outcomes(&cache, &mut outcomes);
-    assert!(outcomes.iter().any(|o| o == "error"), "{outcomes:?}");
     assert_eq!(
         outcomes.last().map(String::as_str),
-        Some("hit"),
-        "{outcomes:?}"
+        Some("error"),
+        "edited {verb}/{mode}/{project_name}: {outcomes:?}"
     );
+    if !prime {
+        // Preserve #2114's post-error recovery assertion as well as its
+        // immediate test/edit/check sequence.
+        std::fs::write(&source, GOOD).expect("restore");
+        let clean = cargo(&project, "clean", &target, &envs);
+        assert!(clean.status.success(), "clean failed: {clean:?}");
+        let replay = cargo(&project, verb, &target, &envs);
+        assert!(replay.status.success(), "replay failed: {replay:?}");
+        outcomes.clear();
+        journal_outcomes(&cache, &mut outcomes);
+        assert_eq!(
+            outcomes.last().map(String::as_str),
+            Some("hit"),
+            "{outcomes:?}"
+        );
+    }
 }
