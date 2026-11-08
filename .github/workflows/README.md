@@ -14,7 +14,7 @@ this rule applies to all new tests now.
 - **integration.yml** - Runs the normal Linux workspace integration suite on pushes and PRs; weekly/manual runs additionally execute every ignored integration/stress test without gating pull requests.
 - **reflink-e2e.yml** - Reusable job called by `ci.yml`: `ZCCACHE_MODE` end to end on a btrfs loop mount (parent/child worktree hits per mode, extent sharing, cross-device fallback).
 - **fs-matrix.yml** - Requires real ReFS/FAT, btrfs/ext4/vfat, and macOS fixtures on PRs; scheduled/manual runs also execute >4 GiB ReFS and btrfs COW acceptance.
-- **clippy.yml** - Runs Clippy on pushes to main for the README status badge.
+- **clippy.yml** - Reusable Clippy job called by `ci.yml` on pull requests, the merge queue and main pushes; gated by `CI summary`.
 - **benchmark-stats.yml** - Manual/scheduled zccache vs bare compiler vs sccache benchmark publisher for the README images and rendered stats page.
 - **perf-guard.yml** - Main-only Rust, C, and C++ perf-regression guard that runs language jobs in parallel, fails below the zccache vs bare compiler or pinned-sccache speed floors, and uploads Markdown/JSON run artifacts.
 - **broker-stress.yml** - Exercises concurrent soldr clients against the shared broker, requires the daemon path, and rejects broker-error and uncached-fallback telemetry.

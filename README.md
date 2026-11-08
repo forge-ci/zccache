@@ -4,7 +4,7 @@
 [![macOS](https://github.com/zackees/zccache/actions/workflows/ci-macos.yml/badge.svg)](https://github.com/zackees/zccache/actions/workflows/ci-macos.yml)
 [![Windows](https://github.com/zackees/zccache/actions/workflows/ci-windows.yml/badge.svg)](https://github.com/zackees/zccache/actions/workflows/ci-windows.yml)
 [![Perf Guard](https://github.com/zackees/zccache/actions/workflows/perf-guard.yml/badge.svg?branch=main)](https://github.com/zackees/zccache/actions/workflows/perf-guard.yml?query=branch%3Amain)
-[![Clippy](https://github.com/zackees/zccache/actions/workflows/clippy.yml/badge.svg?branch=main)](https://github.com/zackees/zccache/actions/workflows/clippy.yml?query=branch%3Amain)
+[![CI](https://github.com/zackees/zccache/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zackees/zccache/actions/workflows/ci.yml?query=branch%3Amain)
 [![Dylint](https://img.shields.io/github/actions/workflow/status/zackees/zccache/ci.yml?branch=main&event=push&job=Dylint&label=dylint)](https://github.com/zackees/zccache/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
 [![codecov](https://codecov.io/gh/zackees/zccache/branch/main/graph/badge.svg)](https://codecov.io/gh/zackees/zccache)
 [![PyPI](https://img.shields.io/pypi/v/zccache)](https://pypi.org/project/zccache/)
