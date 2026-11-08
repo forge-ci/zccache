@@ -409,3 +409,12 @@ Inspect complete multiline workflow commands before concluding that ignored
 tests run nowhere. Scheduled blanket selection and focused PR selection are
 different coverage guarantees; record both, including skip filters and helpers.
 
+## PathBuf allowlist burns (#2021)
+
+- Validate archive components before lexical normalization so parent traversal
+  cannot disappear from the input being checked.
+- An installed path containing a parent component after a symlink needs its
+  filesystem identity resolved before wrapping it in `NormalizedPath`.
+- Regression tests also obey the native boundary: use kernal-api capabilities
+  and existing host predicates instead of `std::os` or host `cfg` selection.
+
