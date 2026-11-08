@@ -64,7 +64,6 @@ crates/zccache-cli-core/src/cli/commands/tests/analyze.rs
 crates/zccache-cli-core/src/cli/commands/tests/warm_lockfile.rs
 crates/zccache-core/src/config/resolve.rs
 crates/zccache-daemon-core/src/daemon/server/persist/artifact_io.rs
-crates/zccache-daemon-core/src/daemon/server/persist/pack.rs
 crates/zccache-daemon-core/src/daemon/server/persist/tests.rs
 crates/zccache-daemon-core/src/daemon/server/tests/deferred_cold_path.rs
 crates/zccache-daemon-core/src/daemon/server/tests/link_cache.rs
