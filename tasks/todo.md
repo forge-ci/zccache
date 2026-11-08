@@ -1692,3 +1692,10 @@ Validation evidence: original test failed at line 731 under `rust`; fixed module
 - [x] Keep metadata extraction in the IPC adapter; add the acyclic fscache -> IPC edge.
 - [ ] Validate Dylint, Clippy, fscache regressions and formatting; preserve format and warm-path semantics.
 - [ ] Push, merge through the queue, and verify Dylint + CI summary on main's push run.
+
+## #2098 remaining test wait work
+
+- [x] Verify merged #2104 bounds lock acquisition and fixture compilation.
+- [x] Narrow the fixture env lock to each planning call.
+- [x] Exercise lock expiry from a separate waiter thread.
+Validation and landing evidence are recorded in the follow-up PR and clud board.

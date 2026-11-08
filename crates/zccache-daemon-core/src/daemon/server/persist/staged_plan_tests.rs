@@ -57,7 +57,6 @@ fn rust_staging_paths_do_not_change_published_output_bytes() {
     let Some(rustc) = crate::test_support::find_rustc() else {
         return;
     };
-    let _staged = enable_staged_tests();
     let temp = tempdir().unwrap();
     let source = temp.path().join("fixture.rs");
     std::fs::write(&source, "pub fn answer() -> u32 { 42 }\n").unwrap();
@@ -87,15 +86,19 @@ fn rust_staging_paths_do_not_change_published_output_bytes() {
             logical_dir.to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
         ];
-        let plan = StagedCompilePlan::rustc(
-            &temp.path().join(format!("staging-{label}")),
-            &args,
-            &primary,
-            &expected,
-            temp.path(),
-        )
-        .unwrap()
-        .unwrap();
+        let plan = {
+            // Only planning reads the process-global staged-lane policy (#2098).
+            let _staged = enable_staged_tests();
+            StagedCompilePlan::rustc(
+                &temp.path().join(format!("staging-{label}")),
+                &args,
+                &primary,
+                &expected,
+                temp.path(),
+            )
+            .unwrap()
+            .unwrap()
+        };
         let output = zccache_core::wait::output_for(
             crate::daemon::server::compiler_spawn::user_compile_spawn(
                 rustc.as_path(),
