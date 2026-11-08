@@ -1720,11 +1720,13 @@ Validation and landing evidence are recorded in the follow-up PR and clud board.
 ## #2021 first PathBuf allowlist burn
 
 - [x] Migrate five production files outside open PR conflicts, one allowlist entry per commit.
-- [ ] Bump lint version; run formatting, Clippy, Dylint and the local gate.
+- [x] Bump lint version; run formatting, workspace Clippy and cross-target Dylint.
+- [ ] Run the clean-tree local gate.
 - [ ] Review, push, create PR, watch merge queue and report to board.
 
 ### #2021 review
 
 - Allowlist shrinks 61 → 56 entries (60 → 55 unique files); existing duplicate unchanged.
 - Formatting and workspace Clippy passed; pre-push clud-review clean.
-- Cross-target Dylint and the clean-tree local gate provide the regression checks.
+- Cross-target Dylint passed, including the production-feature baseline on Linux, Windows and macOS.
+- The clean-tree local gate provides the full regression checks.
