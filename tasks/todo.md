@@ -3,7 +3,9 @@
 - [x] Isolate worktree and confirm config drift.
 - [x] Enable cli-core workspace lints; exempt only the saturated-pool test helper.
 - [x] Enable both Python extension crates; audit daemon-core separately.
-- [ ] Validate workspace and download feature combinations, review, local gate.
+- [x] Workspace Clippy passes with warnings denied; pre-push review clean.
+- [ ] Validate isolated download features after gating client-only IPC helpers.
+- [ ] Complete final committed-tree local gate.
 - [ ] Push, merge PR, and post board outcome.
 
 # #2117 ignored-test audit
