@@ -29,12 +29,13 @@
 //! When zccache flips slice 25 (delete v1 broker surface) the v1
 //! write goes away with it.
 
+use crate::core::NormalizedPath;
 use kernal_api::daemon_registration::{
     service_definition_directory, ServiceDefinition, ServiceDefinitionBuilder,
 };
 use kernal_api::daemon_registration_v2 as registration_v2;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Service name the daemon already answers `BackendHandle` probes for
@@ -52,9 +53,9 @@ pub(crate) const ZCCACHE_SERVICE_NAME: &str = "zccache";
 /// path once v1 goes away.
 #[derive(Debug, Clone)]
 pub(crate) struct InstalledServiceDefinition {
-    pub(crate) path: PathBuf,
+    pub(crate) path: NormalizedPath,
     pub(crate) definition: ServiceDefinition,
-    pub(crate) v2_path: Option<PathBuf>,
+    pub(crate) v2_path: Option<NormalizedPath>,
 }
 
 /// Build the zccache daemon's v2 ServiceDefinition counterpart.
@@ -161,7 +162,7 @@ pub(crate) fn install_service_definition_to_dir(
     // to v2-only.
     let v2_path = match zccache_service_definition_v2(daemon_binary) {
         Ok(def_v2) => match registration_v2::write_service_definition(service_root, &def_v2) {
-            Ok(path) => Some(path),
+            Ok(path) => Some(NormalizedPath::from(path)),
             Err(err) => {
                 tracing::warn!(
                     "v2 ServiceDefinition install failed (non-fatal during rollout): {err}"
@@ -176,7 +177,7 @@ pub(crate) fn install_service_definition_to_dir(
     };
 
     Ok(InstalledServiceDefinition {
-        path,
+        path: NormalizedPath::from(path),
         definition,
         v2_path,
     })
@@ -187,10 +188,14 @@ pub(crate) fn run_install_servicedef(
     daemon_binary: Option<String>,
     dir: Option<String>,
 ) -> ExitCode {
-    let daemon_binary = match daemon_binary {
-        Some(path) => PathBuf::from(path),
+    let discovered_binary;
+    let daemon_binary = match daemon_binary.as_deref() {
+        Some(path) => Path::new(path),
         None => match super::daemon::find_daemon_binary() {
-            Some(path) => path.into_path_buf(),
+            Some(path) => {
+                discovered_binary = path;
+                discovered_binary.as_path()
+            }
             None => {
                 eprintln!(
                     "zccache: cannot find zccache-daemon binary; pass --daemon-binary <path>"
@@ -201,8 +206,8 @@ pub(crate) fn run_install_servicedef(
     };
 
     let installed = match dir {
-        Some(dir) => install_service_definition_to_dir(dir, &daemon_binary),
-        None => install_service_definition(&daemon_binary),
+        Some(dir) => install_service_definition_to_dir(dir, daemon_binary),
+        None => install_service_definition(daemon_binary),
     };
     match installed {
         Ok(installed) => {
@@ -234,8 +239,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn fake_daemon_binary(root: &Path) -> PathBuf {
-        let binary = root.join(if crate::platform::host::is_windows() {
+    fn fake_daemon_binary(root: &Path) -> NormalizedPath {
+        let binary = NormalizedPath::new(root).join(if crate::platform::host::is_windows() {
             "zccache-daemon.exe"
         } else {
             "zccache-daemon"
