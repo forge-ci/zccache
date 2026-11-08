@@ -214,7 +214,7 @@ fn print_profile(profile: &zccache::daemon::ProfileSnapshot) {
 ///
 /// Run with: soldr cargo test -p zccache --test profile_test -- --nocapture --ignored
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf profile_compile_phases -- --ignored --nocapture"]
 async fn profile_compile_phases() {
     let clang = match zccache::test_support::find_clang() {
         Some(p) => p,

@@ -539,7 +539,7 @@ async fn perf_warm_cache_zccache_vs_sccache() {
 /// This keeps daemon startup, identity hashing, exact dependency discovery,
 /// and one successful C++ miss while omitting unrelated comparison phases.
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf_bench_test profile_single_cpp_cold_miss -- --ignored --nocapture"]
 async fn profile_single_cpp_cold_miss() {
     let Some(compiler_path) = zccache::test_support::find_clang() else {
         eprintln!("SKIP: no C++ compiler found");

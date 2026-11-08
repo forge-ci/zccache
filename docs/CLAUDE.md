@@ -45,6 +45,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | Strict PCH serving + input mtime replay (#1952) | [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952) — `handle_compile/pch_gate.rs`, `zccache-fingerprint/src/pch_inputs` |
 | mtime snapshot/replay (`zccache snapshot`/`replay`, #1595) | `crates/zccache-fingerprint/README.md` — `mtime_replay` module; CLI in `cli/commands/mtime.rs` |
 | Owned test children and per-test termination (#1971) | `crates/zccache-test-support/src/README.md`, `ci/check_nextest_termination.py` |
+| Ignored test CI selection (#2117) | [ignored-tests.md](ignored-tests.md) — inventory, scheduled coverage and manual diagnostics |
 | Slow Bosn lane cache restores (setup-soldr under act) | [bosn-cache-restore.md](bosn-cache-restore.md) — measured breakdown; CPU-weight root cause |
 
 ## Where to document new features

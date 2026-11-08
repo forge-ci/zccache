@@ -166,7 +166,7 @@ fn zccache_storm(
 }
 
 #[tokio::test]
-#[ignore] // Run explicitly: soldr cargo test -p zccache --test perf_bench_test -- perf_meson_probe_storm_wrapper --nocapture --ignored
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf_bench_test perf_meson_probe_storm_wrapper -- --ignored --nocapture"]
 async fn perf_meson_probe_storm_wrapper() {
     zccache::test_support::ensure_clang_tool_chain_on_path();
     let compiler_path = match zccache::test_support::find_on_path("clang") {

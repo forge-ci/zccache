@@ -601,7 +601,7 @@ fn print_three_way(bare: &BenchResult, sccache: &BenchResult, zccache: &BenchRes
 ///
 /// Run with: soldr cargo test -p zccache --test perf_test -- perf_full_benchmark --nocapture --ignored
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf perf_full_benchmark -- --ignored --nocapture"]
 async fn perf_full_benchmark() {
     let clang = match zccache::test_support::find_clang() {
         Some(p) => p,
@@ -656,7 +656,7 @@ async fn perf_full_benchmark() {
 
 /// Quick sanity check that both cached tools produce cache hits.
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf perf_sanity_check -- --ignored --nocapture"]
 async fn perf_sanity_check() {
     let clang = match zccache::test_support::find_clang() {
         Some(p) => p,

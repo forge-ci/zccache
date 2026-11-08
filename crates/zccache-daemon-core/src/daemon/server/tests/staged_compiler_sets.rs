@@ -207,7 +207,7 @@ async fn staged_empp_multi_source_hits_after_include_heavy_cold_compile() {
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore = "integration: real clang-cl + daemon IPC"]
+#[ignore = "manual: requires native Windows clang-cl; Linux scheduled suite cannot compile it; soldr cargo test -p zccache-daemon-core --features test-support --lib staged_multi_source_clang_cl_restores_directory_outputs_from_response_file -- --ignored --nocapture"]
 async fn staged_multi_source_clang_cl_restores_directory_outputs_from_response_file() {
     let _staged = super::staged_env::StagedArtifactsEnvGuard::set("c-cpp");
     let Some(clang_cl) = crate::test_support::find_clang_cl() else {
