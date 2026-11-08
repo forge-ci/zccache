@@ -67,9 +67,3 @@ mod tests {
         );
     }
 }
-
-// THROWAWAY (PR #2140 non-vacuity proof): deliberate clippy::clone_on_copy.
-#[doc(hidden)]
-pub fn queue_gate_probe(x: u32) -> u32 {
-    x.clone()
-}
