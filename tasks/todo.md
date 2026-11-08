@@ -1716,3 +1716,9 @@ Validation evidence: original test failed at line 731 under `rust`; fixed module
 - [x] Narrow the fixture env lock to each planning call.
 - [x] Exercise lock expiry from a separate waiter thread.
 Validation and landing evidence are recorded in the follow-up PR and clud board.
+
+## #2021 first PathBuf allowlist burn
+
+- [ ] Migrate five production files outside open PR conflicts, one allowlist entry per commit.
+- [ ] Bump lint version; run formatting, Clippy, Dylint and the local gate.
+- [ ] Review, push, create PR, watch merge queue and report to board.
