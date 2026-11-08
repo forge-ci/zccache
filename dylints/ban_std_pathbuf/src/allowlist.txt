@@ -10,7 +10,6 @@ crates/zccache-cli-core/src/cli/symbols.rs
 # bounds, and the downstream cargo-fingerprint consumers that flow through
 # raw paths. Track migration separately so the lint can keep catching new
 # violations elsewhere.
-crates/zccache/src/bin/zccache.rs
 crates/zccache/src/bin/zccache-stamp.rs
 crates/zccache-cli/src/lib.rs
 crates/zccache-cli-core/src/cli/snapshot_fp.rs
