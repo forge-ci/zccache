@@ -78,18 +78,10 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         assert_eq!(graph.stats().hits, hits_before + 1);
         let accepted_hits = graph.stats().hits;
         let edited: NormalizedPath = dir.path().join(changed).into();
-        std::fs::write(&edited, b"new").unwrap();
-        // A later edit, not one in the same timestamp tick as the recorded
-        // hash: Windows file times can repeat across writes microseconds
-        // apart, and a same-size same-mtime rewrite is invisible to any stat
-        // check (zackees/zccache#1989).
-        kernal_api::platform::fs::set_file_mtime(
-            &edited,
-            kernal_api::platform::fs::FileTime::from_system_time(
-                std::time::SystemTime::now() + std::time::Duration::from_secs(10),
-            ),
-        )
-        .unwrap();
+        // #2002: a normal size-changing edit must be detected even if the
+        // watcher has not delivered any event. Size makes this deterministic
+        // on filesystems whose timestamp resolution coalesces both writes.
+        std::fs::write(&edited, b"normal size-changing source edit").unwrap();
         assert!(!server
             .state
             .cache_system
