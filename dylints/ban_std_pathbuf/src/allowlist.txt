@@ -80,7 +80,6 @@ crates/zccache-daemon-core/src/daemon/server/tests/deferred_cold_path.rs
 crates/zccache-daemon-core/src/daemon/server/tests/link_cache.rs
 crates/zccache-depgraph/src/snapshot/tests/behavioral.rs
 crates/zccache-cli-core/src/download_client/artifact/archive.rs
-crates/zccache-cli-core/src/download_client/artifact/hashing.rs
 crates/zccache-cli-core/src/download_client/artifact/lock.rs
 crates/zccache-fscache/src/verify.rs
 # Post-crate-split additions (issue #1025). These carried PathBuf boundary
