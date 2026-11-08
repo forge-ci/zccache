@@ -147,12 +147,14 @@ fn edit_after_test_build(verb: &str, mode: &str, project_name: &str, prime: bool
         &fixture.path().join("control-target"),
         &[("SOLDR_RUSTC_WRAPPER", PathBuf::from("none"))],
     );
-    let stderr = String::from_utf8_lossy(&checked.stderr);
+    // Rustc may render native Windows separators in source locations.
+    let stderr = String::from_utf8_lossy(&checked.stderr).replace('\\', "/");
+    let control_stderr = String::from_utf8_lossy(&control.stderr).replace('\\', "/");
     assert_eq!(checked.status.code(), control.status.code(), "{stderr}");
     assert_eq!(checked.status.code(), Some(101), "false green: {stderr}");
     for needle in ["E0425", "missing_agent_fixture_symbol", "src/lib.rs"] {
         assert!(stderr.contains(needle), "missing {needle}: {stderr}");
-        assert!(String::from_utf8_lossy(&control.stderr).contains(needle));
+        assert!(control_stderr.contains(needle));
     }
 
     let mut outcomes = Vec::new();
