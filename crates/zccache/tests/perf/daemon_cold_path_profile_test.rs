@@ -386,7 +386,7 @@ fn print_phase_profile(profile: &zccache::daemon::ProfileSnapshot) {
 ///   3. Daemon-side phase profiling (compiler_exec, include_scan, hash_all, artifact_store)
 ///   4. Warm validation (ensures all files cached correctly)
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf cold_path_stress_profile -- --ignored --nocapture"]
 async fn cold_path_stress_profile() {
     let compiler_path = match zccache::test_support::find_clang() {
         Some(p) => p,
@@ -611,7 +611,7 @@ async fn cold_path_stress_profile() {
 /// Sends N compile requests through independent sessions to test
 /// daemon under concurrent cold-path load.
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf cold_path_concurrent_stress -- --ignored --nocapture"]
 async fn cold_path_concurrent_stress() {
     let compiler_path = match zccache::test_support::find_clang() {
         Some(p) => p,
@@ -757,7 +757,7 @@ async fn start_session_inline(client: &mut ClientConn, cwd: &str) -> String {
 /// that cost by using a single daemon with multiple sessions, each in a
 /// fresh project directory so the compile context is always cold.
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf cold_path_first_file_penalty -- --ignored --nocapture"]
 async fn cold_path_first_file_penalty() {
     let compiler_path = match zccache::test_support::find_clang() {
         Some(p) => p,

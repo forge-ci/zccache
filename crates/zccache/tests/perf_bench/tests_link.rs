@@ -171,7 +171,7 @@ async fn perf_cpp_driver_link() {
 }
 
 #[tokio::test]
-#[ignore] // Run explicitly: soldr cargo test -p zccache --test perf_bench_test -- perf_emcc_link --nocapture --ignored
+#[ignore = "manual: requires an emsdk environment; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf_bench_test perf_emcc_link -- --ignored --nocapture"]
 async fn perf_emcc_link() {
     let compiler_path = match find_empp() {
         Some(path) => path,

@@ -543,7 +543,7 @@ fn summarize(samples: &[u64]) -> (u64, u64, u64) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf persist_pool_bench -- --ignored --nocapture"]
 async fn persist_pool_bench() {
     let num_files: usize = std::env::var("PERSIST_BENCH_FILES")
         .ok()

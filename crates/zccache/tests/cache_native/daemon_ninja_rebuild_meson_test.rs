@@ -237,7 +237,7 @@ async fn meson_ninja_cold_then_warm_rebuild() {
 ///
 /// Run:  soldr cargo test -p zccache --test daemon_ninja_rebuild_meson_test -- meson_ninja_bench --ignored --nocapture
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native meson_ninja_bench_warm_iterations -- --ignored --nocapture"]
 async fn meson_ninja_bench_warm_iterations() {
     let clang = match zccache::test_support::find_clang() {
         Some(p) => p,

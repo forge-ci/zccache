@@ -819,7 +819,7 @@ async fn stress_large_project_cold_warm() {
 ///
 /// Run:  soldr cargo test -p zccache --test daemon_ninja_rebuild_direct_test -- bench_medium --ignored --nocapture
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native bench_medium_project_warm_iterations -- --ignored --nocapture"]
 async fn bench_medium_project_warm_iterations() {
     let clang = match zccache::test_support::find_clang() {
         Some(p) => p,

@@ -55,7 +55,7 @@ fn clean_objects(dir: &std::path::Path) {
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test perf profile_multi_file_warm_path -- --ignored --nocapture"]
 async fn profile_multi_file_warm_path() {
     let compiler_path = match zccache::test_support::find_clang() {
         Some(p) => p,

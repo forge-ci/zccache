@@ -1,3 +1,9 @@
+# #2117 ignored-test audit
+
+- [x] Inventory ignored tests and actual CI selection.
+- [x] Batch readonly Cargo acceptance in MSRV; document manual exclusions.
+- [ ] Review, pass the local gate, push, merge, and post to the clud board.
+
 # Main RED workflows — resume and land
 
 - [x] Verify failing runs 41969887550 and 42056470706 and the executed action SHA.

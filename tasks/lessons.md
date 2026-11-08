@@ -399,3 +399,13 @@ An environment variable being present does not enable every staged compiler lane
 A one-time lane check also races with later planner reads. Tests asserting planner
 behavior must install the existing staged environment guard for their complete
 assertion scope, enabling all lanes when a test covers Rust, C/C++, and archives.
+# Ignored test selection audit (#2117)
+
+Keep post-build nextest probes in the same Soldr cache and wrapper environment
+as the prebuild. Switching cache identity can trigger a complete rebuild inside
+a short listing deadline; do not weaken the deadline to hide that mismatch.
+
+Inspect complete multiline workflow commands before concluding that ignored
+tests run nowhere. Scheduled blanket selection and focused PR selection are
+different coverage guarantees; record both, including skip filters and helpers.
+

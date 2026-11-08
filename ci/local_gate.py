@@ -218,7 +218,7 @@ def checks() -> list[Check]:
             required_steps=(
                 "Check MSRV",
                 "Verify nested Dylint cache contract",
-                "Verify source edit after a test build fails check (#2002)",
+                "Verify ignored Cargo cache regressions (#2002/#2117)",
             ),
         ),
         # The Dylint job is the longest on a zccache PR (~9m of a ~9.2m

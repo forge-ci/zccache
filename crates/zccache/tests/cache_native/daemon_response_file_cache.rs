@@ -645,7 +645,7 @@ async fn rsp_with_quoted_args() {
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore] // integration: spawns clang and exercises Windows spill path
+#[ignore = "manual: requires Windows command-line spilling; Linux scheduled suite cannot compile it; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native daemon_spill_rsp_preserves_compile_success -- --ignored --nocapture"]
 async fn daemon_spill_rsp_preserves_compile_success() {
     let mut h = match TestHarness::new().await {
         Some(h) => h,
@@ -678,7 +678,7 @@ async fn daemon_spill_rsp_preserves_compile_success() {
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore] // integration: spawns clang and exercises Windows spill path
+#[ignore = "manual: requires Windows command-line spilling; Linux scheduled suite cannot compile it; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native daemon_spill_rsp_preserves_fbuild_style_args -- --ignored --nocapture"]
 async fn daemon_spill_rsp_preserves_fbuild_style_args() {
     let mut h = match TestHarness::new().await {
         Some(h) => h,
@@ -724,7 +724,7 @@ async fn daemon_spill_rsp_preserves_fbuild_style_args() {
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore] // integration: spawns clang and exercises Windows multi-file partial-hit spill path
+#[ignore = "manual: requires Windows command-line spilling; Linux scheduled suite cannot compile it; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native daemon_spill_rsp_preserves_multi_file_partial_hits -- --ignored --nocapture"]
 async fn daemon_spill_rsp_preserves_multi_file_partial_hits() {
     let mut h = match TestHarness::new().await {
         Some(h) => h,

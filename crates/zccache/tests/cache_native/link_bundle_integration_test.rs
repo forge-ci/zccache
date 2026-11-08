@@ -104,7 +104,7 @@ fn run(command: &mut std::process::Command, description: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-#[ignore] // Real clang + dsymutil; run through `test --full`.
+#[ignore = "manual: requires a macOS SDK and dsymutil; Linux scheduled suite cannot compile it; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native real_dsymutil_bundle_miss_delete_hit -- --ignored --nocapture"]
 async fn real_dsymutil_bundle_miss_delete_hit() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -250,7 +250,7 @@ async fn real_lld_semantic_outputs_miss_delete_hit() {
 
 #[cfg(windows)]
 #[tokio::test]
-#[ignore] // Real cl.exe + link.exe from a Developer Command Prompt.
+#[ignore = "manual: requires native MSVC LTCG tools; Linux scheduled suite cannot compile it; soldr cargo test -p zccache --features zccache-bin,daemon-bin,test-support --test cache_native real_msvc_ltcg_output_miss_delete_hit -- --ignored --nocapture"]
 async fn real_msvc_ltcg_output_miss_delete_hit() {
     let Some(cl) = zccache::test_support::find_on_path("cl.exe") else {
         eprintln!("skipping: cl.exe not found");

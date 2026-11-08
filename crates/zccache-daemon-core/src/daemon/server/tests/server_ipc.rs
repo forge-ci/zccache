@@ -90,7 +90,7 @@ async fn test_server_shutdown_request() {
 /// margin for a loaded/slower CI host while being 2x tighter than the old
 /// 500 ms bound that was sized for the pre-#1762 ~1 s baseline.
 #[tokio::test]
-#[ignore] // integration-level: starts real daemon with IPC + file watcher
+#[ignore = "manual: requires a quiet host; excluded from scheduled timings; soldr cargo test -p zccache-daemon-core --features test-support --lib perf_shutdown_request_exits_idle_daemon_promptly -- --ignored --nocapture"]
 async fn perf_shutdown_request_exits_idle_daemon_promptly() {
     const BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
     crate::test_support::test_timeout(async {
