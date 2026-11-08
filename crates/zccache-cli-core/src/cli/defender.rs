@@ -8,7 +8,7 @@ use crate::core::defender::{
     add_exclusions, compute_exclusion_paths, is_elevated, query_excluded, remove_exclusions,
     ExclusionStatus,
 };
-use std::path::PathBuf;
+use crate::core::NormalizedPath;
 use std::process::ExitCode;
 
 /// Stderr line printed when an unprivileged caller runs `add` or `remove`.
@@ -17,8 +17,8 @@ elevation. Re-run from an elevated PowerShell or Administrator cmd.";
 
 /// Cache root used by every subcommand. Centralized so a future
 /// `zccache cache-root` (issue #275) only changes one site.
-fn resolved_cache_root() -> PathBuf {
-    crate::core::config::default_cache_dir().into_path_buf()
+fn resolved_cache_root() -> NormalizedPath {
+    crate::core::config::default_cache_dir()
 }
 
 /// On non-Windows, every subcommand prints the same one-liner and exits
