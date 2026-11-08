@@ -35,3 +35,14 @@ plus path-filtered cheap checks. The expensive lanes, `macOS`, `Windows`,
 `Integration`, `Wrapper end-to-end`, `Filesystem Matrix`, `Perf Guard`,
 `Broker stress` and `test-action`, run on push to `main`, a nightly
 `schedule` and `workflow_dispatch`, never on `pull_request`.
+
+They stay off the queue on purpose: the `CI` merge_group run already peaks
+near the ruleset's 60-minute `check_response_timeout`, and these lanes take
+a median 10-21 minutes each (often waiting for hosted macOS/Windows runners).
+So that a deterministic defect they catch does not redden main unseen, each
+of them (plus `Coverage` and `bench-action`) ends with a `Main red notifier`
+job (`ci/main_red_notify.py`): a failed code-gate job opens or updates a
+`main-red: <workflow>` issue, and the next green main run closes it. Runner
+queue observers and cache pre-prune failures are ops signals and open no
+issue; cancelled jobs are not defects. Release, cache cleanup/budget and
+benchmark-stats workflows are ops and carry no notifier.

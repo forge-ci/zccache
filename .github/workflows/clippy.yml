@@ -60,4 +60,4 @@ jobs:
       - name: Install Clippy
         run: soldr rustup component add clippy
       - name: Run Clippy
-        run: soldr cargo clippy --workspace --all-targets --features "$ZCCACHE_CLIPPY_FEATURES"
+        run: soldr cargo clippy --workspace --all-targets --features "$ZCCACHE_CLIPPY_FEATURES" -- -D warnings
