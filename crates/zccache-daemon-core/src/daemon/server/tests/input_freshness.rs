@@ -78,10 +78,18 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         assert_eq!(graph.stats().hits, hits_before + 1);
         let accepted_hits = graph.stats().hits;
         let edited: NormalizedPath = dir.path().join(changed).into();
-        // #2002: a normal size-changing edit must be detected even if the
-        // watcher has not delivered any event. Size makes this deterministic
-        // on filesystems whose timestamp resolution coalesces both writes.
-        std::fs::write(&edited, b"normal size-changing source edit").unwrap();
+        std::fs::write(&edited, b"new").unwrap();
+        // A later edit, not one in the same timestamp tick as the recorded
+        // hash: Windows file times can repeat across writes microseconds
+        // apart, and a same-size same-mtime rewrite is invisible to any stat
+        // check (zackees/zccache#1989).
+        kernal_api::platform::fs::set_file_mtime(
+            &edited,
+            kernal_api::platform::fs::FileTime::from_system_time(
+                std::time::SystemTime::now() + std::time::Duration::from_secs(10),
+            ),
+        )
+        .unwrap();
         assert!(!server
             .state
             .cache_system
@@ -186,4 +194,60 @@ async fn multi_request_memo_verifies_each_input_once() {
     memo.insert(paths[1].clone(), None);
     assert!(!fresh(Some(&memo)), "later unit reads the request verdict");
     assert!(fresh(None), "single-request path still stats");
+}
+
+/// #2002: size changes must invalidate an artifact without any watcher event,
+/// including when the filesystem reports both writes in the same mtime tick.
+#[tokio::test]
+async fn size_change_rejects_fast_entry_without_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = super::bind_isolated_server(dir.path());
+    let source: NormalizedPath = dir.path().join("lib.rs").into();
+    std::fs::write(&source, b"#[test] fn ok() {}\n").unwrap();
+    let graph = server.state.dep_graph.load();
+    let ctx = CompileContext {
+        source_file: source.clone(),
+        include_search: crate::depgraph::IncludeSearchPaths::default(),
+        defines: vec![],
+        undefines: vec![],
+        flags: vec![],
+        force_includes: vec![],
+        unknown_flags: vec![],
+        compiler_hash: crate::hash::hash_bytes(b"fixture"),
+    };
+    let key = graph.register(ctx);
+    let expected = graph
+        .update(
+            &key,
+            crate::depgraph::ScanResult {
+                resolved: vec![],
+                unresolved: vec![],
+                has_computed: false,
+            },
+            |path| {
+                std::fs::read(path)
+                    .ok()
+                    .map(|b| crate::hash::hash_bytes(&b))
+            },
+        )
+        .unwrap()
+        .hash()
+        .to_hex();
+    let journal = server.state.cache_system.journal();
+    journal.register(source.clone());
+    server
+        .state
+        .cache_system
+        .lookup_since(&source, Clock::ZERO)
+        .unwrap();
+    let clock = server.state.cache_system.current_clock();
+    let fresh = || context_artifact_is_fresh(&server.state, &key, &source, clock, None, &expected);
+    assert!(fresh(), "unchanged source must retain its hit");
+    std::fs::write(
+        &source,
+        b"pub fn broken() { missing_agent_fixture_symbol(); }\n",
+    )
+    .unwrap();
+    assert!(!journal.changed_since(&source, clock));
+    assert!(!fresh(), "size-changing edit authorized a stale artifact");
 }

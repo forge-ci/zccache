@@ -26,7 +26,7 @@ impl Drop for Daemon<'_> {
 fn cargo(project: &Path, verb: &str, target: &Path, envs: &[(&str, PathBuf)]) -> Output {
     Command::new("soldr")
         .args(["cargo", verb])
-        .env("SOLDR_ALLOW_UNPINNED", "1")
+        .env("SOLDR_ALLOW_UNPINNED", "0")
         .env("SOLDR_PORCELAIN", "0")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .current_dir(project)
@@ -58,7 +58,7 @@ fn journal_outcomes(dir: &Path, found: &mut Vec<String>) {
 #[test]
 #[ignore = "integration: builds a real crate through RUSTC_WRAPPER"]
 fn edit_after_test_build_fails_check_like_uncached_control() {
-    edit_after_test_build("check", "AUTO", "project");
+    edit_after_test_build("check", "AUTO", "project", false);
 }
 
 #[test]
@@ -69,13 +69,13 @@ fn edit_after_test_build_matrix_without_watcher_delivery() {
             // The watcher ignores .cache components. No event can rescue the
             // freshness decision in those cells; ordinary paths race delivery.
             for project in ["project", ".cache/project"] {
-                edit_after_test_build(verb, mode, project);
+                edit_after_test_build(verb, mode, project, true);
             }
         }
     }
 }
 
-fn edit_after_test_build(verb: &str, mode: &str, project_name: &str) {
+fn edit_after_test_build(verb: &str, mode: &str, project_name: &str, prime: bool) {
     let fixture = tempfile::tempdir().expect("fixture");
     let project = fixture.path().join(project_name);
     let cache = fixture.path().join("cache");
@@ -86,6 +86,11 @@ fn edit_after_test_build(verb: &str, mode: &str, project_name: &str) {
         "[package]\nname='agent_mutation_repro'\nversion='0.1.0'\nedition='2021'\n",
     )
     .expect("manifest");
+    std::fs::write(
+        project.join("rust-toolchain.toml"),
+        include_str!("../../../../rust-toolchain.toml"),
+    )
+    .expect("toolchain pin");
     let source = project.join("src/lib.rs");
     std::fs::write(&source, GOOD).expect("source");
 
@@ -102,21 +107,23 @@ fn edit_after_test_build(verb: &str, mode: &str, project_name: &str) {
     let warm = cargo(&project, "test", &target, &envs);
     assert!(warm.status.success(), "warm test failed: {warm:?}");
 
-    // Populate the selected path, then force Cargo to ask the cache again.
-    // Require a hit before editing, including the ignored-watcher cells.
-    let populate = cargo(&project, verb, &target, &envs);
-    assert!(populate.status.success(), "populate failed: {populate:?}");
-    let clean = cargo(&project, "clean", &target, &envs);
-    assert!(clean.status.success(), "clean failed: {clean:?}");
-    let replay = cargo(&project, verb, &target, &envs);
-    assert!(replay.status.success(), "replay failed: {replay:?}");
-    let mut outcomes = Vec::new();
-    journal_outcomes(&cache, &mut outcomes);
-    assert_eq!(
-        outcomes.last().map(String::as_str),
-        Some("hit"),
-        "unchanged {verb}/{mode}/{project_name}: {outcomes:?}"
-    );
+    if prime {
+        // Populate the selected path, then force Cargo to ask the cache again.
+        // Require a hit before editing, including the ignored-watcher cells.
+        let populate = cargo(&project, verb, &target, &envs);
+        assert!(populate.status.success(), "populate failed: {populate:?}");
+        let clean = cargo(&project, "clean", &target, &envs);
+        assert!(clean.status.success(), "clean failed: {clean:?}");
+        let replay = cargo(&project, verb, &target, &envs);
+        assert!(replay.status.success(), "replay failed: {replay:?}");
+        let mut outcomes = Vec::new();
+        journal_outcomes(&cache, &mut outcomes);
+        assert_eq!(
+            outcomes.last().map(String::as_str),
+            Some("hit"),
+            "unchanged {verb}/{mode}/{project_name}: {outcomes:?}"
+        );
+    }
 
     // No sleep: ignored paths never deliver an event, ordinary paths race it.
     std::fs::write(&source, BROKEN).expect("edit");
