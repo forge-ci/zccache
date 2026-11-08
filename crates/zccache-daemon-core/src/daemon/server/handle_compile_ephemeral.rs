@@ -35,7 +35,7 @@ pub(super) async fn handle_compile_ephemeral(
             // to that file so save/load warm-miss verdicts are observable.
             log_file: std::env::var("ZCCACHE_EPHEMERAL_LOG")
                 .ok()
-                .map(|s| crate::core::NormalizedPath::from(std::path::PathBuf::from(s))),
+                .map(crate::core::NormalizedPath::from),
             track_stats: false,
             journal_path: None,
             profile: false,
