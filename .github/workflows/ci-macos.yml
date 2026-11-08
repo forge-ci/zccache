@@ -72,3 +72,26 @@ jobs:
           uv run --no-project --python 3.13 python ci/observe_runner_queue.py
           --repository "${{ github.repository }}" --run-id "${{ github.run_id }}"
           --runner macos-15 --job "macos / Test" --token "$GITHUB_TOKEN"
+
+  # Push/schedule-only gate (too slow for the merge queue): report a red main
+  # to a `main-red` tracking issue instead of reddening it silently.
+  main-red-notify:
+    name: Main red notifier
+    needs: [cache-pre-prune, macos, observe-macos-queue]
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: ci
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - name: Report main status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project --python 3.13 python -m ci.main_red_notify
