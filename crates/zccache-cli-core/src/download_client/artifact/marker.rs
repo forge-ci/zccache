@@ -1,5 +1,7 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::core::NormalizedPath;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,22 +28,20 @@ pub(super) struct ArtifactMarker {
     bytes: u64,
 }
 
-pub(super) fn artifact_marker_path(cache_path: &Path) -> PathBuf {
+pub(super) fn artifact_marker_path(cache_path: &Path) -> NormalizedPath {
     let hash = stable_download_id(cache_path);
     crate::core::config::daemon_state_dir()
         .join("downloads")
         .join("artifact-state")
         .join(format!("{hash}.json"))
-        .into_path_buf()
 }
 
-pub(super) fn expanded_marker_path(expanded_path: &Path) -> PathBuf {
+pub(super) fn expanded_marker_path(expanded_path: &Path) -> NormalizedPath {
     let hash = stable_download_id(expanded_path);
     crate::core::config::daemon_state_dir()
         .join("downloads")
         .join("expanded-state")
         .join(format!("{hash}.json"))
-        .into_path_buf()
 }
 
 pub(super) fn read_or_compute_artifact_fingerprint(

@@ -82,7 +82,6 @@ crates/zccache-depgraph/src/snapshot/tests/behavioral.rs
 crates/zccache-cli-core/src/download_client/artifact/archive.rs
 crates/zccache-cli-core/src/download_client/artifact/hashing.rs
 crates/zccache-cli-core/src/download_client/artifact/lock.rs
-crates/zccache-cli-core/src/download_client/artifact/marker.rs
 crates/zccache-fscache/src/verify.rs
 # Post-crate-split additions (issue #1025). These carried PathBuf boundary
 # code from before the gate existed but were masked while the Dylint job
