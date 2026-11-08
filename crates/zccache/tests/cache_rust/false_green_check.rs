@@ -25,10 +25,19 @@ impl Drop for Daemon<'_> {
 
 fn cargo(project: &Path, verb: &str, target: &Path, envs: &[(&str, PathBuf)]) -> Output {
     Command::new("soldr")
-        .args(["cargo", verb])
+        // The cache root below is fixture-owned, not stale workspace state.
+        .args(["--trust-inherited-soldr-env", "cargo", verb])
         .env("SOLDR_ALLOW_UNPINNED", "0")
         .env("SOLDR_PORCELAIN", "0")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // Each fixture command models a new user invocation, not a recursive
+        // Soldr front door inherited from the outer `soldr cargo test`.
+        .env_remove("IN_SOLDR_PID")
+        .env_remove("IN_SOLDR_ROLE")
+        // The outer harness may build its experimental binary uncached;
+        // that policy must not disable the cache exercised by this fixture.
+        .env_remove("SOLDR_CACHE_ENABLED")
+        .env_remove("ZCCACHE_DISABLE")
         .current_dir(project)
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_TERM_COLOR", "never")
@@ -106,6 +115,10 @@ fn edit_after_test_build(verb: &str, mode: &str, project_name: &str, prime: bool
 
     let warm = cargo(&project, "test", &target, &envs);
     assert!(warm.status.success(), "warm test failed: {warm:?}");
+    assert!(
+        cache.is_dir(),
+        "warm test did not use isolated cache: {warm:?}"
+    );
 
     if prime {
         // Populate the selected path, then force Cargo to ask the cache again.
@@ -149,4 +162,20 @@ fn edit_after_test_build(verb: &str, mode: &str, project_name: &str, prime: bool
         Some("error"),
         "edited {verb}/{mode}/{project_name}: {outcomes:?}"
     );
+    if !prime {
+        // Preserve #2114's post-error recovery assertion as well as its
+        // immediate test/edit/check sequence.
+        std::fs::write(&source, GOOD).expect("restore");
+        let clean = cargo(&project, "clean", &target, &envs);
+        assert!(clean.status.success(), "clean failed: {clean:?}");
+        let replay = cargo(&project, verb, &target, &envs);
+        assert!(replay.status.success(), "replay failed: {replay:?}");
+        outcomes.clear();
+        journal_outcomes(&cache, &mut outcomes);
+        assert_eq!(
+            outcomes.last().map(String::as_str),
+            Some("hit"),
+            "{outcomes:?}"
+        );
+    }
 }

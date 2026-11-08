@@ -418,3 +418,7 @@ different coverage guarantees; record both, including skip filters and helpers.
 - Regression tests also obey the native boundary: use kernal-api capabilities
   and existing host predicates instead of `std::os` or host `cfg` selection.
 
+
+## #2002: prove overlapping freshness guards independently
+
+Preserve the immediate test-build/edit/check regression alongside primed-hit matrices. A disabled guard may still avoid a stale hit because another layer catches the edit; distinguish public verdict misclassification from an actual stale hit, and include same-path extern edits to exercise metadata artifact proofs. Isolated Soldr fixture commands must clear inherited front-door identity and outer build-cache policy and preserve their explicit cache root with `--trust-inherited-soldr-env`; retain strict mode and assert actual cache hits.

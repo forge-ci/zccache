@@ -1760,5 +1760,6 @@ a separate behavior decision and regression coverage.
 
 - [x] Coverage audit and independent guard tests.
 - [x] Preserve immediate test/edit/check and same-size guard coverage.
-- [ ] Bosn RED/GREEN and published Soldr qualification.
-- [ ] Full local gate, pre-push review, pushed PR and merge queue.
+- [x] Bosn RED/GREEN and published Soldr qualification.
+- [x] Pre-push review (one reviewer; clean).
+- Require full local gate, required Windows CI and merge-queue receipts in the closing PR before landing.
