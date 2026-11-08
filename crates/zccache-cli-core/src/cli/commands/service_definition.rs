@@ -153,7 +153,8 @@ pub(crate) fn install_service_definition_to_dir(
             .label("consumer", "zccache")
             .label("running-process-tracker", "zackees/running-process#435")
             .install_in(service_root)
-            .map_err(|err| io::Error::other(err.to_string()))?;
+            .map_err(|err| io::Error::other(err.to_string()))
+            .and_then(normalize_installed_path)?;
 
     // Dual-write: also install the v2 ServiceDefinition counterpart so a
     // v2 broker (with loader) finds zccache at the same identity. v2
@@ -161,8 +162,11 @@ pub(crate) fn install_service_definition_to_dir(
     // primary during the rollout. zccache#782 slice 25 collapses this
     // to v2-only.
     let v2_path = match zccache_service_definition_v2(daemon_binary) {
-        Ok(def_v2) => match registration_v2::write_service_definition(service_root, &def_v2) {
-            Ok(path) => Some(NormalizedPath::from(path)),
+        Ok(def_v2) => match registration_v2::write_service_definition(service_root, &def_v2)
+            .map_err(|err| io::Error::other(err.to_string()))
+            .and_then(normalize_installed_path)
+        {
+            Ok(path) => Some(path),
             Err(err) => {
                 tracing::warn!(
                     "v2 ServiceDefinition install failed (non-fatal during rollout): {err}"
@@ -177,10 +181,25 @@ pub(crate) fn install_service_definition_to_dir(
     };
 
     Ok(InstalledServiceDefinition {
-        path: NormalizedPath::from(path),
+        path,
         definition,
         v2_path,
     })
+}
+
+/// Preserve the written file's identity when lexical normalization would
+/// collapse a parent component across a symlink. Ordinary paths retain their
+/// original spelling, including aliases such as macOS's `/var`.
+fn normalize_installed_path(path: impl AsRef<Path>) -> io::Result<NormalizedPath> {
+    let path = path.as_ref();
+    if path
+        .components()
+        .any(|part| part == std::path::Component::ParentDir)
+    {
+        std::fs::canonicalize(path).map(NormalizedPath::from)
+    } else {
+        Ok(NormalizedPath::new(path))
+    }
 }
 
 /// `zccache install-servicedef [--daemon-binary <path>] [--dir <path>]`
@@ -283,6 +302,29 @@ mod tests {
         let loaded = ServiceDefinition::read(&service_root, "zccache")
             .expect("load facade-owned service definition");
         assert_eq!(loaded, installed.definition);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_paths_preserve_symlink_parent_resolution() {
+        let temp = TempDir::new().expect("tempdir");
+        let logical = temp.path().join("logical");
+        let physical = temp.path().join("physical");
+        std::fs::create_dir_all(&logical).unwrap();
+        std::fs::create_dir_all(physical.join("child")).unwrap();
+        std::os::unix::fs::symlink(physical.join("child"), logical.join("alias")).unwrap();
+        let service_root = logical.join("alias/../services");
+        let daemon = fake_daemon_binary(temp.path());
+
+        let installed = install_service_definition_to_dir(&service_root, &daemon).unwrap();
+        let actual_root = std::fs::canonicalize(physical.join("services")).unwrap();
+        for path in [installed.path, installed.v2_path.expect("v2 path")] {
+            assert!(
+                path.is_file(),
+                "installed path must still resolve: {path:?}"
+            );
+            assert_eq!(path.parent().unwrap(), actual_root);
+        }
     }
 
     /// Slice 21 of zccache#782: dual-write also produces a v2
