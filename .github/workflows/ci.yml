@@ -680,13 +680,23 @@ jobs:
           PYTHONPATH: .ci-lint
         run: python3 -m ci_lint cache janitor --repo .
 
+  # Pre-merge Clippy (was push-to-main only; see clippy.yml header).
+  clippy:
+    name: Clippy
+    needs: [cache-pre-prune, ci-mode]
+    uses: ./.github/workflows/clippy.yml
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+
   # The single required check (ruleset `main merge queue`). Decides from this
   # run attempt's full job list (ci/ci_summary.py), not needs.*.result, since a
   # reusable-workflow job can end cancelled while its caller reports success.
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [cancel-superseded, cache-janitor, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
+    needs: [cancel-superseded, cache-janitor, clippy, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

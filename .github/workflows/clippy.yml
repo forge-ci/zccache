@@ -1,26 +1,12 @@
 name: Clippy
 
+# Reusable: called by ci.yml so Clippy runs on pull_request, merge_group and
+# main pushes, and its job is part of the run attempt `CI summary` reads.
+# It used to trigger only on push to main, so clippy errors merged unseen and
+# turned main red (run 42482218220). Caller owns concurrency and the
+# cache pre-prune barrier (`needs: cache-pre-prune`).
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - "NOTICE*"
-      - "AUTHORS*"
-      - "CODEOWNERS"
-      - "CONTRIBUTING*"
-      - ".gitignore"
-      - ".gitattributes"
-      - ".editorconfig"
-      - "tasks/**"
-
-# One live run per workflow per ref: a new push to a branch or PR cancels the
-# superseded run instead of queuing behind it in the shared account-wide runner
-# pool. Runs on main get a unique group, so they are never cancelled or coalesced.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  workflow_call:
 
 permissions:
   actions: read
@@ -41,18 +27,10 @@ env:
   # their configured levels. Other workflows keep -D warnings.
 
 jobs:
-  cache-pre-prune:
-    name: Cache pre-prune barrier
-    uses: ./.github/workflows/wait-cache-pre-prune.yml
-    permissions:
-      actions: read
-      contents: read
-
   clippy:
     env: # setup-soldr#629: S3 remote build cache credentials
       SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
       SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
-    needs: cache-pre-prune
     name: Clippy
     runs-on: ubuntu-latest
     timeout-minutes: 15
