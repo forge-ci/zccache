@@ -1,6 +1,5 @@
 crates/zccache-core/src/path.rs
 crates/zccache/src/bin/zccache-download.rs
-crates/zccache-cli-core/src/download_daemon/mod.rs
 crates/zccache-cli-core/src/cli/mod.rs
 crates/zccache-cli-core/src/cli/symbols.rs
 # The cli's `main.rs`, `python.rs`, and `snapshot_fp.rs` carry the legacy
