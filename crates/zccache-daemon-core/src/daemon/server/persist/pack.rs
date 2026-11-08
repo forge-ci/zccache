@@ -26,7 +26,10 @@ pub(in crate::daemon::server) fn pack_mode_enabled() -> bool {
     crate::core::config::pack_artifacts_enabled()
 }
 
-pub(in crate::daemon::server) fn pack_path_for(artifact_dir: &Path, key_hex: &str) -> NormalizedPath {
+pub(in crate::daemon::server) fn pack_path_for(
+    artifact_dir: &Path,
+    key_hex: &str,
+) -> NormalizedPath {
     NormalizedPath::new(artifact_dir).join(format!("{key_hex}.pack"))
 }
 
