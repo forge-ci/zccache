@@ -64,8 +64,9 @@ pub(crate) fn cmd_cargo_registry_save(
     // Resolve the archive destination. `--output` takes the full path
     // (including filename); without it we fall back to the derived
     // `<cache-root>/cargo-registry/<key>.tar.gz`.
-    let archive_path: std::path::PathBuf = match output {
-        Some(p) => std::path::PathBuf::from(p),
+    let default_archive_path;
+    let archive_path = match output {
+        Some(p) => std::path::Path::new(p),
         None => {
             let cache_dir = cargo_registry_cache_dir();
             if let Err(e) = std::fs::create_dir_all(&cache_dir) {
@@ -75,7 +76,8 @@ pub(crate) fn cmd_cargo_registry_save(
                 );
                 return ExitCode::FAILURE;
             }
-            cache_dir.join(format!("{key}.tar.gz")).into_path_buf()
+            default_archive_path = cache_dir.join(format!("{key}.tar.gz"));
+            default_archive_path.as_path()
         }
     };
     // For `--output`, the caller may have given us a path whose parent
@@ -112,7 +114,7 @@ pub(crate) fn cmd_cargo_registry_save(
     }
 
     // Create tar.gz archive.
-    let file = match std::fs::File::create(&archive_path) {
+    let file = match std::fs::File::create(archive_path) {
         Ok(f) => f,
         Err(e) => {
             eprintln!(
@@ -136,7 +138,7 @@ pub(crate) fn cmd_cargo_registry_save(
         return ExitCode::FAILURE;
     }
 
-    let size = std::fs::metadata(&archive_path)
+    let size = std::fs::metadata(archive_path)
         .map(|m| m.len())
         .unwrap_or(0);
     println!(
@@ -368,7 +370,7 @@ mod tests {
 
     /// Shallow recursive walk for tests — avoid adding a `walkdir` dep
     /// just for this one assertion.
-    fn walk_collect_gz(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    fn walk_collect_gz(dir: &std::path::Path, out: &mut Vec<NormalizedPath>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -377,7 +379,7 @@ mod tests {
             if p.is_dir() {
                 walk_collect_gz(&p, out);
             } else if p.extension().is_some_and(|e| e == "gz") {
-                out.push(p);
+                out.push(NormalizedPath::from(p));
             }
         }
     }
