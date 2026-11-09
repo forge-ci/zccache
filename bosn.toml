@@ -104,6 +104,14 @@ repo = { source = ".", destination = "/work" }
 stack = "gate"
 cmd = "bash ci/docker/gate/run_gate_tests.sh"
 
+[task.sysroot-search-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-compiler --lib library_search --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features test-support --test cache_rust library_search --locked -- --test-threads=1"
+
+[task.sysroot-search-repro]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features test-support --test cache_rust library_search --locked -- --test-threads=1"
+
 # Focused backend transport checks use the existing isolated gate stack.
 [task.compiler-snapshot-test]
 stack = "gate"

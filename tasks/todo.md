@@ -1779,3 +1779,11 @@ a separate behavior decision and regression coverage.
 - [ ] Verify unchanged hits, changed misses, search ordering and refusal cases.
 - [ ] Run lint, Clippy, pinned local gate and pre-push review.
 - [ ] Push PR, enable auto merge and post PUSHED to board.
+
+## #1930 — sysroot and implicit library search inputs
+
+- [ ] Real compiler RED/GREEN: same-path implicit extern and custom core replacement; search kind/order.
+- [ ] Fail closed for custom sysroots and unresolved direct crate searches; retain explicit Cargo externs.
+- [ ] Reuse #1945 native input ownership after it merges; verify overlap before final gate.
+- [ ] Document parser field ownership; format, lint, clippy, isolated tests, review and final pinned gate.
+- [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
