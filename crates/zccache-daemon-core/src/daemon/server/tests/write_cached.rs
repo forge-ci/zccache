@@ -325,9 +325,7 @@ fn persist_artifact_file_creates_independent_immutable_snapshot() {
         // a compiler is ever allowed to write to `source` again.
         assert!(crate::platform::fs::identity::same_file(&source, &cache).unwrap());
     } else {
-        assert!(crate::platform::fs::permissions::is_sealed(
-            &std::fs::metadata(&cache).unwrap()
-        ));
+        assert!(crate::platform::fs::permissions::is_sealed(&cache).unwrap());
         assert!(!crate::platform::fs::identity::same_file(&source, &cache).unwrap());
     }
 }
@@ -730,9 +728,7 @@ fn persisted_blob_is_readonly_and_detach_is_writable() {
     let out = dir.path().join("libapp.rlib");
 
     persist_artifact_output(&cache, b"immutable").unwrap();
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&cache).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&cache).unwrap());
     deliver_linked(&out, &cache);
     break_output_hardlink_before_compile(&out).unwrap();
     assert!(!std::fs::metadata(&out).unwrap().permissions().readonly());
@@ -939,9 +935,7 @@ fn failed_restart_eviction_restores_readonly_and_retries_after_alias_delete() {
 
     let first = verify_registered_blob(&blob).expect_err("injected restart eviction must fail");
     assert_eq!(first.kind(), std::io::ErrorKind::PermissionDenied);
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&blob).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
 
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::remove_file(&output).unwrap();
@@ -1134,9 +1128,7 @@ fn failed_detach_keeps_hardlink_registered_and_readonly() {
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     assert!(crate::platform::fs::identity::same_file(&blob, &output).unwrap());
     assert_eq!(registered_output_count(&blob), 1);
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&blob).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
     crate::platform::fs::permissions::make_writable(&blob).unwrap();
 }
 
@@ -1162,9 +1154,7 @@ fn failed_detach_rename_restores_blob_readonly_after_unlink() {
         1
     );
     assert_eq!(registered_output_count(&blob), 0);
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&blob).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
     crate::platform::fs::permissions::make_writable(&blob).unwrap();
 }
 
@@ -1184,9 +1174,7 @@ fn failed_blob_removal_restores_readonly_and_registration() {
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     assert!(crate::platform::fs::identity::same_file(&blob, &output).unwrap());
     assert_eq!(registered_output_count(&blob), 1);
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&blob).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
     crate::platform::fs::permissions::make_writable(&blob).unwrap();
 }
 
@@ -1206,9 +1194,7 @@ fn failed_corrupt_blob_eviction_retains_suspect_record_for_retry() {
     let first = verify_registered_blob(&blob).expect_err("injected eviction must fail");
     assert_eq!(first.kind(), std::io::ErrorKind::PermissionDenied);
     assert!(blob.exists());
-    assert!(crate::platform::fs::permissions::is_sealed(
-        &std::fs::metadata(&blob).unwrap()
-    ));
+    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
 
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::remove_file(&output).unwrap();
@@ -1680,10 +1666,6 @@ fn auto_never_shares_the_cache_inode() {
 /// uses to refuse replacing an output. Unsealing restores the plain mode.
 #[test]
 fn sealed_blob_passes_rustcs_readonly_check_and_unseals_to_the_plain_mode() {
-    if kernal_api::platform::host::target_is_windows() {
-        eprintln!("SKIP sealed_blob mode test: Windows keeps the READONLY attribute (#1791)");
-        return;
-    }
     use crate::platform::fs::permissions::{
         apply_mode, is_sealed, make_writable, mode, seal_cache_blob,
     };
@@ -1694,8 +1676,13 @@ fn sealed_blob_passes_rustcs_readonly_check_and_unseals_to_the_plain_mode() {
 
     seal_cache_blob(&blob).unwrap();
     let metadata = std::fs::metadata(&blob).unwrap();
-    assert_eq!(mode(&metadata) & 0o777, 0o464);
-    assert!(is_sealed(&metadata), "the owner must not be able to write");
+    if !kernal_api::platform::host::target_is_windows() {
+        assert_eq!(mode(&metadata) & 0o777, 0o464);
+    }
+    assert!(
+        is_sealed(&blob).unwrap(),
+        "the owner must not be able to write"
+    );
     assert!(
         !metadata.permissions().readonly(),
         "rustc's check_file_is_writeable must see a writable output"
@@ -1703,10 +1690,12 @@ fn sealed_blob_passes_rustcs_readonly_check_and_unseals_to_the_plain_mode() {
 
     make_writable(&blob).unwrap();
     let metadata = std::fs::metadata(&blob).unwrap();
-    assert_eq!(
-        mode(&metadata) & 0o777,
-        0o644,
-        "unsealing must not leave group write"
-    );
-    assert!(!is_sealed(&metadata));
+    if !kernal_api::platform::host::target_is_windows() {
+        assert_eq!(
+            mode(&metadata) & 0o777,
+            0o644,
+            "unsealing must not leave group write"
+        );
+    }
+    assert!(!is_sealed(&blob).unwrap());
 }

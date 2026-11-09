@@ -8,10 +8,8 @@
 //! succeed. Where LINK or REFLINK_OR_LINK_OR_COPY actually hardlinks, the
 //! shared file is sealed `r--rw-r--` on Unix (#1791): rustc sees a writable
 //! output and renames over it, while the owner's in-place writes are still
-//! refused. Windows keeps the READONLY attribute (an ACL deny ACE would need
-//! a kernal-api capability), so a hardlinked delivery there still hits rustc's
-//! refusal; that is pinned below, and the `ZCCACHE_DISABLE` wrapper avoids it
-//! by detaching the outputs first (`wrap/detach_outputs.rs`, #1791).
+//! refused. Windows uses a deny-write ACE with READONLY unset, preserving
+//! rename-over-replace through the kernal-api write-seal facade (#1791).
 //! On every platform a shared output must still refuse the owner's in-place
 //! write.
 
@@ -36,7 +34,7 @@ fn cargo_build(cargo: &std::ffi::OsStr, project: &Path) -> Output {
 
 /// Whether this process ignores file permissions (root), which would make
 /// the in-place-write refusal unobservable.
-fn privileged(root: &Path) -> bool {
+pub(super) fn privileged(root: &Path) -> bool {
     let probe = root.join("privilege-probe");
     std::fs::write(&probe, b"x").unwrap();
     crate::platform::fs::permissions::set_readonly(&probe, true).unwrap();
@@ -64,7 +62,7 @@ fn interface_outputs(project: &Path) -> Vec<std::path::PathBuf> {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let in_deps = path.parent().and_then(|p| p.file_name()) == Some("deps".as_ref());
             if in_deps
-                && name.starts_with("libprobe")
+                && (name.starts_with("libprobe") || name.starts_with("probe"))
                 && (name.ends_with(".rmeta") || name.ends_with(".rlib"))
             {
                 outputs.push(path);
@@ -169,9 +167,7 @@ fn hit_then_wrapperless_rebuild(
         all_shared &= shared;
         delivered.push((blob, original));
     }
-    // The Windows expectation below is only meaningful when rustc sees every
-    // interface as a read-only hardlink; a mix would make it depend on which
-    // output rustc checks first.
+    // Both interfaces must exercise the same delivery tier.
     assert_eq!(
         any_shared, all_shared,
         "{mode}: the interfaces must be delivered all shared or all independent"
@@ -223,19 +219,9 @@ fn wrapperless_rustc_rebuild_after_a_hit_in_every_mode() {
             !shared || linking,
             "{mode} shared the cache inode; only LINK and REFLINK_OR_LINK_OR_COPY may"
         );
-        if shared && kernal_api::platform::host::target_is_windows() {
-            // #1791's remaining Windows part: READONLY blocks the replace.
-            assert!(
-                !rebuild.status.success() && stderr.contains("not writeable"),
-                "{mode}: expected the #1791 Windows refusal over a read-only hardlink, got \
-                 success={} stderr:\n{stderr}",
-                rebuild.status.success()
-            );
-        } else {
-            assert!(
-                rebuild.status.success(),
-                "{mode}: wrapper-less rebuild after a hit failed (shared: {shared}):\n{stderr}"
-            );
-        }
+        assert!(
+            rebuild.status.success(),
+            "{mode}: wrapper-less rebuild after a hit failed (shared: {shared}):\n{stderr}"
+        );
     }
 }

@@ -1793,3 +1793,10 @@ a separate behavior decision and regression coverage.
 - [x] Gate found an old unqualified -L argfile HIT expectation; correct admission coverage and audit 413 compiler + 528 depgraph + 26 Rust cache + 3 ignored argfile tests GREEN (aswA8C.log).
 - [ ] Complete pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
+
+## #1791 Windows write seal
+
+- [x] Read handoffs and issue discussion; verify kernal-api 0.1.33 facade.
+- [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
+- [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
+- [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.

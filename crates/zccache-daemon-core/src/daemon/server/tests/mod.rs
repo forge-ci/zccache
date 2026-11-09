@@ -66,6 +66,7 @@ mod watcher_lifecycle;
 mod wrapperless_rustc_rebuild;
 mod write_cached;
 mod write_cached_mode;
+mod write_seal;
 
 /// Bind a daemon server on a fresh endpoint, rooted at a cache directory
 /// under `cache_root` that no other test can reach.
