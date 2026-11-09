@@ -1,5 +1,10 @@
 # Lessons
 
+- #2174: digest memoization of Rust library metadata does not bound workspace-link latency by itself. Resolve each (target, dependency stem, crate hash) once per request and inspect independent cold inputs concurrently; retain candidate membership and content verification on every hit. Cover the shared-closure path with a fast unit budget as well as the staticlib scenario.
+- #2174 cold follow-up: parallel metadata probes still pay one compiler startup per extern. Large host-target links can conservatively inventory bounded candidate directories instead. Memoize membership, never content or symlink target kind; refuse racy/identity-free membership memo hits and bind regular-archive verdicts to digest-verified private snapshots. Keep exact discovery for explicit targets and oversized inventories.
+- #2174 scope review: keep conservative inventories limited to pure staticlib links without metadata/candidate-shaped outputs. Applying them to normal rlib/bin requests includes unselected siblings or prior outputs in Cargo's shared deps directory and destroys reuse. A real 50-extern rlib test must stay a hit after an unrelated sibling appears; ordinary staticlib `.a`/`.lib` outputs must not be inventoried.
+
+
 ## Response-file parsing must preserve execution semantics (2026-11-02)
 
 Keeping a nested `@` argument literal in the parser is insufficient if the
@@ -447,9 +452,3 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Disable outer Soldr caching with its public `soldr --no-cache cargo ...` option before trusting integration RED/GREEN; an internal propagated environment toggle is not a CLI override.
 
 - #1930 final-gate audit: response-file tests can encode library-search admission expectations. Keep literal-@ execution coverage, but require unqualified -L to bypass and qualified dependency= searches to retain hits. Run the CI filter with --ignored when reproducing these regressions.
-
-- #2174: digest memoization of Rust library metadata does not bound workspace-link latency by itself. Resolve each (target, dependency stem, crate hash) once per request and inspect independent cold inputs concurrently; retain candidate membership and content verification on every hit. Cover the shared-closure path with a fast unit budget as well as the staticlib scenario.
-
-- #2174 cold follow-up: parallel metadata probes still pay one compiler startup per extern. Large host-target links can conservatively inventory bounded candidate directories instead. Memoize membership, never content or symlink target kind; refuse racy/identity-free membership memo hits and bind regular-archive verdicts to digest-verified private snapshots. Keep exact discovery for explicit targets and oversized inventories.
-
-- #2174 scope review: keep conservative inventories limited to pure staticlib links without metadata/candidate-shaped outputs. Applying them to normal rlib/bin requests includes unselected siblings or prior outputs in Cargo's shared deps directory and destroys reuse. A real 50-extern rlib test must stay a hit after an unrelated sibling appears; ordinary staticlib `.a`/`.lib` outputs must not be inventoried.

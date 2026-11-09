@@ -1794,13 +1794,6 @@ a separate behavior decision and regression coverage.
 - [ ] Complete pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
 
-## #1791 Windows write seal
-
-- [x] Read handoffs and issue discussion; verify kernal-api 0.1.33 facade.
-- [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
-- [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
-- [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.
-
 ## #perf-2174 — staticlib link latency regression
 
 - [x] Read handoff/PERF.md and retain stripped CI logs/profile evidence.
@@ -1809,3 +1802,10 @@ a separate behavior decision and regression coverage.
 - [x] Deduplicate named closure resolution; add a bounded, identity-memoized conservative inventory for large pure staticlib default-target links after parallel probes alone missed cold floors. Reverify candidate bytes and snapshot-bound archive formats on every request.
 - [ ] Run focused correctness tests, lint, staticlib floors, full local perf matrix, pinned local gate and review.
 - [ ] Push PR, enable auto-merge and report its URL.
+
+## #1791 Windows write seal
+
+- [x] Read handoffs and issue discussion; verify kernal-api 0.1.33 facade.
+- [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
+- [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
+- [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.
