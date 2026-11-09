@@ -131,3 +131,51 @@ fn native_linked_products_hash_transitive_archives_without_explicit_l_flags() {
     let (args, raw) = parsed(&["--crate-type=bin", "-Lnative=missing"], temp.path());
     assert!(inputs(&args, &raw, temp.path()).is_err());
 }
+
+#[test]
+fn native_archive_unknown_windows_abi_requires_matching_resolutions() {
+    let temp = tempfile::tempdir().expect("fixture");
+    let common = archive(temp.path(), "common", "libfoo.a");
+    let dirs = vec![temp.path().join("common").into()];
+    assert_eq!(
+        resolve_target_archive("foo", true, &dirs, temp.path(), None, true)
+            .expect("both ABIs agree"),
+        common
+    );
+    let msvc = archive(temp.path(), "early", "foo.lib");
+    let dirs = vec![
+        temp.path().join("early").into(),
+        temp.path().join("common").into(),
+    ];
+    assert!(resolve_target_archive("foo", true, &dirs, temp.path(), None, true).is_err());
+    assert_eq!(
+        resolve_target_archive(
+            "foo",
+            true,
+            &dirs,
+            temp.path(),
+            Some("x86_64-pc-windows-msvc"),
+            true
+        )
+        .expect("explicit MSVC"),
+        msvc
+    );
+    assert_eq!(
+        resolve_target_archive(
+            "foo",
+            true,
+            &dirs,
+            temp.path(),
+            Some("x86_64-pc-windows-gnu"),
+            true
+        )
+        .expect("explicit GNU"),
+        common
+    );
+    let dirs = vec![temp.path().join("early").into()];
+    assert!(resolve_target_archive("foo", true, &dirs, temp.path(), None, true).is_err());
+    assert!(
+        resolve_target_archive("foo", true, &dirs, temp.path(), Some("custom.json"), false)
+            .is_err()
+    );
+}

@@ -435,3 +435,4 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Check the journal admission reason before claiming a cache correctness reproduction: current main rejects Cargo's split `-l VALUE` even though joined `-lVALUE` is admitted. A Rust fixture wrapper can normalize that spelling without changing compiler semantics.
 - Native archives need root-normalized path identity as well as content: unlike Cargo extern rlibs, the same archive basename can resolve to different inputs in concurrent requests.
 - Plain `-l` and `static:-bundle` may defer native linking to consumers; track static archives in explicit native search directories for linked products too.
+- An output-discovery predicate can safely overapproximate host ABI while an input resolver cannot. Without an explicit Windows target, native archive selection must agree under GNU and MSVC models or refuse caching.

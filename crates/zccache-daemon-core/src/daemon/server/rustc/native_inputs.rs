@@ -94,6 +94,31 @@ fn resolve_archive(
     Err("native archive not resolved in explicit native search paths")
 }
 
+/// Unlike output discovery, archive selection cannot overapproximate a
+/// Windows host as MSVC: Windows-GNU may select a different file. Without
+/// an explicit target, accept only an archive both ABI models agree on.
+fn resolve_target_archive(
+    name: &str,
+    static_only: bool,
+    dirs: &[NormalizedPath],
+    cwd: &Path,
+    target: Option<&str>,
+    host_windows: bool,
+) -> Result<NormalizedPath, &'static str> {
+    if target.is_some_and(|target| target.ends_with(".json")) {
+        return Err("custom target archive naming is not modeled");
+    }
+    let msvc = target.map_or(host_windows, |target| target.ends_with("-msvc"));
+    let path = resolve_archive(name, static_only, dirs, cwd, msvc)?;
+    if target.is_none()
+        && host_windows
+        && resolve_archive(name, static_only, dirs, cwd, false)? != path
+    {
+        return Err("host native archive ABI is ambiguous");
+    }
+    Ok(path)
+}
+
 /// Synthetic extern names are internal key material, never compiler argv.
 /// Reusing externs covers fast hits, request hits, depgraph hits and stores.
 fn inputs(
@@ -110,7 +135,14 @@ fn inputs(
         return Ok(Vec::new());
     }
     let dirs = native_search_dirs(raw, cwd);
-    let msvc = super::msvc_target_writes_pdb(parsed);
+    if !dirs.is_empty()
+        && parsed
+            .target
+            .as_deref()
+            .is_some_and(|target| target.ends_with(".json"))
+    {
+        return Err("custom target archive naming is not modeled");
+    }
     let mut inputs = Vec::new();
     for (index, spec) in libraries.into_iter().enumerate() {
         let Some((name, static_only)) = archive_name(spec)? else {
@@ -118,7 +150,14 @@ fn inputs(
         };
         inputs.push(ExternCrate {
             name: format!("{NATIVE_INPUT_PREFIX}{index}:{spec}"),
-            path: resolve_archive(name, static_only, &dirs, cwd, msvc)?,
+            path: resolve_target_archive(
+                name,
+                static_only,
+                &dirs,
+                cwd,
+                parsed.target.as_deref(),
+                crate::platform::host::is_windows(),
+            )?,
         });
     }
     if super::link_key::linked_product(parsed).is_some() {
