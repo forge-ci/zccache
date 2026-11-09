@@ -203,6 +203,25 @@ mod tests {
     use tempfile::TempDir;
     use zccache_core::NormalizedPath;
 
+    #[test]
+    fn same_tick_same_size_rewrite_rejects_cached_hash_without_identity() {
+        use kernal_api::platform::fs::{set_file_mtime, FileTime};
+
+        let dir = TempDir::new().unwrap();
+        let path = create_file(&dir, "racy.rs", "old");
+        let cache = MetadataCache::new();
+        let old_hash = cache.lookup(path.as_path()).unwrap();
+        let mut entry = cache.get(&path).unwrap();
+        fs::write(path.as_path(), b"new").unwrap();
+        set_file_mtime(path.as_path(), FileTime::from_system_time(entry.mtime)).unwrap();
+        // Model Windows' unavailable identity on every test host: do not let
+        // Unix ctime independently detect the rewrite and mask this regression.
+        entry.identity = MetadataCache::stat_file(path.as_path()).unwrap().identity;
+        cache.insert(path.clone(), entry);
+        assert!(cache.get_cached_hash_if_stat_valid(&path).is_none());
+        assert_ne!(cache.lookup(path.as_path()).unwrap(), old_hash);
+    }
+
     /// Helper: create a file with given content, return its path.
     fn create_file(dir: &TempDir, name: &str, content: &str) -> NormalizedPath {
         let path = dir.path().join(name);
