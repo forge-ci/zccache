@@ -4283,6 +4283,7 @@ dependencies = [
  "tracing",
  "zccache-core",
  "zccache-fscache",
+ "zccache-hash",
 ]
 
 [[package]]

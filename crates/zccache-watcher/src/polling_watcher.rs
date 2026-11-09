@@ -8,10 +8,20 @@ use zccache_core::blocking_sync::Mutex;
 use kernal_api::platform::fs::{DirectoryWalkParallelism, PatternSet, PatternSetBuilder};
 use zccache_core::NormalizedPath;
 
+mod racy;
+use racy::poll_snapshot;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileState {
     mtime_ns: u128,
     size: u64,
+    racy: Option<racy::RacyState>,
+}
+
+impl FileState {
+    fn same_stat(&self, other: &Self) -> bool {
+        self.mtime_ns == other.mtime_ns && self.size == other.size
+    }
 }
 
 #[derive(Clone)]
@@ -366,12 +376,13 @@ fn run_poll_loop(
     // Everything later is diffed against this baseline, so it must be complete
     // however busy the machine is. A dedicated pool cannot end early on load;
     // it is too costly to build on every poll, where a failed scan just retries.
-    let baseline = scan_snapshot(
+    let baseline = poll_snapshot(
         &config,
         DirectoryWalkParallelism::DedicatedPool { threads: 0 },
+        &HashMap::new(),
     );
     let mut snapshot = match baseline {
-        Ok(snapshot) => {
+        Ok((snapshot, _)) => {
             let _ = ready_tx.send(Ok(()));
             snapshot
         }
@@ -390,7 +401,11 @@ fn run_poll_loop(
             break;
         }
 
-        let current = match scan_snapshot(&config, DirectoryWalkParallelism::SharedPool) {
+        let (current, content_changed) = match poll_snapshot(
+            &config,
+            DirectoryWalkParallelism::SharedPool,
+            &snapshot,
+        ) {
             Ok(current) => {
                 scan_failing = false;
                 current
@@ -417,7 +432,8 @@ fn run_poll_loop(
                 continue;
             }
         };
-        let (changed, removed) = diff_snapshots(&snapshot, &current);
+        let (mut changed, removed) = diff_snapshots(&snapshot, &current);
+        changed.extend(content_changed);
 
         if !changed.is_empty() || !removed.is_empty() {
             for path in changed {
@@ -631,6 +647,7 @@ fn file_state(metadata: &std::fs::Metadata) -> FileState {
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |duration| duration.as_nanos()),
         size: metadata.len(),
+        racy: None,
     }
 }
 
@@ -642,7 +659,7 @@ fn diff_snapshots(
     let mut removed = HashSet::new();
 
     for (path, state) in current {
-        if previous.get(path) != Some(state) {
+        if previous.get(path).is_none_or(|old| !old.same_stat(state)) {
             changed.insert(path.clone());
         }
     }
@@ -810,3 +827,6 @@ mod tests {
 
 #[cfg(test)]
 mod partial_scan_tests;
+
+#[cfg(test)]
+mod racy_tests;

@@ -1,3 +1,12 @@
+# #2169 polling same-tick rewrites
+
+- [x] Reproduce same-size, restored-mtime rewrite (RED: local-test-YfBoDk.log).
+- [x] Share the existing timestamp granularity in a separate refactor commit.
+- [x] Verify racy baselines with bounded hashing and retain deferred work fairly.
+- [x] Cover old-file fast path, Windows granularity, cap, and poll budget (7 watcher tests GREEN: local-test-Bqwl3L.log).
+- [ ] Run lint, clippy, isolated tests, perf matrix, review and committed-tree gate.
+- [ ] Rebase if needed, push PR with auto-merge, post PUSHED to board.
+
 # #2093 item 2 — lint config consistency
 
 - [x] Isolate worktree and confirm config drift.

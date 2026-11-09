@@ -76,8 +76,19 @@ Three layers, from fast to slow:
   entry cannot age out its racy state. Unknown hash times require rehashing.
   Journal-proven reuse remains a separate contract. Old, non-racy inputs keep
   their stat-only fast path, including after restart.
-- The polling watcher has no content digest to compare. Its bounded racy
-  baseline verification is tracked separately in [#2169](https://github.com/forge-ci/zccache/issues/2169).
+- The polling watcher retains BLAKE3 digests for racy baselines (#2169), using
+  the same `zccache_core::file_timestamp::HASH_TIMESTAMP_GRANULARITY` policy.
+  An unchanged `(mtime, size)` still requires a digest comparison on the next
+  poll. Only after that comparison, when the mtime predates the poll start by
+  more than the granularity, is its digest discarded. Old files keep the
+  metadata-only path. Streaming reads avoid mapping concurrently edited files.
+- At most 256 files are hashed per poll, including baseline capture. Deferred
+  entries retain their old digest and take priority next poll; processed entries
+  rotate behind deferred work. An entry deferred before its first digest cannot
+  prove unchanged bytes, so its first eventual check conservatively reports a
+  change. Read errors preserve the last complete baseline and use the existing
+  overflow/retry path rather than dropping unverified state. Filtering,
+  batching and debouncing still apply to the resulting changes.
 
 **Race: file changes between stat and read-for-hashing.**
 - After hashing, stat the file again. If `(mtime, size)` changed between the pre-hash stat and the post-hash stat, discard the hash and retry (up to 3 times). If still unstable, mark the file as uncacheable for this compilation.
