@@ -132,7 +132,7 @@ fn snapshot(
     library: &NormalizedPath,
     digest: ContentHash,
     probe_dir: &Path,
-) -> Result<(tempfile::TempDir, std::path::PathBuf), &'static str> {
+) -> Result<(tempfile::TempDir, NormalizedPath), &'static str> {
     let snapshot_dir =
         tempfile::tempdir_in(probe_dir).map_err(|_| "metadata snapshot directory failed")?;
     let snapshot = snapshot_dir
@@ -148,7 +148,7 @@ fn snapshot(
     if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
         return Err("Rust library changed while snapshotting metadata");
     }
-    Ok((snapshot_dir, snapshot))
+    Ok((snapshot_dir, snapshot.into()))
 }
 
 /// The format verdict belongs to the verified bytes, never a path/mtime alone.
