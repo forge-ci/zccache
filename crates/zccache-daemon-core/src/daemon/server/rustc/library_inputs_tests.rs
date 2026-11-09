@@ -23,11 +23,12 @@ fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
     }
     let before = library_metadata::probe_count();
     let files = MetadataCache::new();
+    let compiler_hash = crate::hash::hash_bytes(b"2174 cold inventory spawn count");
     let resolved = inputs(
         &externs,
-        &[dir],
+        std::slice::from_ref(&dir),
         &compiler,
-        crate::hash::hash_bytes(b"2174 cold inventory spawn count"),
+        compiler_hash,
         &files,
         fixture.path(),
         None,
@@ -40,6 +41,20 @@ fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
         library_metadata::probe_count(),
         before + 1,
         "cold links need only the default target-directory probe, independent of extern count"
+    );
+    std::fs::write(&externs[0].path, b"!<thin>\n0").unwrap();
+    assert!(
+        inputs(
+            &externs,
+            &[dir],
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+            None,
+        )
+        .is_err(),
+        "a changed digest must not reuse the regular-archive verdict"
     );
 }
 
