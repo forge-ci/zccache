@@ -18,6 +18,8 @@ This document is the index for zccache's architecture specification. Each subsys
 | [architecture/portability.md](architecture/portability.md) | ~200 | Platform differences, kernal-api boundary, path handling, file identity, future extensions |
 | [architecture/kernal-api-migration.md](architecture/kernal-api-migration.md) | ~80 | Phase-0 kernal-api migration inventory, contracts, and measurement protocol |
 
+[Fatal watchdog reports and wrapper diagnostics](architecture/runtime.md#crash-dumper-shared-with-cli).
+
 Cache-root lifecycle logs are verified by the shared `zccache-audit` catalog at
 perf and integration boundaries. This keeps CI policy in Rust and makes a
 failed cache-root audit retain its diagnostic JSONL evidence.

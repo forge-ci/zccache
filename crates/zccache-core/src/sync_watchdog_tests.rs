@@ -2,8 +2,11 @@
 use super::*;
 
 fn assert_holder_is_terminated(case: &str) {
+    let cache = tempfile::tempdir().unwrap();
     let spec = kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
         .args(["--exact", "sync::watchdog_tests::watchdog_child"])
+        .env("ZCCACHE_CACHE_DIR", cache.path())
+        .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
         .env("ZCCACHE_WATCHDOG_TEST_CASE", case);
     // Keep libtest capture enabled in the child: diagnostics must bypass it.
     let output = crate::wait::output_for(spec, STATE_TIMEOUT + Duration::from_secs(5))
@@ -21,6 +24,26 @@ fn assert_holder_is_terminated(case: &str) {
         "sync_watchdog_tests.rs",
     ] {
         assert!(stderr.contains(expected), "missing {expected:?}: {stderr}");
+    }
+    let crashes = cache.path().join("crashes");
+    let dump = std::fs::read_dir(crashes)
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("watchdog.txt")
+        })
+        .expect("watchdog reason must survive process termination on disk");
+    let report = std::fs::read_to_string(dump.path()).unwrap();
+    for expected in [
+        "lock hold exceeded",
+        "Holding",
+        "Waiting",
+        "sync_watchdog_tests.rs",
+    ] {
+        assert!(report.contains(expected), "missing {expected:?}: {report}");
     }
 }
 
@@ -40,9 +63,12 @@ fn watchdog_terminates_native_guard_holder() {
 }
 
 fn assert_termination_with_unread_stderr(case: &str) {
+    let cache = tempfile::tempdir().unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "sync::watchdog_tests::watchdog_child"])
         .env("ZCCACHE_WATCHDOG_TEST_CASE", case)
+        .env("ZCCACHE_CACHE_DIR", cache.path())
+        .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -53,6 +79,19 @@ fn assert_termination_with_unread_stderr(case: &str) {
     let status = crate::wait::child_for(&mut child, STATE_TIMEOUT + Duration::from_secs(5))
         .expect("a blocked diagnostic sink must not prevent termination");
     assert!(!status.success());
+    // #2064: unread stderr must not swallow the fatal reason, either.
+    let dumps = std::fs::read_dir(cache.path().join("crashes")).unwrap();
+    let report = dumps
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let body = std::fs::read_to_string(entry.path()).ok()?;
+            body.contains("sync_watchdog_tests.rs").then_some(body)
+        })
+        .expect("fatal reason must reach disk before the blocked stderr write");
+    assert!(report.contains("Holding"));
+    assert!(
+        report.contains("bounded synchronization failed") || report.contains("lock hold exceeded")
+    );
 }
 
 #[test]

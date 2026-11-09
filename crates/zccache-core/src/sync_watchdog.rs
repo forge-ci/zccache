@@ -70,6 +70,11 @@ fn reporter() -> &'static SyncSender<Diagnostic> {
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 };
+                // Preserve the reason before touching stderr: detached daemons
+                // and blocked pipes can otherwise lose everything but SIGABRT.
+                if diagnostic.complete.is_some() {
+                    let _ = crate::crash::write_watchdog_dump(&diagnostic.text);
+                }
                 // Direct I/O survives libtest capture. Only this dedicated
                 // writer can block on the sink; never the monitor/abort path.
                 let _ = std::io::stderr().write_all(diagnostic.text.as_bytes());
