@@ -422,3 +422,8 @@ different coverage guarantees; record both, including skip filters and helpers.
 ## #2002: prove overlapping freshness guards independently
 
 Preserve the immediate test-build/edit/check regression alongside primed-hit matrices. A disabled guard may still avoid a stale hit because another layer catches the edit; distinguish public verdict misclassification from an actual stale hit, and include same-path extern edits to exercise metadata artifact proofs. Isolated Soldr fixture commands must clear inherited front-door identity and outer build-cache policy and preserve their explicit cache root with `--trust-inherited-soldr-env`; retain strict mode and assert actual cache hits.
+
+## #1989 — platform policy and hash reuse
+
+- Use `zccache_core::host` for compile-time host predicates in product policy; raw host `cfg` is denied outside approved adapters. Workspace clippy does not replace `./lint` and its platform-boundary Dylint.
+- Record hash-start time, preserve it across disk snapshots, and never refresh it on a stat-only hit. A coarse clock requires a digest-based assertion to prove a fast path did not rehash.

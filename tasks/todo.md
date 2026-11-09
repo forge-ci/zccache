@@ -1767,7 +1767,7 @@ a separate behavior decision and regression coverage.
 # #1989 — same-tick stat hash guard
 
 - [x] Add real-filesystem regression with Unix identity masked to model Windows.
-- [ ] Record hash-start wall time; reject racy and unknown hash timestamps.
-- [ ] Cover stable fast path and polling-watcher follow-up.
+- [x] Record hash-start wall time; reject racy and unknown hash timestamps.
+- [x] Cover stable fast path and polling-watcher follow-up (#2169 under #2144).
 - [ ] Run RED/GREEN, perf regression, formatting, clippy, local gate and review.
 - [ ] Push PR and enable auto-merge; leave queue to chaperone.
