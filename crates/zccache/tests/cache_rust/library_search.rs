@@ -585,6 +585,98 @@ async fn source_link_attribute_tracks_bundled_archive() {
     h.shutdown().await;
 }
 
+/// Expanded source attributes can escape every explicit native search directory (#2173).
+#[cfg(unix)]
+#[tokio::test]
+async fn source_verbatim_parent_archive_changes_do_not_replay_stale_rlib() {
+    verbatim_parent_archive(false, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn macro_verbatim_parent_archive_changes_do_not_replay_stale_rlib() {
+    verbatim_parent_archive(true, false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn removed_source_verbatim_parent_archive_preserves_compiler_error() {
+    verbatim_parent_archive(false, true).await;
+}
+
+#[cfg(unix)]
+async fn verbatim_parent_archive(expanded: bool, removed: bool) {
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    let attribute = "#[link(name=\"../outside/libchoice.a\", kind=\"static\", modifiers=\"+verbatim\")] extern \"C\" { fn answer() -> u32; }";
+    let declaration = if expanded {
+        format!("macro_rules! native {{ () => {{ {attribute} }} }} native!();")
+    } else {
+        attribute.to_string()
+    };
+    write_old(
+        &h,
+        "consumer.rs",
+        &format!("{declaration} pub fn value() -> u32 {{ unsafe {{ answer() }} }}"),
+    );
+    std::fs::create_dir_all(h.path("native")).unwrap();
+    native_archive(&h, 17, "outside");
+    let flags = ["-Lnative=native"];
+    let (exit, _, first) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert_eq!(linked_native_value(&h, "libconsumer.rlib"), 17);
+    let (exit, _, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    if removed {
+        // Rename keeps the fixture reversible while removing the selected path.
+        std::fs::rename(h.path("outside/libchoice.a"), h.path("outside/removed.a")).unwrap();
+    } else {
+        native_archive(&h, 91, "outside");
+    }
+    let control = direct_rustc(
+        &h,
+        &[
+            "--crate-name",
+            "consumer",
+            "--crate-type",
+            "rlib",
+            "consumer.rs",
+            "-Lnative=native",
+            "-o",
+            "libcontrol.rlib",
+        ],
+    );
+    if removed {
+        assert_ne!(
+            control.code,
+            Some(0),
+            "direct compiler must reject missing archive"
+        );
+    } else {
+        assert_eq!(control.code, Some(0), "{}", control.stderr_text());
+        assert_eq!(linked_native_value(&h, "libcontrol.rlib"), 91);
+        assert_ne!(first, std::fs::read(h.path("libcontrol.rlib")).unwrap());
+    }
+    let (exit, cached, second) = consumer(&mut h, &flags).await;
+    eprintln!(
+        "#2173 expanded={expanded} removed={removed}: exit={exit} cached={cached} stale_bytes={}",
+        first == second
+    );
+    h.shutdown().await;
+    assert!(
+        !cached,
+        "outside archive change must not replay a stale cache hit"
+    );
+    if removed {
+        assert_ne!(
+            exit, 0,
+            "cache must preserve the compiler's missing-archive error"
+        );
+    } else {
+        assert_eq!(exit, 0);
+        assert_ne!(first, second, "changed archive must change bundled output");
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn source_link_attribute_tracks_new_earlier_archive() {
