@@ -589,23 +589,30 @@ async fn source_link_attribute_tracks_bundled_archive() {
 #[cfg(unix)]
 #[tokio::test]
 async fn source_verbatim_parent_archive_changes_do_not_replay_stale_rlib() {
-    verbatim_parent_archive(false, false).await;
+    verbatim_parent_archive(false, false, false).await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn macro_verbatim_parent_archive_changes_do_not_replay_stale_rlib() {
-    verbatim_parent_archive(true, false).await;
+    verbatim_parent_archive(true, false, false).await;
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn removed_source_verbatim_parent_archive_preserves_compiler_error() {
-    verbatim_parent_archive(false, true).await;
+    verbatim_parent_archive(false, true, false).await;
+}
+
+/// Matching output members prove bytes, not which archive path rustc selected.
+#[cfg(unix)]
+#[tokio::test]
+async fn matching_inventoried_members_do_not_certify_outside_archive() {
+    verbatim_parent_archive(false, false, true).await;
 }
 
 #[cfg(unix)]
-async fn verbatim_parent_archive(expanded: bool, removed: bool) {
+async fn verbatim_parent_archive(expanded: bool, removed: bool, matching_inventory: bool) {
     let mut h = TestHarness::new().await.expect("real rustc required");
     let attribute = "#[link(name=\"../outside/libchoice.a\", kind=\"static\", modifiers=\"+verbatim\")] extern \"C\" { fn answer() -> u32; }";
     let declaration = if expanded {
@@ -620,6 +627,10 @@ async fn verbatim_parent_archive(expanded: bool, removed: bool) {
     );
     std::fs::create_dir_all(h.path("native")).unwrap();
     native_archive(&h, 17, "outside");
+    if matching_inventory {
+        std::fs::copy(h.path("outside/libchoice.a"), h.path("native/libchoice.a")).unwrap();
+        age(h.path("native/libchoice.a").as_path());
+    }
     let flags = ["-Lnative=native"];
     let (exit, _, first) = consumer(&mut h, &flags).await;
     assert_eq!(exit, 0);

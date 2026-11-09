@@ -1793,3 +1793,11 @@ a separate behavior decision and regression coverage.
 - [x] Gate found an old unqualified -L argfile HIT expectation; correct admission coverage and audit 413 compiler + 528 depgraph + 26 Rust cache + 3 ignored argfile tests GREEN (aswA8C.log).
 - [ ] Complete pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
+
+## #2173 — source verbatim native archives
+
+- [x] Read both handoffs and issue; inspect native-input owner.
+- [x] RED: real-compiler parent-path, macro-generated and removed-archive regressions.
+- [ ] Certify selected native inputs from compiler facts or refuse caching.
+- [ ] GREEN: new regressions and existing native/Cargo coverage.
+- [ ] Document ownership, run lint/review/local gate, push PR and enable auto-merge.
