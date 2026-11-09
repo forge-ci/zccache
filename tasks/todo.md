@@ -1806,6 +1806,6 @@ a separate behavior decision and regression coverage.
 - [x] Read handoff/PERF.md and retain stripped CI logs/profile evidence.
 - [x] Run exact 042b6f0c/438838d0 Docker fixtures diagnostically: regressed cold 2.360s; baseline 0.756s. Busy host prevents a valid warm A/B; retain both native and shim controls.
 - [x] Add RED/GREEN 30ms shared-closure unit budget: RED 92.4ms; GREEN in Bosn.
-- [x] Deduplicate named closure resolution; add a bounded, identity-memoized conservative inventory for large default-target links after parallel probes alone missed cold floors. Reverify candidate bytes and snapshot-bound archive formats on every request.
+- [x] Deduplicate named closure resolution; add a bounded, identity-memoized conservative inventory for large pure staticlib default-target links after parallel probes alone missed cold floors. Reverify candidate bytes and snapshot-bound archive formats on every request.
 - [ ] Run focused correctness tests, lint, staticlib floors, full local perf matrix, pinned local gate and review.
 - [ ] Push PR, enable auto-merge and report its URL.

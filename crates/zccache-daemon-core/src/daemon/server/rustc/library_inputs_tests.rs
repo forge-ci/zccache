@@ -31,7 +31,6 @@ fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
         compiler_hash,
         &files,
         fixture.path(),
-        None,
     )
     .unwrap();
     for external in &externs {
@@ -51,7 +50,6 @@ fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
             compiler_hash,
             &files,
             fixture.path(),
-            None,
         )
         .is_err(),
         "a changed digest must not reuse the regular-archive verdict"
@@ -177,7 +175,6 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
             compiler_hash,
             &files,
             fixture.path(),
-            None,
         )
         .unwrap();
         best_ns = best_ns.min(start.elapsed().as_nanos());

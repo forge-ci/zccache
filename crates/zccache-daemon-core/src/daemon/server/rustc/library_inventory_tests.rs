@@ -2,6 +2,24 @@
 
 use super::*;
 
+#[test]
+fn candidate_names_cover_rust_flavors_without_staticlib_outputs() {
+    for name in [
+        "libunit.rlib",
+        "libunit.RMETA",
+        "unit.DLL",
+        "libunit.so",
+        "libunit.dylib",
+        "unit.dll.lib",
+        "libunit.DLL.A",
+    ] {
+        assert!(candidate(std::path::Path::new(name)), "{name}");
+    }
+    for name in ["libconsumer.a", "consumer.lib", "consumer.o", "consumer.d"] {
+        assert!(!candidate(std::path::Path::new(name)), "{name}");
+    }
+}
+
 fn age(path: &std::path::Path) {
     kernal_api::platform::fs::set_file_mtime(
         path,
@@ -32,7 +50,6 @@ fn inventory_memo_rechecks_content_and_directory_membership() {
         std::slice::from_ref(&dir),
         &compiler,
         compiler_hash,
-        None,
         &files,
         fixture.path(),
     )
@@ -53,7 +70,6 @@ fn inventory_memo_rechecks_content_and_directory_membership() {
         std::slice::from_ref(&dir),
         &compiler,
         compiler_hash,
-        None,
         &files,
         fixture.path(),
     )
@@ -113,7 +129,6 @@ fn inventory_rechecks_symlink_candidate_kind_without_parent_directory_change() {
         std::slice::from_ref(&dir),
         &compiler,
         compiler_hash,
-        None,
         &files,
         fixture.path(),
     )
@@ -127,7 +142,6 @@ fn inventory_rechecks_symlink_candidate_kind_without_parent_directory_change() {
         std::slice::from_ref(&dir),
         &compiler,
         compiler_hash,
-        None,
         &files,
         fixture.path(),
     )

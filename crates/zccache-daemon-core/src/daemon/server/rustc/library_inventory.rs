@@ -1,4 +1,4 @@
-//! Bounded conservative input inventory for links with many explicit externs.
+//! Bounded conservative input inventory for staticlib links with many explicit externs.
 //!
 //! Every possible library candidate participates, including unused ones. The
 //! exact metadata resolver remains preferable for small or oversized searches.
@@ -26,6 +26,19 @@ struct Inventory {
 
 type Directories = HashMap<NormalizedPath, Inventory>;
 static DIRECTORIES: OnceLock<State<Directories>> = OnceLock::new();
+
+/// Match every flavor covered by named discovery, including case variants.
+pub(super) fn candidate(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    let name = name.to_ascii_lowercase();
+    [
+        ".rmeta", ".rlib", ".so", ".dylib", ".dll", ".dll.lib", ".dll.a",
+    ]
+    .into_iter()
+    .any(|suffix| name.ends_with(suffix))
+}
 
 fn directory(path: &NormalizedPath) -> Result<Option<Arc<Vec<NormalizedPath>>>, &'static str> {
     let observed_at = SystemTime::now();
@@ -58,12 +71,7 @@ fn directory(path: &NormalizedPath) -> Result<Option<Arc<Vec<NormalizedPath>>>, 
             return Ok(None);
         }
         let candidate = entry.map_err(|_| "unreadable Rust search entry")?.path();
-        if !candidate.extension().is_some_and(|extension| {
-            matches!(
-                extension.to_str(),
-                Some("rmeta" | "rlib" | "so" | "dylib" | "dll" | "lib" | "a")
-            )
-        }) {
+        if !self::candidate(&candidate) {
             continue;
         }
         // Retain names even when a symlink currently resolves to a directory:
@@ -101,12 +109,11 @@ pub(super) fn inputs(
     dirs: &[NormalizedPath],
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
-    target: Option<&str>,
     files: &MetadataCache,
     probe_dir: &std::path::Path,
 ) -> Result<Option<Vec<ExternCrate>>, &'static str> {
     let sysroot =
-        super::library_metadata::target_directory(compiler, compiler_hash, target, probe_dir)?;
+        super::library_metadata::target_directory(compiler, compiler_hash, None, probe_dir)?;
     let mut search = dirs.to_vec();
     if !search.contains(&sysroot) {
         search.push(sysroot);
@@ -135,10 +142,11 @@ pub(super) fn inputs(
             let hash = files
                 .lookup_normalized(&path)
                 .map_err(|_| "unreadable Rust input")?;
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "rlib")
-            {
+            if path.extension().is_some_and(|extension| {
+                extension
+                    .to_str()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("rlib"))
+            }) {
                 super::library_metadata::regular_archive(&path, hash, probe_dir)?;
             }
             let name = path

@@ -250,8 +250,8 @@ its own:
   Synthetic input names include content identity, preserving reuse across
   target directories/worktrees without allowing concurrent different-byte
   inputs to overwrite the same dependency mapping.
-- **Large default-target links use a bounded conservative inventory (#2174).**
-  With at least eight explicit externs, `library_inventory.rs` tracks every
+- **Large default-target staticlib links use a bounded conservative inventory (#2174).**
+  Pure staticlib links with at least eight explicit externs use `library_inventory.rs` to track every
   possible Rust library candidate in the supplied dependency directories and
   default target-library directory, avoiding a metadata child per extern.
   Directory membership is memoized only with an unchanged filesystem identity
@@ -259,12 +259,16 @@ its own:
   every request. Symlink names remain tracked even when their current targets
   are directories. The inventory is capped at 1,024 entries per directory and
   1,024 candidates overall. Larger searches and explicit targets retain exact
-  metadata resolution. Candidate names include search position and digest, so
+  metadata resolution. Metadata-emitting requests and outputs whose names could
+  themselves be library candidates also retain exact resolution. Ordinary `.a`
+  and `.lib` staticlib outputs are not Rust candidates (`.dll.a` and `.dll.lib`
+  import-library flavors remain covered). Candidate names include search position and digest, so
   additions, deletions, ambiguous candidates and replacements change the key
   before any hit. Unsupported archive formats refuse caching. Regular-archive
   verdicts use digest-verified private snapshots and are memoized by digest.
   This deliberately trades misses on unused-candidate changes for bounded cold
-  discovery work. Small graphs retain exact closure/relocation behavior.
+  discovery work. Rlib/bin requests and small graphs retain exact closure/relocation
+  behavior, so unrelated artifacts in Cargo's shared deps directory do not change their keys.
 - **Metadata inspection is bounded and cached.** `library_metadata.rs`
   caches decoded metadata by compiler identity and verified file digest;
   the daemon's existing metadata cache owns stat, identity and racy-write
