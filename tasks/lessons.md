@@ -447,3 +447,10 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Disable outer Soldr caching with its public `soldr --no-cache cargo ...` option before trusting integration RED/GREEN; an internal propagated environment toggle is not a CLI override.
 
 - #1930 final-gate audit: response-file tests can encode library-search admission expectations. Keep literal-@ execution coverage, but require unqualified -L to bypass and qualified dependency= searches to retain hits. Run the CI filter with --ignored when reproducing these regressions.
+
+## #1879 system include discovery
+
+- Zero parsed paths cannot distinguish an explicitly empty search list from a broken probe. Preserve parser provenance through both memory and persisted discovery caches.
+- Test the header-edit contract with empty defaults: explicit `-isystem` and environment roots still need dependency hashes.
+- Daemon-core isolated unit tests require `--features test-support`; mtime fixtures use the platform `FileTime` conversion.
+- Inline pipeline tests also obey the host-platform boundary lint: use runtime `platform::host::is_windows()` and the product discovery API, rather than native cfg/imports.

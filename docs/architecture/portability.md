@@ -30,6 +30,26 @@ values are portable and retained through 1.13.x. The kill switch leaves legacy
 v1/pack reads available on Linux, macOS, and Windows; v2-only entries become
 misses rather than being reinterpreted.
 
+### Explicitly empty system include discovery (#1879)
+
+GCC/Clang verbose discovery is valid only when both `#include <...> search starts here:`
+and `End of search list.` appear in order. A complete section with no paths is a
+known-empty root set, so compilers such as cosmocc can cache normally. The checked
+parser owns this distinction. Clang's fast probe still falls back to verbose
+output when it finds no roots; the C frontend fallback is used only when the
+verbose C++ search list is missing. Missing or truncated sections remain degraded:
+the request bypasses caching, emits `system_include_discovery_empty`, and retries
+on the next request (#1167).
+
+Confirmed empty roots are memoized in L1 and persisted in version 2 of
+`system_includes.bin`, with the same compiler mtime/size validation as nonempty
+roots. Version 1 snapshots are rejected rather than trusting historical ambiguous
+empty entries. Request `-isystem` roots remain in the compile context; environment
+include variables remain cache-key inputs. Compiler dependency manifests still
+supply the headers to track and hash, including headers reached through explicit
+roots or `C_INCLUDE_PATH`. Empty defaults do not exempt those headers from
+invalidation. `-nostdinc` remains a request flag rather than a compiler property.
+
 ### System include discovery: `cl.exe` reads `%INCLUDE%`, never a probe
 
 For gcc and clang the daemon discovers the default `#include <...>` search
