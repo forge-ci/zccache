@@ -83,11 +83,16 @@ pub struct RustcParsedArgs {
     pub color: Option<String>,
     /// `--diagnostic-width` value.
     pub diagnostic_width: Option<String>,
-    /// `-L` search paths.
+    /// `-L` search paths, retained for diagnostics rather than hashed as directories.
+    /// Admission in `zccache-compiler::parse_rustc_plan_with_syntax` rejects
+    /// direct crate/all searches (#1930). Cargo dependency paths are relocation
+    /// hints for explicit externs, whose selected files are content-hashed;
+    /// native resolution owns the original kind/order in the daemon's raw argv.
     pub search_paths: Vec<NormalizedPath>,
     /// `--remap-path-prefix` values.
     pub remap_path_prefixes: Vec<String>,
-    /// `--sysroot` path.
+    /// `--sysroot` path. Custom sysroots are refused by compiler admission
+    /// (#1930): `rustc -vV` does not identify their replaceable library bytes.
     pub sysroot: Option<NormalizedPath>,
     /// `-o` output file (explicit).
     pub output_file: Option<NormalizedPath>,
@@ -236,7 +241,8 @@ pub fn parse_rustc_args(args: &[String], cwd: &Path) -> RustcParsedArgs {
                     path: resolve_path(path, cwd),
                 });
             }
-            // --extern name (without =path) â€” no file to hash
+            // Pathless externs are refused by compiler admission (#1930),
+            // rather than caching a name without its selected library bytes.
             continue;
         }
 

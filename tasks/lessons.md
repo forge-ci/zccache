@@ -436,3 +436,8 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Native archives need root-normalized path identity as well as content: unlike Cargo extern rlibs, the same archive basename can resolve to different inputs in concurrent requests.
 - Plain `-l` and `static:-bundle` may defer native linking to consumers; track static archives in explicit native search directories for linked products too.
 - An output-discovery predicate can safely overapproximate host ABI while an input resolver cannot. Without an explicit Windows target, native archive selection must agree under GNU and MSVC models or refuse caching.
+
+## #1930 — prove the compiler's library selection
+
+- A sysroot can contain both libcore `.rmeta` and `.rlib`; corrupting only the archive does not prove rustc must fail. Replace both fixture entries and require a direct compiler error control before asserting the cache result.
+- Keep replacement libraries' mtimes old but distinct, so a library-selection regression does not accidentally depend on watcher timing or the racy-stat guard.

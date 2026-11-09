@@ -231,6 +231,22 @@ its own:
   entry is subject to the store's byte budget and age expiry.
   `compile_with_options` reports the decision as a `CompileObservation`
   (`admitted`/`skipped`, a stable reason, logical artifact bytes).
+- **Custom sysroots and implicit direct Rust library searches are refused
+  at admission (#1930).** `parse_rustc_plan_with_syntax` owns this policy,
+  before any request-hit or dependency-graph lookup: `--sysroot` (both
+  spellings), pathless `--extern name`, and `-L crate=`, `-L all=` or
+  unqualified `-L` pass through to rustc without artifact caching. Merely
+  keying a path cannot detect a library replaced at that same path, and
+  `rustc -vV` does not describe a custom sysroot. This avoids both an
+  unmodeled resolver and repeated hashing of a whole sysroot on warm hits.
+  `RustcParsedArgs.sysroot` is consequently diagnostic data, not an ignored
+  cache input for an admitted request.
+  `RustcParsedArgs.search_paths` likewise does not own directory hashing:
+  Cargo's `dependency=` directories remain relocation hints, while selected
+  explicit `--extern name=path` inputs use existing content verification and
+  root-normalized identity for target-directory/worktree reuse. Native
+  selection consumes the original argument kinds and order in the daemon.
+  `framework=` and unknown search kinds are refused rather than guessed.
 - **Native libraries in link steps are a documented blind spot.**
   `bin`/`staticlib` units linking system libraries via `-L`/`-l` do not
   content-hash the resolved library bytes (matching sccache). An
