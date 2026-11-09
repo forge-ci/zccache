@@ -87,7 +87,9 @@ Three layers, from fast to slow:
   longest-deferred entries run first, preventing starvation even for future mtimes. An entry deferred before its first digest cannot
   prove unchanged bytes, so its first eventual check conservatively reports a
   change. Read errors preserve the last complete baseline and use the existing
-  overflow/retry path rather than dropping unverified state. Filtering,
+  overflow/retry path rather than dropping unverified state. A stat change
+  during hashing reports that path as changed, discards the unstable digest,
+  and retains prior verification state for the next poll; it is not overflow. Filtering,
   batching and debouncing still apply to the resulting changes.
 
 **Race: file changes between stat and read-for-hashing.**

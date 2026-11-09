@@ -79,10 +79,11 @@ pub(super) fn verify(
         // Streaming avoids mmap hazards when a concurrently edited file shrinks.
         let hash = hash_reader(std::fs::File::open(path)?)?;
         if !state.same_stat(&file_state(&std::fs::metadata(path)?)) {
-            return Err(std::io::Error::other(format!(
-                "{} changed while hashing",
-                path.display()
-            )));
+            // An overlapping edit is a known change, not an incomplete scan.
+            // Discard the unstable digest and retain prior verification state
+            // until the next poll; never turn an ordinary edit into overflow.
+            changed.insert(path.clone());
+            continue;
         }
         let Some(racy) = state.racy.as_mut() else {
             continue;

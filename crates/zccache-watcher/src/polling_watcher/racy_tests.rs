@@ -69,22 +69,12 @@ fn public_watcher_reports_restored_mtime_rewrite() {
     watcher.start().unwrap();
     fs::write(&path, b"bbbb").unwrap();
     set_mtime(&path, mtime);
-    // A scan overlapping write/set_mtime can emit overflow before retrying
-    // against the retained baseline. Wait for this path, not just any batch.
-    let expected = NormalizedPath::new(&path);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .expect("timed out waiting for rewrite path");
-        let batch = watcher
-            .poll_timeout(remaining)
-            .unwrap()
-            .expect("timed out waiting for rewrite batch");
-        if batch.changed.contains(&expected) {
-            break;
-        }
-    }
+    let batch = watcher
+        .poll_timeout(Duration::from_secs(15))
+        .unwrap()
+        .expect("rewrite batch");
+    assert!(!batch.overflow);
+    assert!(batch.changed.contains(&NormalizedPath::new(&path)));
     watcher.stop().unwrap();
 }
 
@@ -262,4 +252,35 @@ fn perf_poll_old_files_has_zero_content_reads() {
     // Hang/catastrophic-regression budget; the zero-read counter above proves
     // the structural fast-path property independently of runner speed.
     assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
+fn edit_between_scan_and_hash_reports_path_without_overflow() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("input.cpp");
+    fs::write(&path, b"a\n").unwrap();
+    let mtime = SystemTime::now() + Duration::from_secs(60);
+    set_mtime(&path, mtime);
+    let mut previous = scan(dir.path());
+    racy::verify(&HashMap::new(), &mut previous, mtime, racy::HASHES_PER_POLL).unwrap();
+    let mut current = scan(dir.path());
+    // Deterministically overlap the edit with the scan/hash window (#2169).
+    fs::write(&path, b"bb\n").unwrap();
+    let (changed, reads) = racy::verify(&previous, &mut current, mtime, racy::HASHES_PER_POLL)
+        .expect("an ordinary edit is a path notification, not scan failure");
+    assert_eq!(reads, 1);
+    assert!(changed.contains(&NormalizedPath::new(&path)));
+    assert_eq!(
+        current[&NormalizedPath::new(&path)].racy,
+        previous[&NormalizedPath::new(&path)].racy
+    );
+    // The next complete scan catches up without losing the edit.
+    let mut next = scan(dir.path());
+    let (changed, _) = racy::verify(&current, &mut next, mtime, racy::HASHES_PER_POLL).unwrap();
+    let (mut stat_changed, _) = diff_snapshots(&current, &next);
+    stat_changed.extend(changed);
+    assert!(stat_changed.contains(&NormalizedPath::new(&path)));
+    let mut stable = scan(dir.path());
+    let (changed, _) = racy::verify(&next, &mut stable, mtime, racy::HASHES_PER_POLL).unwrap();
+    assert!(changed.is_empty());
 }
