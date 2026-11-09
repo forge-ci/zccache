@@ -173,25 +173,50 @@ async fn custom_sysroot_same_path_library_replacement() {
         .join(target)
         .join("lib");
     std::fs::create_dir_all(&custom_lib).unwrap();
-    let mut core = None;
+    let mut core = Vec::new();
     for entry in std::fs::read_dir(target_lib).unwrap() {
         let entry = entry.unwrap();
         let destination = custom_lib.join(entry.file_name());
-        kernal_api::platform::fs::symlink_file(&entry.path(), destination.as_path())
-            .unwrap();
+        kernal_api::platform::fs::symlink_file(&entry.path(), destination.as_path()).unwrap();
         if entry.file_name().to_string_lossy().starts_with("libcore-")
-            && entry.path().extension().is_some_and(|ext| ext == "rlib")
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "rlib" || ext == "rmeta")
         {
-            core = Some(destination);
+            core.push(destination);
         }
     }
     let (exit, _, _) = consumer(&mut h, &["--sysroot", "sysroot"]).await;
     assert_eq!(exit, 0);
     // Replace only the fixture symlink, never the installed toolchain library.
-    let core = core.expect("libcore rlib");
-    std::fs::remove_file(&core).unwrap();
-    std::fs::write(&core, b"invalid replacement core archive").unwrap();
-    age(core.as_path());
+    assert!(!core.is_empty(), "libcore metadata/archive");
+    for path in core {
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"invalid replacement core library").unwrap();
+        age(path.as_path());
+    }
+    let mut command = std::process::Command::new(h.rc());
+    command.current_dir(h.tmp.path()).args([
+        "--crate-name",
+        "consumer",
+        "--crate-type",
+        "rlib",
+        "consumer.rs",
+        "--sysroot",
+        "sysroot",
+        "-o",
+        "control.rlib",
+    ]);
+    let control = zccache_test_support::test_child::TestChild::spawn(command)
+        .unwrap()
+        .finish(std::time::Duration::from_secs(30))
+        .unwrap();
+    assert_ne!(
+        control.code,
+        Some(0),
+        "control must reject replaced core metadata/archive"
+    );
     let (exit, cached, _) = consumer(&mut h, &["--sysroot", "sysroot"]).await;
     assert_ne!(
         exit, 0,
