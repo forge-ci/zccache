@@ -110,7 +110,7 @@ cmd = "CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env 
 
 [task.perf-2174-unit]
 stack = "gate"
-cmd = "CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-daemon-core --features test-support --lib perf_library_metadata --locked -- --nocapture"
+cmd = "CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-daemon-core --features test-support --lib rustc::library_inputs::tests::perf_ --locked -- --nocapture"
 
 [task.sysroot-search-repro]
 stack = "gate"
