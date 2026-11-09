@@ -169,3 +169,8 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.bounded-gate-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_staged_materialization_leases_share_the_store_lock --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::link_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store_wait_does_not_hold_state_mutex --locked"
+
+# Real native archive cache correctness regression (#1945).
+[task.native-archive-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features zccache-bin --test cache_rust native_archive:: -- --ignored --test-threads=1"

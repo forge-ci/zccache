@@ -187,11 +187,19 @@ impl CompileContext {
 /// If the path has no file-name component (defensively — shouldn't happen for
 /// real `--extern` values), fall back to the full string so we still hash
 /// _something_ stable rather than silently collapsing distinct externs.
-fn extern_path_key(path: &str) -> &str {
+fn extern_path_key<'a>(
+    name: &str,
+    path: &'a str,
+    root: Option<&Path>,
+) -> std::borrow::Cow<'a, str> {
+    if name.starts_with(crate::NATIVE_INPUT_PREFIX) {
+        return normalize_key_path(Path::new(path), root).into();
+    }
     Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path)
+        .into()
 }
 
 pub fn normalize_key_path(path: &Path, key_root: Option<&Path>) -> String {
@@ -730,7 +738,7 @@ impl RustcCompileContext {
         for (name, path) in &self.extern_crates {
             hasher.update(name.as_bytes());
             hasher.update(b"=");
-            hasher.update(extern_path_key(path).as_bytes());
+            hasher.update(extern_path_key(name, path, key_root).as_bytes());
             hasher.update(b"\0");
         }
 
@@ -918,8 +926,12 @@ impl RustcCompileContext {
         // name, so the alias key only needs the names to preserve dependency
         // shape without baking in the output suffix.
         hasher.update(b"externs\0");
-        for (name, _) in &self.extern_crates {
+        for (name, path) in &self.extern_crates {
             hasher.update(name.as_bytes());
+            if name.starts_with(crate::NATIVE_INPUT_PREFIX) {
+                hasher.update(b"=");
+                hasher.update(extern_path_key(name, path, key_root).as_bytes());
+            }
             hasher.update(b"\0");
         }
 

@@ -10,8 +10,8 @@ const GOOD: &str = "#[test] fn ok() {}\n";
 const BROKEN: &str = "pub fn broken() { missing_agent_fixture_symbol(); }\n";
 
 /// Stops the fixture's daemon even when an assertion fails.
-struct Daemon<'a> {
-    envs: &'a [(&'static str, PathBuf)],
+pub(super) struct Daemon<'a> {
+    pub(super) envs: &'a [(&'static str, PathBuf)],
 }
 
 impl Drop for Daemon<'_> {
@@ -23,7 +23,7 @@ impl Drop for Daemon<'_> {
     }
 }
 
-fn cargo(project: &Path, verb: &str, target: &Path, envs: &[(&str, PathBuf)]) -> Output {
+pub(super) fn cargo(project: &Path, verb: &str, target: &Path, envs: &[(&str, PathBuf)]) -> Output {
     Command::new("soldr")
         // The cache root below is fixture-owned, not stale workspace state.
         .args(["--trust-inherited-soldr-env", "cargo", verb])

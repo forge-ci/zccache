@@ -8,6 +8,10 @@ use std::path::Path;
 
 use zccache_core::NormalizedPath;
 
+/// Reserved synthetic extern namespace for content-tracked native archives.
+/// Colons cannot occur in a Rust crate name, so compiler externs cannot collide.
+pub const NATIVE_INPUT_PREFIX: &str = "zccache-native-archive-v1:";
+
 /// A parsed `--extern name=path` declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternCrate {

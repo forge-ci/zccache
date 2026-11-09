@@ -61,6 +61,6 @@ soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ig
 
 # ci.yml msrv "Verify ignored Cargo cache regressions (#2002/#2117)".
 step "ignored Cargo cache regressions"
-soldr cargo test -p zccache --features zccache-bin --test cache_rust -- false_green_check:: cow_readonly_cargo:: --ignored --test-threads=1
+soldr cargo test -p zccache --features zccache-bin --test cache_rust -- false_green_check:: cow_readonly_cargo:: native_archive:: --ignored --test-threads=1
 
 step "gate tests passed"

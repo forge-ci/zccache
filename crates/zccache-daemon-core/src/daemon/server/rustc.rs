@@ -3,6 +3,7 @@
 use super::*;
 
 mod link_key;
+mod native_inputs;
 
 /// Fallback compiler-identity hash used only when `CompilerHashCache`
 /// cannot even `stat` the compiler binary (the initial `std::fs::metadata`
@@ -30,6 +31,8 @@ pub(super) enum BuildContextResult {
         compat_ctx: CompileContext,
         /// Parsed args for extern crate info, output path derivation, etc.
         rustc_args: Box<crate::depgraph::RustcParsedArgs>,
+        /// Failed native resolution must bypass every cache-hit path.
+        native_inputs_complete: bool,
     },
 }
 
@@ -165,6 +168,9 @@ pub(super) fn build_rustc_compile_context(
         link_key::add_link_key_material(&mut rustc_args, product, linker_hash);
     }
 
+    let native_inputs_complete =
+        native_inputs::add_inputs(&mut rustc_args, self::rustc_args(compilation), cwd);
+
     let rustc_ctx = crate::depgraph::RustcCompileContext::from_parsed_args_with_driver(
         &rustc_args,
         client_env,
@@ -189,6 +195,7 @@ pub(super) fn build_rustc_compile_context(
         rustc_ctx: Box::new(rustc_ctx),
         compat_ctx,
         rustc_args: Box::new(rustc_args),
+        native_inputs_complete,
     }
 }
 
@@ -218,6 +225,9 @@ pub(super) async fn build_rustc_compile_context_async(
         link_key::add_link_key_material(&mut rustc_args, product, linker_hash);
     }
 
+    let native_inputs_complete =
+        native_inputs::add_inputs_async(&mut rustc_args, self::rustc_args(compilation), cwd).await;
+
     let rustc_ctx = crate::depgraph::RustcCompileContext::from_parsed_args_with_driver(
         &rustc_args,
         client_env,
@@ -240,6 +250,7 @@ pub(super) async fn build_rustc_compile_context_async(
         rustc_ctx: Box::new(rustc_ctx),
         compat_ctx,
         rustc_args: Box::new(rustc_args),
+        native_inputs_complete,
     }
 }
 

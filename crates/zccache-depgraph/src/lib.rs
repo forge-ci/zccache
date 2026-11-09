@@ -30,7 +30,7 @@ pub use context::{
 };
 pub use depfile::{prepare_depfile, prepare_depfile_with_mmd, DepfileError, DepfileStrategy};
 pub use graph::{hash_env_dep_value, CacheVerdict, ContextState, DepGraph, DepGraphStats};
-pub use rustc_args::{parse_rustc_args, ExternCrate, RustcParsedArgs};
+pub use rustc_args::{parse_rustc_args, ExternCrate, RustcParsedArgs, NATIVE_INPUT_PREFIX};
 pub use scanner::{IncludeDirective, IncludeKind, ScanResult};
 pub use search_paths::IncludeSearchPaths;
 pub use session::{

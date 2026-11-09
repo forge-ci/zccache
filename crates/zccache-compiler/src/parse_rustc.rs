@@ -303,6 +303,7 @@ const RUSTC_FLAGS_WITH_VALUE: &[&str] = &[
     "--check-cfg",
     "-o",
     "-L",
+    "-l",
     "-C",
     "-A",
     "-W",
