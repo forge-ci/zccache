@@ -451,21 +451,18 @@ The ordered tiers are:
    rustc run outside zccache (plain `cargo`, rust-analyzer, `ZCCACHE_DISABLE=1`)
    passes its `check_file_is_writeable` and renames over the output instead of
    failing (#1791). The file's group can write it; digest verification still
-   refuses a modified blob. Windows keeps the `READONLY` attribute
-   (there is no mode-bit equivalent, and a deny-write ACE is native code that
-   belongs in kernal-api, not zccache), so a wrapper-less rustc over a
-   hardlinked output still fails there: the probe test
-   `wrapperless_rustc_rebuild_after_a_hit_in_every_mode` pins the refusal.
-   Under `ZCCACHE_DISABLE=1` the wrapper instead copy-detaches the read-only
-   outputs named by the rustc invocation (`--out-dir`/`-o`, filtered by
-   `--crate-name` + `extra-filename`) before exec'ing rustc
-   (`wrap/detach_outputs.rs`), briefly clearing the shared attribute only if
-   Windows refuses the delete; the daemon re-seals on the next hit and digest
-   verification guards the blob meanwhile. A plain `cargo`/rust-analyzer
-   rebuild on Windows over a hardlinked hit stays open (#1791); the sanctioned
-   mitigation is `ZCCACHE_MODE=AUTO`/`COPY`, which does not hardlink. In-place
-   writes by the owner are refused on every platform (pinned by the same
-   test).
+   refuses a modified blob. Windows uses kernal-api's `deny_in_place_writes`:
+   a deny ACE blocks write-data and append-data while leaving DELETE allowed
+   and the `READONLY` attribute unset. rustc can therefore rename over a
+   hardlinked `.rmeta`/`.rlib` without writing through to the cache (#1791).
+   Legacy `READONLY` blobs upgrade on their next hardlink hit or sealing.
+   Seal detection and removal use `in_place_writes_denied` and
+   `allow_in_place_writes`, including legacy attributes; `ZCCACHE_COW_READONLY=0`
+   removes either seal. The wrapper's existing `ZCCACHE_DISABLE=1` copy-detach
+   remains available (`wrap/detach_outputs.rs`); no additional bypass is needed.
+   The test `wrapperless_rustc_rebuild_after_a_hit_in_every_mode` requires
+   successful wrapper-less rebuilds and owner in-place write refusal for
+   shared outputs on every platform.
    Each stored blob carries a durable digest so a restarted daemon can rebuild
    the in-memory ledger safely even when prior aliases were deleted. Watcher
    changes mark entries suspect; the next hit hashes the blob and refuses a
@@ -476,7 +473,7 @@ The ordered tiers are:
 Windows identity uses `GetFileInformationByHandleEx(FileIdInfo)` and its native
 128-bit ID, with the legacy index as a pre-Windows-8 fallback. Link counts are
 checked before creation so exhaustion degrades to copy. Eviction and `clear`
-remove read-only attributes before deletion.
+remove write seals and legacy read-only attributes before deletion.
 
 `ZCCACHE_MODE=COPY` disables cloning and `ZCCACHE_COW_READONLY=0`
 disables read-only enforcement. Neither setting adds an IPC roundtrip.

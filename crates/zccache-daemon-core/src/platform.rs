@@ -91,12 +91,12 @@ pub(crate) mod fs {
         /// the owner's in-place writes while rustc sees a writable file and
         /// renames over it. The cost is that the file's group may write it;
         /// digest verification still refuses a modified blob before serving.
-        /// Windows keeps the `READONLY` attribute: an ACL deny ACE is native
-        /// code that must live in kernal-api, and the `ZCCACHE_DISABLE`
-        /// wrapper copy-detaches outputs instead (#1791).
+        /// Windows uses kernal-api's deny-write ACE, leaving `READONLY` unset
+        /// and DELETE allowed so rustc can rename over a hardlinked output.
+        /// Sealing also upgrades legacy `READONLY` blobs on their next hit.
         pub(crate) fn seal_cache_blob(path: &std::path::Path) -> std::io::Result<()> {
             if kernal_api::platform::host::target_is_windows() {
-                return set_readonly(path, true);
+                return kernal_api::platform::fs::deny_in_place_writes(path);
             }
             let current = mode(&std::fs::metadata(path)?);
             apply_mode(path, (current & !ANY_WRITE) | GROUP_WRITE)
@@ -117,11 +117,11 @@ pub(crate) mod fs {
 
         /// Whether the file's owner cannot write it in place: sealed by
         /// [`seal_cache_blob`], or read-only in the ordinary sense.
-        pub(crate) fn is_sealed(metadata: &std::fs::Metadata) -> bool {
+        pub(crate) fn is_sealed(path: &std::path::Path) -> std::io::Result<bool> {
             if kernal_api::platform::host::target_is_windows() {
-                return metadata.permissions().readonly();
+                return kernal_api::platform::fs::in_place_writes_denied(path);
             }
-            mode(metadata) & OWNER_WRITE == 0
+            Ok(mode(&std::fs::metadata(path)?) & OWNER_WRITE == 0)
         }
 
         /// zccache materialization policy: a dangling link is removable, and
@@ -141,7 +141,12 @@ pub(crate) mod fs {
                     }
                 }
             }
-            match set_readonly(path, false) {
+            let result = if kernal_api::platform::host::target_is_windows() {
+                kernal_api::platform::fs::allow_in_place_writes(path)
+            } else {
+                set_readonly(path, false)
+            };
+            match result {
                 Ok(()) => Ok(()),
                 Err(error)
                     if error.kind() == std::io::ErrorKind::NotFound
