@@ -1,5 +1,8 @@
 # #2169 polling same-tick rewrites
 
+- [x] PR #2176 fixup RED: 6/600 runs under CPU contention returned an overflow-only first batch (`/tmp/zccache-2176-red.log`). Baseline readiness already exists. Wait for the target path across batches with one deadline.
+- [x] Fixup GREEN: the same 600-run contention campaign passed (`/tmp/zccache-2176-green.log`); focused watcher suite passed (70 unit tests, saturated-pool integration test, and doctests).
+- [ ] Run focused watcher tests, lint, review, and the pinned gate on the final committed head; push the same branch and comment on the PR.
 - [x] Reproduce same-size, restored-mtime rewrite (RED: local-test-YfBoDk.log).
 - [x] Share the existing timestamp granularity in a separate refactor commit.
 - [x] Verify racy baselines with bounded hashing and retain deferred work fairly.

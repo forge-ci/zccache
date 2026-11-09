@@ -65,14 +65,26 @@ fn public_watcher_reports_restored_mtime_rewrite() {
     config.poll_interval = Duration::from_millis(10);
     config.debounce = Duration::from_millis(10);
     let watcher = PollingWatcher::new(config).unwrap();
+    // start() waits for baseline capture, including this file's racy digest.
     watcher.start().unwrap();
     fs::write(&path, b"bbbb").unwrap();
     set_mtime(&path, mtime);
-    let batch = watcher
-        .poll_timeout(Duration::from_secs(15))
-        .unwrap()
-        .expect("rewrite batch");
-    assert!(batch.changed.contains(&NormalizedPath::new(&path)));
+    // A scan overlapping write/set_mtime can emit overflow before retrying
+    // against the retained baseline. Wait for this path, not just any batch.
+    let expected = NormalizedPath::new(&path);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("timed out waiting for rewrite path");
+        let batch = watcher
+            .poll_timeout(remaining)
+            .unwrap()
+            .expect("timed out waiting for rewrite batch");
+        if batch.changed.contains(&expected) {
+            break;
+        }
+    }
     watcher.stop().unwrap();
 }
 
