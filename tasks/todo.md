@@ -4,7 +4,9 @@
 - [x] Share the existing timestamp granularity in a separate refactor commit.
 - [x] Verify racy baselines with bounded hashing and retain deferred work fairly.
 - [x] Cover old-file fast path, Windows granularity, cap, and poll budget (7 watcher tests GREEN: local-test-Bqwl3L.log).
-- [ ] Run lint, clippy, isolated tests, perf matrix, review and committed-tree gate.
+- [x] Run isolated tests and pre-push review: 442 watcher/fscache/core tests passed; reviewer clean after persistent-racy starvation fix.
+- [x] Run extra argfile (3 passed) and fetch-lock (1 passed) regressions before gating.
+- [ ] Complete lint, Docker perf matrix and committed-tree gate; retained logs and lane outcomes are posted to the clud board.
 - [ ] Rebase if needed, push PR with auto-merge, post PUSHED to board.
 
 # #2093 item 2 — lint config consistency
