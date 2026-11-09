@@ -241,8 +241,15 @@ mod tests {
         )
         .unwrap();
         let cache = MetadataCache::new();
-        let hash = cache.lookup(path.as_path()).unwrap();
-        let hashed_at = cache.get(&path).unwrap().hashed_at;
+        let real_hash = cache.lookup(path.as_path()).unwrap();
+        let mut entry = cache.get(&path).unwrap();
+        let hashed_at = entry.hashed_at;
+        // A sentinel digest proves reuse even on a coarse wall clock, where
+        // an erroneous rehash could otherwise record the same hashed_at value.
+        let hash = ContentHash::from_bytes([42; 32]);
+        assert_ne!(hash, real_hash);
+        entry.content_hash = Some(*hash.as_bytes());
+        cache.insert(path.clone(), entry);
         let started = Instant::now();
         for _ in 0..100 {
             assert_eq!(cache.get_cached_hash_if_stat_valid(&path), Some(hash));
