@@ -274,7 +274,10 @@ its own:
   The ordinary fast-hit path remains available after resolution. Rust context
   and metadata-alias key domains exclude entries from before this policy.
   Implicit OS library lookup outside explicit search directories retains the
-  existing compiler/SDK/system-linker contract.
+  existing compiler/SDK/system-linker contract. Source-level `+verbatim` names
+  that escape supplied native directories are a preexisting limitation tracked
+  in [#2173](https://github.com/forge-ci/zccache/issues/2173); this inventory does
+  not certify those external native paths.
 
 ## Environment Keying Policy (#1806)
 
