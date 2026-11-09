@@ -319,32 +319,27 @@ async fn transitive_dependency_missing_preserves_compiler_error() {
 }
 
 #[cfg(unix)]
+fn native_object(h: &TestHarness, value: u32) {
+    write_old(h, "native.c", &format!("unsigned answer(void) {{ return {value}; }}"));
+    let mut command = std::process::Command::new("cc");
+    command.current_dir(h.tmp.path()).args(["-c", "native.c", "-o", "native.o"]);
+    let result = zccache_test_support::test_child::TestChild::spawn(command).unwrap()
+        .finish(std::time::Duration::from_secs(30)).unwrap();
+    assert_eq!(result.code, Some(0), "{}", result.stderr_text());
+}
+
+#[cfg(unix)]
 fn native_archive(h: &TestHarness, value: u32, directory: &str) {
-    write_old(
-        h,
-        "native.c",
-        &format!("unsigned answer(void) {{ return {value}; }}"),
-    );
+    native_object(h, value);
     std::fs::create_dir_all(h.path(directory)).unwrap();
     let output = format!("{directory}/libchoice.a");
-    for (tool, args) in [
-        ("cc", vec!["-c", "native.c", "-o", "native.o"]),
-        ("ar", vec!["crs", output.as_str(), "native.o"]),
-    ] {
-        let mut command = std::process::Command::new(tool);
-        command.current_dir(h.tmp.path()).args(args);
-        let result = zccache_test_support::test_child::TestChild::spawn(command)
-            .unwrap()
-            .finish(std::time::Duration::from_secs(30))
-            .unwrap();
-        assert_eq!(result.code, Some(0), "{tool}: {}", result.stderr_text());
-    }
+    let mut command = std::process::Command::new("ar");
+    command.current_dir(h.tmp.path()).args(["crs", output.as_str(), "native.o"]);
+    let result = zccache_test_support::test_child::TestChild::spawn(command).unwrap()
+        .finish(std::time::Duration::from_secs(30)).unwrap();
+    assert_eq!(result.code, Some(0), "{}", result.stderr_text());
     use kernal_api::platform::fs::{set_file_mtime, FileTime};
-    set_file_mtime(
-        h.path(&output).as_path(),
-        FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0),
-    )
-    .unwrap();
+    set_file_mtime(h.path(&output).as_path(), FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0)).unwrap();
 }
 
 #[cfg(unix)]
