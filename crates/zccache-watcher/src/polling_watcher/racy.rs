@@ -12,7 +12,7 @@ pub(super) const HASHES_PER_POLL: usize = 256;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RacyState {
     hash: Option<ContentHash>,
-    deferred: bool,
+    deferred_polls: u64,
 }
 
 fn is_racy(mtime_ns: u128, observed_at: SystemTime) -> bool {
@@ -52,18 +52,18 @@ pub(super) fn verify(
         if prior.is_some() || is_racy(state.mtime_ns, observed_at) {
             state.racy = Some(prior.cloned().unwrap_or(RacyState {
                 hash: None,
-                deferred: false,
+                deferred_polls: 0,
             }));
             candidates.push((path, state, old.is_some()));
         }
     }
     // Previously deferred work precedes newly racy entries; sorting paths makes
-    // selection deterministic and rotating deferred bits prevents starvation.
+    // selection deterministic and counting skipped polls prevents starvation.
     candidates.sort_unstable_by(|a, b| {
         b.1.racy
             .as_ref()
-            .map(|r| r.deferred)
-            .cmp(&a.1.racy.as_ref().map(|r| r.deferred))
+            .map(|r| r.deferred_polls)
+            .cmp(&a.1.racy.as_ref().map(|r| r.deferred_polls))
             .then_with(|| a.0.cmp(b.0))
     });
     let mut changed = HashSet::new();
@@ -71,7 +71,7 @@ pub(super) fn verify(
     for (path, state, existed) in candidates {
         if reads >= limit {
             if let Some(racy) = state.racy.as_mut() {
-                racy.deferred = true;
+                racy.deferred_polls = racy.deferred_polls.saturating_add(1);
             }
             continue;
         }
@@ -94,7 +94,7 @@ pub(super) fn verify(
         }
         if is_racy(state.mtime_ns, observed_at) {
             racy.hash = Some(hash);
-            racy.deferred = false;
+            racy.deferred_polls = 0;
         } else {
             state.racy = None;
         }

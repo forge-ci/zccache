@@ -136,6 +136,38 @@ fn capped_baselines_remain_pending_and_rotate_without_starvation() {
 }
 
 #[test]
+fn persistent_racy_entries_cannot_starve_behind_the_cap() {
+    let dir = tempdir().unwrap();
+    let now = SystemTime::now();
+    for name in ["a.cpp", "b.cpp", "c.cpp"] {
+        let path = dir.path().join(name);
+        fs::write(&path, b"aaaa").unwrap();
+        set_mtime(&path, now);
+    }
+    let mut previous = scan(dir.path());
+    racy::verify(&HashMap::new(), &mut previous, now, 1).unwrap();
+    let mut checked = HashSet::new();
+    for _ in 0..4 {
+        let mut current = scan(dir.path());
+        let (changed, reads) = racy::verify(&previous, &mut current, now, 1).unwrap();
+        assert_eq!(reads, 1);
+        checked.extend(changed);
+        previous = current;
+    }
+    assert!(checked.contains(&NormalizedPath::new(dir.path().join("c.cpp"))));
+    let path = dir.path().join("c.cpp");
+    fs::write(&path, b"bbbb").unwrap();
+    set_mtime(&path, now);
+    let mut changes = HashSet::new();
+    for _ in 0..3 {
+        let mut current = scan(dir.path());
+        changes.extend(racy::verify(&previous, &mut current, now, 1).unwrap().0);
+        previous = current;
+    }
+    assert_eq!(changes, HashSet::from([NormalizedPath::new(path)]));
+}
+
+#[test]
 fn deferred_digests_survive_until_they_can_be_compared() {
     let dir = tempdir().unwrap();
     let now = SystemTime::now();

@@ -83,8 +83,8 @@ Three layers, from fast to slow:
   more than the granularity, is its digest discarded. Old files keep the
   metadata-only path. Streaming reads avoid mapping concurrently edited files.
 - At most 256 files are hashed per poll, including baseline capture. Deferred
-  entries retain their old digest and take priority next poll; processed entries
-  rotate behind deferred work. An entry deferred before its first digest cannot
+  entries retain their old digest and accumulate a skipped-poll count; the
+  longest-deferred entries run first, preventing starvation even for future mtimes. An entry deferred before its first digest cannot
   prove unchanged bytes, so its first eventual check conservatively reports a
   change. Read errors preserve the last complete baseline and use the existing
   overflow/retry path rather than dropping unverified state. Filtering,
