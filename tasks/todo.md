@@ -1763,3 +1763,11 @@ a separate behavior decision and regression coverage.
 - [x] Bosn RED/GREEN and published Soldr qualification.
 - [x] Pre-push review (one reviewer; clean).
 - Require full local gate, required Windows CI and merge-queue receipts in the closing PR before landing.
+
+# #1989 — same-tick stat hash guard
+
+- [x] Add real-filesystem regression with Unix identity masked to model Windows.
+- [x] Record hash-start wall time; reject racy and unknown hash timestamps.
+- [x] Cover stable fast path and polling-watcher follow-up (#2169 under #2144).
+- [ ] Run RED/GREEN, perf regression, formatting, clippy, local gate and review.
+- [ ] Push PR and enable auto-merge; leave queue to chaperone.

@@ -22,6 +22,7 @@ struct MetadataEntry {
     content_hash: Option<Blake3Hash>,
     confidence: Confidence,
     last_verified: Instant,    // monotonic clock
+    hashed_at: Option<SystemTime>, // wall-clock start of the hash read
 }
 
 enum FileId {
@@ -59,6 +60,24 @@ Three layers, from fast to slow:
 3. **Content hash** (expensive, on-demand): only re-computed when stat metadata changes or confidence is `Low`.
 
 ## Race Condition Analysis
+
+**Race: same-tick, same-size rewrite (#1989).**
+- Stat-based hash reuse records `hashed_at: Option<SystemTime>` at the start of
+  each hash read, independently of the monotonic stat-verification time.
+  Both the cached and current mtime must be strictly older than
+  `hashed_at - granularity`. Otherwise the stat shortcut declines the hash and
+  a full lookup re-hashes, refreshing `hashed_at`. Merely waiting never makes
+  an old racy hash trustworthy. Future mtimes and missing hash times fail closed.
+- The conservative granularity is 2 seconds on Windows (including FAT), and
+  10 ms on Linux/macOS (ext4/APFS). No filesystem-type syscall is added to the
+  hit path. Files on coarser non-Windows filesystems require a future
+  filesystem-specific policy. Unix ctime/inode checks remain independent.
+- Disk snapshot format v3 preserves the hash-start timestamp so restoring an
+  entry cannot age out its racy state. Unknown hash times require rehashing.
+  Journal-proven reuse remains a separate contract. Old, non-racy inputs keep
+  their stat-only fast path, including after restart.
+- The polling watcher has no content digest to compare. Its bounded racy
+  baseline verification is tracked separately in [#2169](https://github.com/forge-ci/zccache/issues/2169).
 
 **Race: file changes between stat and read-for-hashing.**
 - After hashing, stat the file again. If `(mtime, size)` changed between the pre-hash stat and the post-hash stat, discard the hash and retry (up to 3 times). If still unstable, mark the file as uncacheable for this compilation.

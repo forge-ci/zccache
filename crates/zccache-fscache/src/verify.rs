@@ -5,7 +5,7 @@
 
 use super::metadata::{Confidence, FileMetadata, MetadataCache};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use zccache_core::{NormalizedPath, Result};
 use zccache_hash::ContentHash;
 
@@ -27,6 +27,7 @@ impl MetadataCache {
             size: fs_meta.len(),
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: None,
             content_hash: None,
             identity: crate::identity::FileIdentity::from_metadata(&fs_meta),
         })
@@ -115,7 +116,7 @@ impl MetadataCache {
 
         let metadata_matches = entry.same_stamp(&fresh);
 
-        if metadata_matches {
+        if metadata_matches && !entry.hash_is_racy(fresh.mtime) {
             match entry.confidence {
                 Confidence::High | Confidence::Medium => {
                     // Metadata matches → promote to High, reuse cached hash if present.
@@ -188,8 +189,10 @@ impl MetadataCache {
 fn hash_file_snapshot(path: &Path) -> Result<(FileMetadata, ContentHash, FileMetadata)> {
     let file = std::fs::File::open(path)?;
     let pre = MetadataCache::metadata_from_fs(file.metadata()?)?;
+    let hashed_at = SystemTime::now();
     let hash = zccache_hash::hash_open_file(&file, pre.size)?;
-    let post = MetadataCache::stat_file(path)?;
+    let mut post = MetadataCache::stat_file(path)?;
+    post.hashed_at = Some(hashed_at);
     Ok((pre, hash, post))
 }
 
@@ -202,6 +205,79 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
     use zccache_core::NormalizedPath;
+
+    #[test]
+    fn same_tick_same_size_rewrite_rejects_cached_hash_without_identity() {
+        use kernal_api::platform::fs::{set_file_mtime, FileTime};
+
+        let dir = TempDir::new().unwrap();
+        let path = create_file(&dir, "racy.rs", "old");
+        let cache = MetadataCache::new();
+        let old_hash = cache.lookup(path.as_path()).unwrap();
+        let mut entry = cache.get(&path).unwrap();
+        fs::write(path.as_path(), b"new").unwrap();
+        set_file_mtime(path.as_path(), FileTime::from_system_time(entry.mtime)).unwrap();
+        // Model Windows' unavailable identity on every test host: do not let
+        // Unix ctime independently detect the rewrite and mask this regression.
+        entry.identity = MetadataCache::stat_file(path.as_path()).unwrap().identity;
+        // Model the same timestamp tick deterministically even if a loaded
+        // runner paused between creating the file and hashing it.
+        entry.hashed_at = Some(entry.mtime);
+        cache.insert(path.clone(), entry);
+        assert!(cache.get_cached_hash_if_stat_valid(&path).is_none());
+        assert_ne!(cache.lookup(path.as_path()).unwrap(), old_hash);
+    }
+
+    #[test]
+    fn perf_non_racy_stat_hits_preserve_hash_time() {
+        use kernal_api::platform::fs::{set_file_mtime, FileTime};
+
+        let dir = TempDir::new().unwrap();
+        let path = create_file(&dir, "stable.rs", "stable");
+        // Avoid sleeps: this mtime is well before hashing on every platform.
+        set_file_mtime(
+            path.as_path(),
+            FileTime::from_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
+        )
+        .unwrap();
+        let cache = MetadataCache::new();
+        let real_hash = cache.lookup(path.as_path()).unwrap();
+        let mut entry = cache.get(&path).unwrap();
+        let hashed_at = entry.hashed_at;
+        // A sentinel digest proves reuse even on a coarse wall clock, where
+        // an erroneous rehash could otherwise record the same hashed_at value.
+        let hash = ContentHash::from_bytes([42; 32]);
+        assert_ne!(hash, real_hash);
+        entry.content_hash = Some(*hash.as_bytes());
+        cache.insert(path.clone(), entry);
+        let started = Instant::now();
+        for _ in 0..100 {
+            assert_eq!(cache.get_cached_hash_if_stat_valid(&path), Some(hash));
+            assert_eq!(cache.lookup(path.as_path()).unwrap(), hash);
+        }
+        // The structural assertion proves zero rehashes; the generous bound
+        // only detects hangs, rather than using machine speed as a proxy (#1989).
+        assert_eq!(cache.get(&path).unwrap().hashed_at, hashed_at);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn racy_hash_is_recomputed_with_a_new_hash_start() {
+        let dir = TempDir::new().unwrap();
+        let path = create_file(&dir, "recent.rs", "same");
+        let cache = MetadataCache::new();
+        let hash = cache.lookup(path.as_path()).unwrap();
+        let mut entry = cache.get(&path).unwrap();
+        // Deterministic racy boundary, including files dated in the future.
+        let old_hash_start = Some(entry.mtime - Duration::from_secs(1));
+        entry.hashed_at = old_hash_start;
+        cache.insert(path.clone(), entry);
+        assert!(cache.get_cached_hash_if_stat_valid(&path).is_none());
+        assert_eq!(cache.lookup(path.as_path()).unwrap(), hash);
+        let refreshed = cache.get(&path).unwrap().hashed_at;
+        assert!(refreshed.is_some());
+        assert_ne!(refreshed, old_hash_start);
+    }
 
     /// Helper: create a file with given content, return its path.
     fn create_file(dir: &TempDir, name: &str, content: &str) -> NormalizedPath {

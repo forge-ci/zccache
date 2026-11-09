@@ -2,6 +2,16 @@
 
 use super::super::*;
 
+fn set_non_racy_mtime(path: &Path) {
+    // These tests need a stat-only hit before editing. Recently hashed writes
+    // must decline that shortcut (#1989), so age the fixture without sleeping.
+    kernal_api::platform::fs::set_file_mtime(
+        path,
+        kernal_api::platform::fs::FileTime::from_unix_time(1_000_000_000, 0),
+    )
+    .unwrap();
+}
+
 #[tokio::test]
 async fn fast_entry_checks_source_headers_force_includes_and_externs_without_events() {
     for changed in [
@@ -22,6 +32,7 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         for path in &paths {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"old").unwrap();
+            set_non_racy_mtime(path);
             server.state.cache_system.journal().register(path.clone());
             server
                 .state
@@ -79,15 +90,12 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         let accepted_hits = graph.stats().hits;
         let edited: NormalizedPath = dir.path().join(changed).into();
         std::fs::write(&edited, b"new").unwrap();
-        // A later edit, not one in the same timestamp tick as the recorded
-        // hash: Windows file times can repeat across writes microseconds
-        // apart, and a same-size same-mtime rewrite is invisible to any stat
-        // check (zackees/zccache#1989).
+        // A later, still non-racy mtime lets the post-refresh checks below
+        // compare actual hashes instead of declining the racy shortcut.
+        // Same-tick rewrites have their own fscache regression test (#1989).
         kernal_api::platform::fs::set_file_mtime(
             &edited,
-            kernal_api::platform::fs::FileTime::from_system_time(
-                std::time::SystemTime::now() + std::time::Duration::from_secs(10),
-            ),
+            kernal_api::platform::fs::FileTime::from_unix_time(1_000_000_010, 0),
         )
         .unwrap();
         assert!(!server
@@ -139,6 +147,7 @@ async fn multi_request_memo_verifies_each_input_once() {
     for path in &paths {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"body").unwrap();
+        set_non_racy_mtime(path);
         server.state.cache_system.journal().register(path.clone());
         server
             .state
@@ -204,6 +213,7 @@ async fn size_change_rejects_fast_entry_without_events() {
     let server = super::bind_isolated_server(dir.path());
     let source: NormalizedPath = dir.path().join("lib.rs").into();
     std::fs::write(&source, b"#[test] fn ok() {}\n").unwrap();
+    set_non_racy_mtime(&source);
     let graph = server.state.dep_graph.load();
     let ctx = CompileContext {
         source_file: source.clone(),
@@ -248,6 +258,9 @@ async fn size_change_rejects_fast_entry_without_events() {
         b"pub fn broken() { missing_agent_fixture_symbol(); }\n",
     )
     .unwrap();
+    // Keep mtime unchanged so size still invalidates the entry on coarse
+    // filesystems; aging the baseline must not weaken this regression.
+    set_non_racy_mtime(&source);
     assert!(!journal.changed_since(&source, clock));
     assert!(!fresh(), "size-changing edit authorized a stale artifact");
 }
