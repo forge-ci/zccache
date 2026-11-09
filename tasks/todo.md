@@ -1771,3 +1771,11 @@ a separate behavior decision and regression coverage.
 - [x] Cover stable fast path and polling-watcher follow-up (#2169 under #2144).
 - [ ] Run RED/GREEN, perf regression, formatting, clippy, local gate and review.
 - [ ] Push PR and enable auto-merge; leave queue to chaperone.
+
+# #1945 bundled native archive identity
+
+- [ ] Reproduce stale rlib with a real two-crate Cargo workspace.
+- [ ] Resolve native archives fail closed and reuse extern content hashing.
+- [ ] Verify unchanged hits, changed misses, search ordering and refusal cases.
+- [ ] Run lint, Clippy, pinned local gate and pre-push review.
+- [ ] Push PR, enable auto merge and post PUSHED to board.

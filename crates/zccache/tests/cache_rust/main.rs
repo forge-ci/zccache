@@ -25,6 +25,7 @@ mod daemon_rustc_response_file_test;
 mod daemon_rustc_restore_test;
 mod daemon_workspace_pin_747;
 mod false_green_check;
+mod native_archive;
 mod reflink_worktree_e2e;
 
 /// The one lock serializing every test in this binary that points the
