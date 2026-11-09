@@ -225,3 +225,139 @@ async fn custom_sysroot_same_path_library_replacement() {
     assert!(!cached);
     h.shutdown().await;
 }
+
+#[tokio::test]
+async fn transitive_dependency_missing_preserves_compiler_error() {
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    library(&mut h, "deps", 17).await;
+    write_old(
+        &h,
+        "umbrella.rs",
+        "extern crate choice; pub fn value() -> u32 { choice::VALUE }",
+    );
+    let (exit, _) = h
+        .compile_args(
+            &[
+                "--crate-name",
+                "umbrella",
+                "--crate-type",
+                "rlib",
+                "umbrella.rs",
+                "--extern=choice=deps/libchoice.rlib",
+                "-o",
+                "libumbrella.rlib",
+            ],
+            None,
+        )
+        .await;
+    assert_eq!(exit, 0);
+    age(h.path("libumbrella.rlib").as_path());
+    write_old(
+        &h,
+        "consumer.rs",
+        "extern crate umbrella; pub fn value() -> u32 { umbrella::value() }",
+    );
+    let flags = ["--extern=umbrella=libumbrella.rlib", "-Ldependency=deps"];
+    let (exit, _, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(cached, "unchanged transitive libraries should hit");
+    std::fs::remove_file(h.path("deps/libchoice.rlib")).unwrap();
+    let mut command = std::process::Command::new(h.rc());
+    command.current_dir(h.tmp.path()).args([
+        "--crate-name",
+        "consumer",
+        "--crate-type",
+        "rlib",
+        "consumer.rs",
+        "--extern=umbrella=libumbrella.rlib",
+        "-Ldependency=deps",
+        "-o",
+        "control.rlib",
+    ]);
+    let control = zccache_test_support::test_child::TestChild::spawn(command)
+        .unwrap()
+        .finish(std::time::Duration::from_secs(30))
+        .unwrap();
+    assert_ne!(
+        control.code,
+        Some(0),
+        "uncached compiler must reject the missing transitive crate"
+    );
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_ne!(
+        exit, 0,
+        "a missing implicit dependency must preserve rustc's error"
+    );
+    assert!(!cached);
+    h.shutdown().await;
+}
+
+#[cfg(unix)]
+fn native_archive(h: &TestHarness, value: u32) {
+    write_old(
+        h,
+        "native.c",
+        &format!("unsigned answer(void) {{ return {value}; }}"),
+    );
+    std::fs::create_dir_all(h.path("native")).unwrap();
+    for (tool, args) in [
+        ("cc", vec!["-c", "native.c", "-o", "native.o"]),
+        ("ar", vec!["crs", "native/libchoice.a", "native.o"]),
+    ] {
+        let mut command = std::process::Command::new(tool);
+        command.current_dir(h.tmp.path()).args(args);
+        let result = zccache_test_support::test_child::TestChild::spawn(command)
+            .unwrap()
+            .finish(std::time::Duration::from_secs(30))
+            .unwrap();
+        assert_eq!(result.code, Some(0), "{tool}: {}", result.stderr_text());
+    }
+    use kernal_api::platform::fs::{set_file_mtime, FileTime};
+    set_file_mtime(
+        h.path("native/libchoice.a").as_path(),
+        FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0),
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn source_link_attribute_tracks_bundled_archive() {
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    write_old(&h, "consumer.rs", "#[link(name=\"choice\", kind=\"static\")] extern \"C\" { fn answer() -> u32; } pub fn value() -> u32 { unsafe { answer() } }");
+    native_archive(&h, 17);
+    let (exit, _, first) = consumer(&mut h, &["-Lnative=native"]).await;
+    assert_eq!(exit, 0);
+    let (exit, cached, _) = consumer(&mut h, &["-Lnative=native"]).await;
+    assert_eq!(exit, 0);
+    assert!(cached, "unchanged source-declared archive must hit");
+    native_archive(&h, 91);
+    let mut command = std::process::Command::new(h.rc());
+    command.current_dir(h.tmp.path()).args([
+        "--crate-name",
+        "consumer",
+        "--crate-type",
+        "rlib",
+        "consumer.rs",
+        "-Lnative=native",
+        "-o",
+        "control.rlib",
+    ]);
+    let control = zccache_test_support::test_child::TestChild::spawn(command)
+        .unwrap()
+        .finish(std::time::Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(control.code, Some(0));
+    let expected = std::fs::read(h.path("control.rlib")).unwrap();
+    assert_ne!(
+        first, expected,
+        "uncached compiler must embed the changed archive"
+    );
+    let (exit, cached, second) = consumer(&mut h, &["-Lnative=native"]).await;
+    assert_eq!(exit, 0);
+    assert!(!cached, "source #[link] archive replacement must miss");
+    assert_eq!(second, expected);
+    h.shutdown().await;
+}
