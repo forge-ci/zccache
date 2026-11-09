@@ -1800,3 +1800,12 @@ a separate behavior decision and regression coverage.
 - [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
 - [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
 - [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.
+
+## #perf-2174 — staticlib link latency regression
+
+- [x] Read handoff/PERF.md and retain stripped CI logs/profile evidence.
+- [x] Run exact 042b6f0c/438838d0 Docker fixtures diagnostically: regressed cold 2.360s; baseline 0.756s. Busy host prevents a valid warm A/B; retain both native and shim controls.
+- [x] Add RED/GREEN 30ms shared-closure unit budget: RED 92.4ms; GREEN in Bosn.
+- [x] Deduplicate shared dependency resolution and parallelize independent cold probes without changing input verification.
+- [ ] Run focused correctness tests, lint, staticlib floors, full local perf matrix, pinned local gate and review.
+- [ ] Push PR, enable auto-merge and report its URL.

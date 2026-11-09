@@ -48,7 +48,7 @@ fn named_candidates_include_metadata_and_codegen_but_not_unrelated_files() {
 }
 
 #[test]
-fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
+fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     let compiler = crate::test_support::find_rustc().expect("real rustc required");
     let fixture = tempfile::tempdir().unwrap();
     let source = fixture.path().join("probe.rs");
@@ -99,5 +99,37 @@ fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
         library_metadata::probe_count(),
         before + 2,
         "warm hits must reuse decoded metadata"
+    );
+
+    // #2174: the link fixture supplies 50 externs with the same std closure.
+    // Memoizing metadata alone must not leave 50 repetitions of its resolution.
+    let externs = (0..50)
+        .map(|index| ExternCrate {
+            name: format!("alias_{index}"),
+            path: library.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut best_ns = u128::MAX;
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        let resolved = inputs(
+            &externs,
+            &[],
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+        )
+        .unwrap();
+        best_ns = best_ns.min(start.elapsed().as_nanos());
+        assert!(
+            !resolved.is_empty(),
+            "the real std closure must be verified"
+        );
+    }
+    eprintln!("50-extern shared Rust closure best_ns={best_ns}");
+    assert!(
+        best_ns < std::time::Duration::from_millis(30).as_nanos(),
+        "shared Rust library closure took {best_ns}ns; resolve it once per request"
     );
 }
