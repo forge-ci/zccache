@@ -616,7 +616,8 @@ impl RustcCompileContext {
     ) -> ContextKey {
         let mut hasher = kernal_api::hash::Blake3Hasher::new();
 
-        hasher.update(b"zccache-rustc-context-key-v5\0");
+        // #1930: never reuse entries created before complete library verification.
+        hasher.update(b"zccache-rustc-context-key-v6\0");
 
         // Compiler binary hash (different rustc versions -> different
         // output). Unconditional (non-Option field, issue #1166).
@@ -841,7 +842,7 @@ impl RustcCompileContext {
         }
 
         let mut hasher = kernal_api::hash::Blake3Hasher::new();
-        hasher.update(b"zccache-rustc-check-metadata-compat-key-v1\0");
+        hasher.update(b"zccache-rustc-check-metadata-compat-key-v2\0");
 
         // Unconditional (non-Option field, issue #1166) — see
         // `context_key_with_root` above for the rationale.

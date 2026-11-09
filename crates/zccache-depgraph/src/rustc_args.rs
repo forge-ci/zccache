@@ -21,6 +21,15 @@ pub struct ExternCrate {
     pub path: NormalizedPath,
 }
 
+/// An ordered rustc library search path, including its selection kind (#1930).
+#[derive(Debug, Clone)]
+pub struct RustcSearchPath {
+    /// `dependency`, `native`, `crate`, `framework`, `all`, or an unknown kind.
+    pub kind: String,
+    /// Directory resolved against the request working directory.
+    pub path: NormalizedPath,
+}
+
 /// Result of parsing rustc arguments for cache key computation.
 #[derive(Debug, Clone)]
 pub struct RustcParsedArgs {
@@ -83,12 +92,11 @@ pub struct RustcParsedArgs {
     pub color: Option<String>,
     /// `--diagnostic-width` value.
     pub diagnostic_width: Option<String>,
-    /// `-L` search paths, retained for diagnostics rather than hashed as directories.
-    /// Admission in `zccache-compiler::parse_rustc_plan_with_syntax` rejects
-    /// direct crate/all searches (#1930). Cargo dependency paths are relocation
-    /// hints for explicit externs, whose selected files are content-hashed;
-    /// native resolution owns the original kind/order in the daemon's raw argv.
-    pub search_paths: Vec<NormalizedPath>,
+    /// Ordered `-L` paths. The daemon resolves concrete Rust/native library
+    /// inputs from these kinds and content-hashes selected files (#1930).
+    /// Direct crate/all searches are refused at compiler admission; neither
+    /// directory spellings nor blanket directory hashes substitute for inputs.
+    pub search_paths: Vec<RustcSearchPath>,
     /// `--remap-path-prefix` values.
     pub remap_path_prefixes: Vec<String>,
     /// `--sysroot` path. Custom sysroots are refused by compiler admission
@@ -312,16 +320,13 @@ pub fn parse_rustc_args(args: &[String], cwd: &Path) -> RustcParsedArgs {
         // -L <path>
         if arg == "-L" {
             if let Some(next) = args.get(i + 1) {
-                // -L [KIND=]PATH â€” strip the kind= prefix
-                let path_str = next.split_once('=').map(|(_, p)| p).unwrap_or(next);
-                result.search_paths.push(resolve_path(path_str, cwd));
+                result.search_paths.push(parse_search_path(next, cwd));
                 i += 2;
                 continue;
             }
         } else if let Some(rest) = arg.strip_prefix("-L") {
             if !rest.is_empty() {
-                let path_str = rest.split_once('=').map(|(_, p)| p).unwrap_or(rest);
-                result.search_paths.push(resolve_path(path_str, cwd));
+                result.search_paths.push(parse_search_path(rest, cwd));
                 i += 1;
                 continue;
             }
@@ -472,6 +477,14 @@ fn handle_codegen_option(opt: &str, cwd: &Path, result: &mut RustcParsedArgs) {
 }
 
 /// Resolve a path against cwd if relative.
+fn parse_search_path(value: &str, cwd: &Path) -> RustcSearchPath {
+    let (kind, path) = value.split_once('=').unwrap_or(("all", value));
+    RustcSearchPath {
+        kind: kind.to_string(),
+        path: resolve_path(path, cwd),
+    }
+}
+
 fn resolve_path(path: &str, cwd: &Path) -> NormalizedPath {
     let p = Path::new(path);
     if p.is_absolute() {

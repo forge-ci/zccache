@@ -57,6 +57,30 @@ pub(in crate::daemon) fn compiler_identity_probe_spawn(
     kernal_api::SpawnSpec::new(compiler).arg(flag)
 }
 
+/// Inspect compiled metadata only. Bootstrap never reaches user compilations.
+pub(in crate::daemon) fn rustc_library_metadata_probe_spawn(
+    compiler: &Path,
+    library: &Path,
+    probe_dir: &Path,
+) -> kernal_api::SpawnSpec {
+    compiler_identity_probe_spawn(compiler, "-Zls=root")
+        .arg(library)
+        .env("RUSTC_BOOTSTRAP", "1")
+        .current_dir(probe_dir)
+}
+
+/// Resolve the compiler-owned library directory for a metadata target triple.
+pub(in crate::daemon) fn rustc_target_library_probe_spawn(
+    compiler: &Path,
+    triple: &str,
+    probe_dir: &Path,
+) -> kernal_api::SpawnSpec {
+    compiler_identity_probe_spawn(compiler, "--print=target-libdir")
+        .arg("--target")
+        .arg(triple)
+        .current_dir(probe_dir)
+}
+
 /// The argv an internal scan runs: `scan_args` plus the family's
 /// unused-argument suppression as the last option. Options must precede a
 /// `--` separator (everything after it is an input), so the flag lands just

@@ -110,24 +110,24 @@ fn native_archive_failure_does_not_publish_a_partial_extern_set() {
 }
 
 #[test]
-fn native_linked_products_hash_transitive_archives_without_explicit_l_flags() {
+fn native_products_hash_libraries_without_explicit_l_flags() {
     let temp = tempfile::tempdir().expect("fixture");
     let first = archive(temp.path(), "native", "libfoo.a");
     let second = archive(temp.path(), "native", "bar.LIB");
     archive(temp.path(), "native", "not-an-archive.txt");
-    for kind in ["bin", "staticlib"] {
+    let shared = archive(temp.path(), "native", "libshared.so");
+    for kind in ["bin", "staticlib", "rlib", "lib", "proc-macro"] {
         let (args, raw) = parsed(&["--crate-type", kind, "-Lnative=native"], temp.path());
         let paths: Vec<_> = inputs(&args, &raw, temp.path())
             .expect("resolved")
             .into_iter()
             .map(|input| input.path)
             .collect();
-        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.len(), 3);
         assert!(paths.contains(&first));
         assert!(paths.contains(&second));
+        assert!(paths.contains(&shared));
     }
-    let (args, raw) = parsed(&["--crate-type=rlib", "-Lnative=native"], temp.path());
-    assert!(inputs(&args, &raw, temp.path()).expect("rlib").is_empty());
     let (args, raw) = parsed(&["--crate-type=bin", "-Lnative=missing"], temp.path());
     assert!(inputs(&args, &raw, temp.path()).is_err());
 }

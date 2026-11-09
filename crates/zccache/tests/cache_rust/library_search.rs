@@ -263,6 +263,30 @@ async fn transitive_dependency_missing_preserves_compiler_error() {
     let (exit, cached, _) = consumer(&mut h, &flags).await;
     assert_eq!(exit, 0);
     assert!(cached, "unchanged transitive libraries should hit");
+    std::fs::create_dir_all(h.path("other")).unwrap();
+    for name in ["libchoice.rlib", "libumbrella.rlib"] {
+        let source = if name == "libchoice.rlib" {
+            "deps/libchoice.rlib"
+        } else {
+            "libumbrella.rlib"
+        };
+        let destination = h.path(&format!("other/{name}"));
+        std::fs::copy(h.path(source), &destination).unwrap();
+        age(destination.as_path());
+    }
+    let (exit, reused, _) = consumer(
+        &mut h,
+        &[
+            "--extern=umbrella=other/libumbrella.rlib",
+            "-Ldependency=other",
+        ],
+    )
+    .await;
+    assert_eq!(exit, 0);
+    assert!(
+        reused,
+        "the transitive closure must reuse identical bytes in another target directory"
+    );
     std::fs::remove_file(h.path("deps/libchoice.rlib")).unwrap();
     let mut command = std::process::Command::new(h.rc());
     command.current_dir(h.tmp.path()).args([
@@ -295,16 +319,17 @@ async fn transitive_dependency_missing_preserves_compiler_error() {
 }
 
 #[cfg(unix)]
-fn native_archive(h: &TestHarness, value: u32) {
+fn native_archive(h: &TestHarness, value: u32, directory: &str) {
     write_old(
         h,
         "native.c",
         &format!("unsigned answer(void) {{ return {value}; }}"),
     );
-    std::fs::create_dir_all(h.path("native")).unwrap();
+    std::fs::create_dir_all(h.path(directory)).unwrap();
+    let output = format!("{directory}/libchoice.a");
     for (tool, args) in [
         ("cc", vec!["-c", "native.c", "-o", "native.o"]),
-        ("ar", vec!["crs", "native/libchoice.a", "native.o"]),
+        ("ar", vec!["crs", output.as_str(), "native.o"]),
     ] {
         let mut command = std::process::Command::new(tool);
         command.current_dir(h.tmp.path()).args(args);
@@ -316,10 +341,44 @@ fn native_archive(h: &TestHarness, value: u32) {
     }
     use kernal_api::platform::fs::{set_file_mtime, FileTime};
     set_file_mtime(
-        h.path("native/libchoice.a").as_path(),
+        h.path(&output).as_path(),
         FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn linked_native_value(h: &TestHarness, library: &str) -> u32 {
+    write_old(
+        h,
+        "runner.rs",
+        "extern crate consumer; fn main() { println!(\"{}\", consumer::value()); }",
+    );
+    let executable = h.path("runner");
+    let mut compile = std::process::Command::new(h.rc());
+    compile
+        .current_dir(h.tmp.path())
+        .args([
+            "--crate-name",
+            "runner",
+            "runner.rs",
+            &format!("--extern=consumer={library}"),
+            "-o",
+        ])
+        .arg(executable.as_path());
+    let compiled = zccache_test_support::test_child::TestChild::spawn(compile)
+        .unwrap()
+        .finish(std::time::Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(compiled.code, Some(0), "{}", compiled.stderr_text());
+    let executed = zccache_test_support::test_child::TestChild::spawn(std::process::Command::new(
+        executable.as_path(),
+    ))
+    .unwrap()
+    .finish(std::time::Duration::from_secs(30))
+    .unwrap();
+    assert_eq!(executed.code, Some(0));
+    executed.stdout_text().trim().parse().unwrap()
 }
 
 #[cfg(unix)]
@@ -327,13 +386,14 @@ fn native_archive(h: &TestHarness, value: u32) {
 async fn source_link_attribute_tracks_bundled_archive() {
     let mut h = TestHarness::new().await.expect("real rustc required");
     write_old(&h, "consumer.rs", "#[link(name=\"choice\", kind=\"static\")] extern \"C\" { fn answer() -> u32; } pub fn value() -> u32 { unsafe { answer() } }");
-    native_archive(&h, 17);
+    native_archive(&h, 17, "native");
     let (exit, _, first) = consumer(&mut h, &["-Lnative=native"]).await;
     assert_eq!(exit, 0);
+    assert_eq!(linked_native_value(&h, "libconsumer.rlib"), 17);
     let (exit, cached, _) = consumer(&mut h, &["-Lnative=native"]).await;
     assert_eq!(exit, 0);
     assert!(cached, "unchanged source-declared archive must hit");
-    native_archive(&h, 91);
+    native_archive(&h, 91, "native");
     let mut command = std::process::Command::new(h.rc());
     command.current_dir(h.tmp.path()).args([
         "--crate-name",
@@ -358,6 +418,96 @@ async fn source_link_attribute_tracks_bundled_archive() {
     let (exit, cached, second) = consumer(&mut h, &["-Lnative=native"]).await;
     assert_eq!(exit, 0);
     assert!(!cached, "source #[link] archive replacement must miss");
-    assert_eq!(second, expected);
+    assert_ne!(first, second);
+    assert_eq!(linked_native_value(&h, "libconsumer.rlib"), 91);
+    h.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn source_link_attribute_tracks_new_earlier_archive() {
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    write_old(&h, "consumer.rs", "#[link(name=\"choice\", kind=\"static\")] extern \"C\" { fn answer() -> u32; } pub fn value() -> u32 { unsafe { answer() } }");
+    std::fs::create_dir_all(h.path("early")).unwrap();
+    native_archive(&h, 17, "native");
+    let flags = ["-Lnative=early", "-Lnative=native"];
+    let (exit, _, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert_eq!(linked_native_value(&h, "libconsumer.rlib"), 17);
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(cached);
+    native_archive(&h, 91, "early");
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(
+        !cached,
+        "a new earlier candidate must be resolved before request hits"
+    );
+    assert_eq!(linked_native_value(&h, "libconsumer.rlib"), 91);
+    h.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn implicit_shared_library_preserves_linker_error() {
+    if !kernal_api::platform::host::target_is_linux() {
+        return;
+    }
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    write_old(&h, "shared.rs", "#[link(name=\"choice\", kind=\"dylib\")] extern \"C\" { fn answer() -> u32; } fn main() { unsafe { answer(); } }");
+    std::fs::create_dir_all(h.path("native")).unwrap();
+    let args = [
+        "--crate-name",
+        "shared",
+        "--crate-type",
+        "bin",
+        "shared.rs",
+        "-Lnative=native",
+        "-o",
+        "shared",
+    ];
+    for (iteration, symbol) in ["answer", "removed_answer"].into_iter().enumerate() {
+        write_old(
+            &h,
+            "shared.c",
+            &format!("unsigned {symbol}(void) {{ return 17; }}"),
+        );
+        let mut command = std::process::Command::new("cc");
+        command.current_dir(h.tmp.path()).args([
+            "-shared",
+            "-fPIC",
+            "shared.c",
+            "-o",
+            "native/libchoice.so",
+        ]);
+        let built = zccache_test_support::test_child::TestChild::spawn(command)
+            .unwrap()
+            .finish(std::time::Duration::from_secs(30))
+            .unwrap();
+        assert_eq!(built.code, Some(0), "{}", built.stderr_text());
+        if iteration == 0 {
+            let (exit, _) = h.compile_args(&args, None).await;
+            assert_eq!(exit, 0);
+        } else {
+            let mut command = std::process::Command::new(h.rc());
+            command.current_dir(h.tmp.path()).args(args);
+            let control = zccache_test_support::test_child::TestChild::spawn(command)
+                .unwrap()
+                .finish(std::time::Duration::from_secs(30))
+                .unwrap();
+            assert_ne!(
+                control.code,
+                Some(0),
+                "direct linker must reject the missing symbol"
+            );
+            let (exit, cached) = h.compile_args(&args, None).await;
+            assert_ne!(
+                exit, 0,
+                "an implicit dylib replacement must preserve the link error"
+            );
+            assert!(!cached);
+        }
+    }
     h.shutdown().await;
 }

@@ -232,28 +232,42 @@ its own:
   `compile_with_options` reports the decision as a `CompileObservation`
   (`admitted`/`skipped`, a stable reason, logical artifact bytes).
 - **Custom sysroots and implicit direct Rust library searches are refused
-  at admission (#1930).** `parse_rustc_plan_with_syntax` owns this policy,
-  before any request-hit or dependency-graph lookup: `--sysroot` (both
-  spellings), pathless `--extern name`, and `-L crate=`, `-L all=` or
-  unqualified `-L` pass through to rustc without artifact caching. Merely
-  keying a path cannot detect a library replaced at that same path, and
-  `rustc -vV` does not describe a custom sysroot. This avoids both an
-  unmodeled resolver and repeated hashing of a whole sysroot on warm hits.
-  `RustcParsedArgs.sysroot` is consequently diagnostic data, not an ignored
-  cache input for an admitted request.
-  `RustcParsedArgs.search_paths` likewise does not own directory hashing:
-  Cargo's `dependency=` directories remain relocation hints, while selected
-  explicit `--extern name=path` inputs use existing content verification and
-  root-normalized identity for target-directory/worktree reuse. Native
-  selection consumes the original argument kinds and order in the daemon.
-  `framework=` and unknown search kinds are refused rather than guessed.
-- **Native libraries in link steps are a documented blind spot.**
-  `bin`/`staticlib` units linking system libraries via `-L`/`-l` do not
-  content-hash the resolved library bytes (matching sccache). An
-  upgraded system library with an otherwise-identical invocation can
-  serve a stale binary; the accepted trade-off avoids per-link hashing
-  of large system libraries. Revisit if a real-world stale-bin report
-  lands.
+  at compiler admission (#1930).** `parse_rustc_plan_with_syntax` excludes
+  `--sysroot` (both spellings), pathless `--extern name`, and `-L crate=`,
+  `-L all=` or unqualified `-L`. `framework=` and unknown search kinds are
+  also refused. These requests run through rustc without artifact caching.
+  A directory spelling cannot identify replaceable library bytes, and
+  `rustc -vV` does not identify a custom sysroot's libraries.
+  `RustcParsedArgs.sysroot` is therefore diagnostic data for excluded shapes.
+- **Ordered `RustcParsedArgs.search_paths` drive concrete input discovery.**
+  The parser retains every `-L` kind and its order. The daemon's
+  `rustc/library_inputs.rs` uses rustc's metadata crate table to resolve the
+  named transitive closure through `dependency=` directories and the default
+  target-library directory. Both `.rmeta` and codegen library flavors are
+  verified through the existing extern-input and filesystem-cache machinery.
+  Missing, ambiguous, mismatched or unreadable inputs refuse caching.
+  No whole-directory hash substitutes for resolving the named Rust inputs.
+  Synthetic input names include content identity, preserving reuse across
+  target directories/worktrees without allowing concurrent different-byte
+  inputs to overwrite the same dependency mapping.
+- **Metadata inspection is bounded and cached.** `library_metadata.rs`
+  caches decoded metadata by compiler identity and verified file digest;
+  the daemon's existing metadata cache owns stat, identity and racy-write
+  verification. `compiler_spawn.rs` owns the inspection children and their
+  30-second deadlines. `RUSTC_BOOTSTRAP=1` is confined to the `-Zls=root`
+  inspection child; user compilations keep their original flags/environment.
+  Unsupported metadata output fails closed. Warm lookups do not spawn rustc
+  again, and no extra IPC exchange is introduced.
+- **Native library inputs share the #1945 resolver.** Explicit `native=`
+  directories supply static/import archives, shared libraries and linker
+  stubs to content verification for every admitted product, including rlibs
+  whose source `#[link]` attribute bundles an archive without argv `-l`.
+  Requests with `-L` resolve membership before request-cache hits, so a new
+  earlier candidate cannot hide behind freshness of previously known files.
+  The ordinary fast-hit path remains available after resolution. Rust context
+  and metadata-alias key domains exclude entries from before this policy.
+  Implicit OS library lookup outside explicit search directories retains the
+  existing compiler/SDK/system-linker contract.
 
 ## Environment Keying Policy (#1806)
 

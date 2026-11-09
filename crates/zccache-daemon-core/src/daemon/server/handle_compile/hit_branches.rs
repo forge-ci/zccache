@@ -111,6 +111,16 @@ pub(super) async fn try_request_cache_hit(probe: RequestCacheHitProbe<'_>) -> Op
     if !state.watcher_active.load(Ordering::Acquire) {
         return None;
     }
+    // A new library candidate can change rustc's selection without changing
+    // any previously tracked file. Resolve -L membership before serving hits.
+    if crate::compiler::detect_family(&compiler_path.to_string_lossy())
+        == crate::compiler::CompilerFamily::Rustc
+        && effective_rustc_args(compiler_path, effective_args)
+            .iter()
+            .any(|arg| arg.starts_with("-L"))
+    {
+        return None;
+    }
 
     let t_request_cache_lookup = Instant::now();
     let request_fp = request_fingerprint(

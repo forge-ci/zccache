@@ -1782,8 +1782,9 @@ a separate behavior decision and regression coverage.
 
 ## #1930 — sysroot and implicit library search inputs
 
-- [ ] Real compiler RED/GREEN: same-path implicit extern and custom core replacement; search kind/order.
-- [ ] Fail closed for custom sysroots and unresolved direct crate searches; retain explicit Cargo externs.
-- [ ] Reuse #1945 native input ownership after it merges; verify overlap before final gate.
+- [x] Real compiler RED/GREEN: same-path implicit extern and custom core replacement; search kind/order.
+- [x] Fail closed for custom sysroots and unresolved direct crate searches; retain explicit Cargo externs.
+- [x] Rebase onto merged #1945 (042b6f0c); reuse its native input owner.
+- [ ] Verify transitive Rust, source-declared native and shared-library regressions with outer build caching disabled; finish review follow-up.
 - [ ] Document parser field ownership; format, lint, clippy, isolated tests, review and final pinned gate.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
