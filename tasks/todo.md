@@ -1788,5 +1788,6 @@ a separate behavior decision and regression coverage.
 - [x] Verify transitive Rust, source-declared native, indirection and alias regressions with outer build caching disabled: 2 compiler + 54 daemon + 11 integration GREEN (local-test-lrHEF8.log).
 - [x] Record unchanged escaping source +verbatim native-path limitation in #2173.
 - [x] Run sanctioned eight-cell perf matrix; known #2170 provisioning failure waived, evidence retained in .perf-local/results/.
-- [ ] Document parser field ownership; format, lint, clippy, isolated tests, review and final pinned gate.
+- [x] Document parser ownership and native limits; format; isolated RED/GREEN; one clud-review reviewer CLEAN.
+- [ ] Complete final lint/Clippy and pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.
