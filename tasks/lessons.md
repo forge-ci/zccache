@@ -427,3 +427,5 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 
 - Use `zccache_core::host` for compile-time host predicates in product policy; raw host `cfg` is denied outside approved adapters. Workspace clippy does not replace `./lint` and its platform-boundary Dylint.
 - Record hash-start time, preserve it across disk snapshots, and never refresh it on a stat-only hit. A coarse clock requires a digest-based assertion to prove a fast path did not rehash.
+
+- #1989 integration fixtures: tests that require a stat-only hit must hash an input with an old mtime. Keep later edited mtimes old enough for post-refresh hash/key checks, and restore the original mtime when testing size-only invalidation.
