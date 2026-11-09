@@ -127,6 +127,29 @@ fn probe(spec: kernal_api::SpawnSpec, compiler: &Path) -> Result<String, &'stati
     String::from_utf8(output.stdout).map_err(|_| "non-UTF8 rustc library inspection")
 }
 
+fn snapshot(
+    library: &NormalizedPath,
+    digest: ContentHash,
+    probe_dir: &Path,
+) -> Result<(tempfile::TempDir, std::path::PathBuf), &'static str> {
+    let snapshot_dir =
+        tempfile::tempdir_in(probe_dir).map_err(|_| "metadata snapshot directory failed")?;
+    let snapshot = snapshot_dir
+        .path()
+        .join(library.file_name().ok_or("invalid library filename")?);
+    {
+        let mut source =
+            std::fs::File::open(library).map_err(|_| "metadata snapshot source failed")?;
+        let mut target =
+            std::fs::File::create(&snapshot).map_err(|_| "metadata snapshot file failed")?;
+        std::io::copy(&mut source, &mut target).map_err(|_| "metadata snapshot copy failed")?;
+    }
+    if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
+        return Err("Rust library changed while snapshotting metadata");
+    }
+    Ok((snapshot_dir, snapshot))
+}
+
 pub(super) fn inspect(
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
@@ -147,21 +170,7 @@ pub(super) fn inspect(
     // Inspect an immutable private copy whose digest is the memo key. Merely
     // hashing the original before/after a child would allow an ABA replacement
     // to memoize another file's metadata under the original digest.
-    let snapshot_dir =
-        tempfile::tempdir_in(probe_dir).map_err(|_| "metadata snapshot directory failed")?;
-    let snapshot = snapshot_dir
-        .path()
-        .join(library.file_name().ok_or("invalid library filename")?);
-    {
-        let mut source =
-            std::fs::File::open(library).map_err(|_| "metadata snapshot source failed")?;
-        let mut target =
-            std::fs::File::create(&snapshot).map_err(|_| "metadata snapshot file failed")?;
-        std::io::copy(&mut source, &mut target).map_err(|_| "metadata snapshot copy failed")?;
-    }
-    if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
-        return Err("Rust library changed while snapshotting metadata");
-    }
+    let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
     if library
         .extension()
         .is_some_and(|extension| extension == "rlib")
