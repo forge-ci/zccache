@@ -45,6 +45,6 @@ pub use snapshot::{
 pub use system_includes::{
     discovery_args, discovery_args_c, discovery_args_fast, msvc_system_includes_from_env,
     parse_cc1_system_include_output, parse_msvc_include_env, parse_system_include_output,
-    SystemIncludeCache, MSVC_INCLUDE_ENV,
+    parse_system_include_output_checked, SystemIncludeCache, MSVC_INCLUDE_ENV,
 };
 pub use watcher_support::WatchSet;

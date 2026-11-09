@@ -72,3 +72,5 @@ For embedded mode, start with
 [architecture/embedded-service.md](architecture/embedded-service.md),
 especially the MVP status table: Soldr integration is landed; fbuild remains
 open.
+
+System include discovery: [known-empty and degraded probes](architecture/portability.md#explicitly-empty-system-include-discovery-1879).

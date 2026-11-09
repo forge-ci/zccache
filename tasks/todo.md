@@ -1800,3 +1800,11 @@ a separate behavior decision and regression coverage.
 - [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
 - [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
 - [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.
+
+## #1879 explicit empty system include discovery
+
+- [x] RED: `explicitly_empty_discovery_is_cacheable` failed on the original guard.
+- [x] Distinguish complete search lists from degraded probes; persist confirmed empty roots in format v2.
+- [x] GREEN: 33 focused depgraph tests and 19 daemon system-include tests passed (one existing ignored test). Includes header edits through `-isystem` / `C_INCLUDE_PATH`, failed probes, Clang fallback and daemon restart.
+- [x] Subsystem docs updated; `clud-review` clean after fixture timestamp correction.
+- Delivery: run clean-tree local gate, push PR closing #1879, enable auto-merge. Perf matrix waived by coordinator under #2170; no new hit-path operations.

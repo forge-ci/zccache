@@ -525,7 +525,7 @@ checkpoint the whole index into `index.bin`.
 | `depgraph/depgraph.bin` | Periodic depgraph save, embedded flush/shutdown, best-effort drop checkpoint | `ZCDG` header, version 9; temp file and file fsync. The saver currently removes the old destination before rename, leaving a small interruption window in which the file can be absent. Depgraph load/save operations share a persistence lock. |
 | `metadata.bin` | Periodic metadata snapshot, embedded flush/shutdown, best-effort drop checkpoint | Version 1 bincode; unique temp name per write, file fsync, rename, best-effort parent fsync. Empty snapshots do not overwrite the old file. |
 | `compiler_hash.bin` | Embedded flush/shutdown | Version 2 bincode; temp file, file fsync, rename, best-effort parent fsync. |
-| `system_includes.bin` | Embedded flush/shutdown | Version 1 bincode; temp file, file fsync, rename, best-effort parent fsync. |
+| `system_includes.bin` | Embedded flush/shutdown | Version 2 bincode; temp file, file fsync, rename, best-effort parent fsync. |
 
 These files have no shared generation marker and are not committed as one
 transaction. Depgraph contexts can contain artifact keys; the index maps keys

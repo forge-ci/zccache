@@ -41,6 +41,13 @@ use zccache_core::NormalizedPath;
 /// suffix is stripped.
 #[must_use]
 pub fn parse_system_include_output(output: &str) -> Vec<NormalizedPath> {
+    parse_system_include_output_checked(output).unwrap_or_default()
+}
+
+/// A complete search-list section proves the roots, including an explicitly empty list.
+/// Missing either marker is degraded output, never a reusable empty result.
+#[must_use]
+pub fn parse_system_include_output_checked(output: &str) -> Option<Vec<NormalizedPath>> {
     let mut in_section = false;
     let mut paths = Vec::new();
 
@@ -52,8 +59,8 @@ pub fn parse_system_include_output(output: &str) -> Vec<NormalizedPath> {
             continue;
         }
 
-        if trimmed == "End of search list." {
-            break;
+        if in_section && trimmed == "End of search list." {
+            return Some(paths);
         }
 
         if in_section && !trimmed.is_empty() {
@@ -70,7 +77,7 @@ pub fn parse_system_include_output(output: &str) -> Vec<NormalizedPath> {
         }
     }
 
-    paths
+    None
 }
 
 /// Name of the MSVC environment variable that lists the system include roots.
@@ -280,7 +287,7 @@ fn tokenize_command_line(line: &str) -> Vec<String> {
 ///
 /// Bump on any layout change so the loader rejects older / newer snapshots
 /// instead of mis-decoding them.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// One cache entry — the discovered include paths plus the (mtime, size)
 /// fingerprint of the compiler binary that produced them. Verifying stat
@@ -291,6 +298,8 @@ pub struct SystemIncludeEntry {
     pub mtime: SystemTime,
     pub size: u64,
     pub paths: Vec<NormalizedPath>,
+    /// Only an explicit complete search list may confirm zero roots (#1879).
+    pub known_empty: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -338,9 +347,8 @@ impl SystemIncludeCache {
     /// Look up cached system include paths for a compiler, verifying stat.
     ///
     /// Returns `None` when either the cache has no entry, its path list is
-    /// empty, OR the compiler binary's (mtime, size) no longer matches the
-    /// entry's fingerprint. An empty probe result is ambiguous rather than
-    /// proof that a compiler has no defaults, so it must force rediscovery.
+    /// unconfirmed and empty, OR the compiler binary's (mtime, size) no longer
+    /// matches the entry's fingerprint. Confirmed empty roots are reusable.
     /// Stat errors (e.g., compiler removed) also return `None` so the caller
     /// falls through to rediscovery.
     #[must_use]
@@ -350,7 +358,10 @@ impl SystemIncludeCache {
         let metadata = std::fs::metadata(compiler).ok()?;
         let mtime = metadata.modified().ok()?;
         let size = metadata.len();
-        if !entry.paths.is_empty() && entry.mtime == mtime && entry.size == size {
+        if (entry.known_empty || !entry.paths.is_empty())
+            && entry.mtime == mtime
+            && entry.size == size
+        {
             Some(entry.paths.as_slice())
         } else {
             None
@@ -369,6 +380,20 @@ impl SystemIncludeCache {
         if paths.is_empty() {
             return;
         }
+        self.insert_entry(compiler, paths, false);
+    }
+
+    /// Store a confirmed empty search list; callers must have parsed both markers.
+    pub fn insert_known_empty(&mut self, compiler: NormalizedPath) {
+        self.insert_entry(compiler, Vec::new(), true);
+    }
+
+    fn insert_entry(
+        &mut self,
+        compiler: NormalizedPath,
+        paths: Vec<NormalizedPath>,
+        known_empty: bool,
+    ) {
         let Ok(metadata) = std::fs::metadata(compiler.as_path()) else {
             return;
         };
@@ -376,8 +401,15 @@ impl SystemIncludeCache {
             return;
         };
         let size = metadata.len();
-        self.cache
-            .insert(compiler, SystemIncludeEntry { mtime, size, paths });
+        self.cache.insert(
+            compiler,
+            SystemIncludeEntry {
+                mtime,
+                size,
+                paths,
+                known_empty,
+            },
+        );
         self.dirty = true;
     }
 
@@ -393,7 +425,7 @@ impl SystemIncludeCache {
     {
         let compiler_key = NormalizedPath::new(compiler);
         let stat_match = self.cache.get(&compiler_key).is_some_and(|entry| {
-            !entry.paths.is_empty()
+            (entry.known_empty || !entry.paths.is_empty())
                 && std::fs::metadata(compiler)
                     .ok()
                     .and_then(|m| m.modified().ok().map(|mt| (mt, m.len())))
@@ -433,7 +465,7 @@ impl SystemIncludeCache {
             other
                 .cache
                 .into_iter()
-                .filter(|(_, entry)| !entry.paths.is_empty()),
+                .filter(|(_, entry)| entry.known_empty || !entry.paths.is_empty()),
         );
     }
 
@@ -465,7 +497,7 @@ impl SystemIncludeCache {
         let entries: Vec<(NormalizedPath, SystemIncludeEntry)> = self
             .cache
             .iter()
-            .filter(|(_, entry)| !entry.paths.is_empty())
+            .filter(|(_, entry)| entry.known_empty || !entry.paths.is_empty())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
@@ -547,7 +579,7 @@ impl SystemIncludeCache {
             HashMap::with_capacity(snapshot.entries.len());
         let entry_count = snapshot.entries.len();
         for (key, value) in snapshot.entries {
-            if !value.paths.is_empty() {
+            if value.known_empty || !value.paths.is_empty() {
                 cache.insert(key, value);
             }
         }

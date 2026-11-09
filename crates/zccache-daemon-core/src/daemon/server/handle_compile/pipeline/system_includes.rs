@@ -27,7 +27,7 @@ const SYSTEM_INCLUDE_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duratio
 
 pub(super) struct SystemIncludesOutcome {
     pub(super) includes: Vec<NormalizedPath>,
-    /// A C/C++ probe ran but did not yield any include roots. This is an
+    /// A C/C++ probe did not yield a complete search list. This is an
     /// unknown/degraded result, not proof that the compiler has no defaults.
     pub(super) empty_discovery: bool,
     pub(super) system_includes_ns: u64,
@@ -98,7 +98,10 @@ pub(super) async fn discover_system_includes(
             let discovered = if filled_while_waiting {
                 None
             } else {
-                discover_system_include_paths(compiler, lineage, compiler_priority, use_fast).await
+                Some(
+                    discover_system_include_paths(compiler, lineage, compiler_priority, use_fast)
+                        .await,
+                )
             };
             // Inserted-this-call flag drives a single async write-through
             // snapshot after we drop the cache lock. We never block the
@@ -112,10 +115,17 @@ pub(super) async fn discover_system_includes(
                     .with_for(STATE_TIMEOUT, |cache| {
                         if let Some(paths) = cache.get(compiler) {
                             (paths.to_vec(), None, false)
-                        } else if discovery_result_is_cacheable(discovered.as_deref()) {
-                            let discovered =
-                                discovered.expect("checked non-empty discovery result");
-                            cache.insert(compiler.clone(), discovered);
+                        } else if discovery_result_is_cacheable(
+                            discovered.as_ref().and_then(|result| result.as_deref()),
+                        ) {
+                            let discovered = discovered
+                                .flatten()
+                                .expect("checked complete discovery result");
+                            if discovered.is_empty() {
+                                cache.insert_known_empty(compiler.clone());
+                            } else {
+                                cache.insert(compiler.clone(), discovered);
+                            }
                             let paths = cache
                                 .get(compiler)
                                 .map(|paths| paths.to_vec())
@@ -131,8 +141,8 @@ pub(super) async fn discover_system_includes(
                             let snapshot = cache.clone();
                             (paths, Some(snapshot), false)
                         } else if discovered.is_some() {
-                            // Issue #1167: a process that succeeds but reports zero
-                            // paths is not a stable compiler property. Never put it
+                            // Issue #1167: missing search-list markers do not prove
+                            // a stable compiler property. Never put degraded output
                             // in L1/L2; the next request must probe again.
                             (Vec::new(), None, true)
                         } else {
@@ -193,21 +203,27 @@ fn warn_empty_system_include_discovery(compiler: &NormalizedPath) {
     tracing::warn!(
         event = "system_include_discovery_empty",
         compiler = %compiler.display(),
-        "compiler system-include discovery returned no paths; bypassing the compile cache and retrying discovery on the next request"
+        "compiler system-include discovery returned no complete search list; bypassing the compile cache and retrying discovery on the next request"
     );
     crate::core::lifecycle::write_event(
         crate::core::lifecycle::EVENT_SYSTEM_INCLUDE_DISCOVERY_EMPTY,
         serde_json::json!({
             "compiler": compiler.display().to_string(),
-            "reason": "probe succeeded but yielded zero system include paths",
+            "reason": "probe did not yield a complete system include search list",
         }),
     );
 }
 
-/// Only a non-empty C/C++ probe result proves an include-root set that can be
-/// safely reused by future requests or persisted across daemon restarts.
+/// A complete C/C++ probe result proves the root set, even when it is empty.
 fn discovery_result_is_cacheable(paths: Option<&[NormalizedPath]>) -> bool {
-    paths.is_some_and(|paths| !paths.is_empty())
+    paths.is_some()
+}
+
+fn parse_verbose_discovery(output: &std::process::Output) -> Option<Vec<NormalizedPath>> {
+    if !output.status.success() {
+        return None;
+    }
+    crate::depgraph::parse_system_include_output_checked(&String::from_utf8_lossy(&output.stderr))
 }
 
 async fn discover_system_include_paths(
@@ -226,22 +242,22 @@ async fn discover_system_include_paths(
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let mut paths = if use_fast {
-                crate::depgraph::parse_cc1_system_include_output(&stderr)
+                Some(crate::depgraph::parse_cc1_system_include_output(&stderr))
+                    .filter(|paths| out.status.success() && !paths.is_empty())
             } else {
-                crate::depgraph::parse_system_include_output(&stderr)
+                parse_verbose_discovery(&out)
             };
             // Defensive fall-through: if the fast probe returned no paths
             // (e.g. an older clang that doesn't emit `-internal-isystem`
             // flags, or the binary detected as Clang turned out to be gcc
             // behind a clang symlink), retry with the slow `-v -E`
             // discovery. The cache memoizes the result either way.
-            if use_fast && paths.is_empty() {
+            if use_fast && paths.is_none() {
                 let slow_args = crate::depgraph::discovery_args();
                 match run_discovery_command(compiler, &slow_args, lineage, compiler_priority).await
                 {
                     Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        paths = crate::depgraph::parse_system_include_output(&stderr);
+                        paths = parse_verbose_discovery(&out);
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -255,19 +271,18 @@ async fn discover_system_include_paths(
             // C++ probe then produces no search list and used to force every
             // C compile down the uncached bypass.  Preserve the richer C++
             // roots when available, but recover the valid C roots otherwise.
-            if paths.is_empty() {
+            if paths.is_none() {
                 let c_args = crate::depgraph::discovery_args_c();
                 match run_discovery_command(compiler, &c_args, lineage, compiler_priority).await {
                     Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        paths = crate::depgraph::parse_system_include_output(&stderr);
+                        paths = parse_verbose_discovery(&out);
                     }
                     Err(e) => {
                         tracing::warn!("failed to run C compiler for include discovery: {e}");
                     }
                 }
             }
-            Some(paths)
+            paths
         }
         Err(e) => {
             tracing::warn!("failed to run compiler for include discovery: {e}");
@@ -355,10 +370,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_successful_discovery_is_not_cacheable() {
-        // Issue #1167: accepting this result would persist an incompatible
-        // context key until the compiler binary itself changes.
-        assert!(!discovery_result_is_cacheable(Some(&[])));
+    fn explicitly_empty_discovery_is_cacheable() {
+        // #1879: Some(empty) now represents a complete, explicitly empty list.
+        // #1167: None still represents a degraded probe and is not reusable.
+        assert!(discovery_result_is_cacheable(Some(&[])));
         assert!(!discovery_result_is_cacheable(None));
     }
 
@@ -546,6 +561,103 @@ mod tests {
         assert_eq!(
             probes, 1,
             "16 concurrent cold requests spawned {probes} probes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn known_empty_discovery_is_not_degraded_and_survives_daemon_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let compiler = tmp.path().join("fake-gcc");
+        let probes = tmp.path().join("probes");
+        std::fs::write(&compiler, format!(
+            "#!/bin/sh\necho probe >> '{}'\necho '#include <...> search starts here:' >&2\necho 'End of search list.' >&2\n",
+            probes.display())).unwrap();
+        crate::platform::fs::permissions::make_executable(&compiler).unwrap();
+        let compiler = NormalizedPath::new(compiler);
+        let cache_dir = NormalizedPath::new(tmp.path().join("cache"));
+        let lineage = crate::daemon::lineage::Lineage::current(None, None);
+        for round in 0..2 {
+            let server =
+                DaemonServer::bind_with_cache_dir(&crate::ipc::unique_test_endpoint(), &cache_dir)
+                    .unwrap();
+            if round == 1 {
+                let loader = server.system_includes_loader();
+                tokio::task::spawn_blocking(move || loader.load_and_install())
+                    .await
+                    .unwrap();
+            }
+            let outcome = discover_system_includes(
+                &server.state,
+                &compiler,
+                &lineage,
+                CompilePriority::Normal,
+                false,
+                None,
+            )
+            .await;
+            assert!(outcome.includes.is_empty());
+            // This flag alone controls the bypass warning/lifecycle event.
+            assert!(
+                !outcome.empty_discovery,
+                "a complete empty list must not warn or bypass"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&probes).unwrap().lines().count(),
+                1,
+                "the restarted daemon must reuse L2 without spawning a probe"
+            );
+            if round == 0 {
+                let snapshot = server
+                    .state
+                    .system_includes
+                    .with_for(STATE_TIMEOUT, |cache| cache.clone())
+                    .await;
+                let path = server.state.system_includes_cache_path.clone();
+                tokio::task::spawn_blocking(move || snapshot.save_to_disk(path.as_path()))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            server.state.cache_root_lock.release();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_probe_cannot_confirm_empty_roots() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: Vec::new(),
+            stderr: b"#include <...> search starts here:\nEnd of search list.\n".to_vec(),
+        };
+        assert!(parse_verbose_discovery(&output).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fast_probe_falls_back_to_confirmed_empty_verbose_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let compiler = tmp.path().join("fake-clang");
+        let probes = tmp.path().join("probes");
+        std::fs::write(&compiler, format!(
+            "#!/bin/sh\necho probe >> '{}'\necho '#include <...> search starts here:' >&2\necho 'End of search list.' >&2\n",
+            probes.display())).unwrap();
+        crate::platform::fs::permissions::make_executable(&compiler).unwrap();
+        let lineage = crate::daemon::lineage::Lineage::current(None, None);
+        let paths = discover_system_include_paths(
+            &NormalizedPath::new(compiler),
+            &lineage,
+            CompilePriority::Normal,
+            true,
+        )
+        .await;
+        assert_eq!(paths, Some(Vec::new()));
+        assert_eq!(
+            std::fs::read_to_string(probes).unwrap().lines().count(),
+            2,
+            "fast then verbose, with no unnecessary C frontend fallback"
         );
     }
 }

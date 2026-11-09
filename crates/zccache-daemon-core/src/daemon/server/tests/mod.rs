@@ -29,6 +29,7 @@ mod depgraph_save_failure;
 mod disk_maintenance;
 mod embedded_bringup;
 mod embedded_flush;
+mod empty_system_includes;
 mod env_lock_bound;
 mod env_precision_1806;
 mod exec_probe;
