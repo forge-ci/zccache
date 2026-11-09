@@ -426,6 +426,47 @@ pub(crate) fn parse_rustc_plan(
     )
 }
 
+/// Refuse library selections whose concrete bytes are not verified (#1930).
+/// Keep this at admission so every hit path, including request hits, obeys it.
+/// Cargo's explicit extern files retain their existing content hashes and
+/// relocatable dependency search paths. Native selection is owned by the
+/// daemon's native-input resolver, which consumes the original kind/order.
+fn unmodeled_rustc_library_inputs(args: &[String]) -> Option<&'static str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--sysroot" || arg.starts_with("--sysroot=") {
+            return Some("custom Rust sysroot library inputs are not modeled");
+        }
+        let extern_spec = if arg == "--extern" {
+            args.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("--extern=")
+        };
+        if let Some(spec) = extern_spec {
+            if !spec.contains('=') {
+                return Some("implicit Rust extern library input is not modeled");
+            }
+            continue;
+        }
+        let search = if arg == "-L" {
+            args.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("-L").filter(|value| !value.is_empty())
+        };
+        if let Some(search) = search {
+            if !matches!(search.split_once('='), Some(("dependency" | "native", _))) {
+                return Some("implicit Rust library search inputs are not modeled");
+            }
+            continue;
+        }
+        // Do not reinterpret another option's value as a library flag.
+        if RUSTC_FLAGS_WITH_VALUE.contains(&arg.as_str()) {
+            args.next();
+        }
+    }
+    None
+}
+
 /// Evaluate the existing Rustc policy using explicitly supplied embedding facts.
 ///
 /// `host` controls compiler-host naming; `syntax` controls lexical path parsing.
@@ -450,6 +491,11 @@ pub fn parse_rustc_plan_with_syntax(
             };
         }
     };
+    if let Some(reason) = unmodeled_rustc_library_inputs(args) {
+        return RustcPlan::NonCacheable {
+            reason: reason.to_string(),
+        };
+    }
     let mut crate_types: Vec<String> = Vec::new();
     let mut source_file: Option<String> = None;
     let mut output_file: Option<String> = None;

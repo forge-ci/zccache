@@ -477,12 +477,19 @@ pub(super) async fn parse_single_compile_request(
         cwd_path.join(&compilation.output_file)
     };
     let context_start = std::time::Instant::now();
-    let build_result = build_compile_context_async(
+    let mut build_result = build_compile_context_async(
         &compilation,
         cwd,
         &system_includes,
         client_env.as_deref().unwrap_or(&[]),
         &state.compiler_hash_cache,
+    )
+    .await;
+    let rust_inputs_complete = crate::daemon::server::rustc::library_inputs::complete_context(
+        state_arc,
+        &compilation,
+        &mut build_result,
+        cwd,
     )
     .await;
     if let BuildContextResult::Rustc {
@@ -492,6 +499,7 @@ pub(super) async fn parse_single_compile_request(
     } = &build_result
     {
         if !native_inputs_complete
+            || !rust_inputs_complete
             || (rustc_args.crate_types == ["cdylib"]
                 && !dylint_cdylib_has_complete_output_identity(
                     rustc_args,
@@ -511,7 +519,7 @@ pub(super) async fn parse_single_compile_request(
             write_session_log(
                 &state.sessions,
                 sid,
-                "non-cacheable: native inputs or Dylint output identity is incomplete",
+                "non-cacheable: library inputs or Dylint output identity is incomplete",
             );
             return Err(run_compiler_direct(
                 state,

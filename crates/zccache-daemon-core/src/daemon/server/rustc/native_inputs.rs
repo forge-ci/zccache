@@ -8,25 +8,14 @@ use crate::depgraph::{ExternCrate, RustcParsedArgs, NATIVE_INPUT_PREFIX};
 mod tests;
 
 /// Keep search-path kinds: dependency/crate/framework directories cannot
-/// resolve a native archive. The general argument parser drops these kinds.
-fn native_search_dirs(raw: &[String], cwd: &Path) -> Vec<NormalizedPath> {
-    let mut dirs = Vec::new();
-    let mut args = raw.iter();
-    while let Some(arg) = args.next() {
-        let value = if arg == "-L" {
-            args.next().map(String::as_str)
-        } else {
-            arg.strip_prefix("-L").filter(|value| !value.is_empty())
-        };
-        let Some(value) = value else { continue };
-        let path = match value.split_once('=') {
-            Some(("native" | "all", path)) => path,
-            Some(_) => continue,
-            None => value,
-        };
-        dirs.push(link_path_to_absolute(Path::new(path), cwd).into());
-    }
-    dirs
+/// resolve a native archive. Preserve the parser's kind and search order.
+fn native_search_dirs(parsed: &RustcParsedArgs) -> Vec<NormalizedPath> {
+    parsed
+        .search_paths
+        .iter()
+        .filter(|path| path.kind == "native" || path.kind == "all")
+        .map(|path| path.path.clone())
+        .collect()
 }
 
 fn archive_name(spec: &str) -> Result<Option<(&str, bool)>, &'static str> {
@@ -123,7 +112,7 @@ fn resolve_target_archive(
 /// Reusing externs covers fast hits, request hits, depgraph hits and stores.
 fn inputs(
     parsed: &RustcParsedArgs,
-    raw: &[String],
+    _raw: &[String],
     cwd: &Path,
 ) -> Result<Vec<ExternCrate>, &'static str> {
     let libraries: Vec<_> = parsed
@@ -131,10 +120,7 @@ fn inputs(
         .iter()
         .filter_map(|flag| flag.strip_prefix("-l "))
         .collect();
-    if libraries.is_empty() && super::link_key::linked_product(parsed).is_none() {
-        return Ok(Vec::new());
-    }
-    let dirs = native_search_dirs(raw, cwd);
+    let dirs = native_search_dirs(parsed);
     if !dirs.is_empty()
         && parsed
             .target
@@ -160,10 +146,63 @@ fn inputs(
             )?,
         });
     }
-    if super::link_key::linked_product(parsed).is_some() {
-        add_transitive_archives(&dirs, cwd, &mut inputs)?;
-    }
+    // Source #[link(kind="static")] can bundle an archive in an rlib
+    // without any argv -l. Use the same native input owner for every product.
+    add_transitive_archives(&dirs, cwd, &mut inputs)?;
     Ok(inputs)
+}
+
+/// Native names can be arbitrary with source `#[link(..., +verbatim)]`.
+/// Only regular ar files contain their own input bytes. Thin archives,
+/// linker scripts, shared libraries and unknown formats require more inputs.
+pub(super) fn require_regular_archive(path: &Path) -> Result<(), &'static str> {
+    use std::io::Read;
+    let mut header = [0; 8];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|_| "unreadable native archive header")?;
+    if header != *b"!<arch>\n" {
+        return Err("native library format has unmodeled indirect inputs");
+    }
+    Ok(())
+}
+
+// cc-rs leaves relocatable objects alongside its archives. These also own
+// their bytes, unlike shared objects or linker scripts with the same suffix.
+fn require_self_contained_native(path: &Path) -> Result<(), &'static str> {
+    use std::io::Read;
+    let mut header = [0; 32];
+    let size = std::fs::File::open(path)
+        .and_then(|mut file| file.read(&mut header))
+        .map_err(|_| "unreadable native input header")?;
+    if size >= 8 && header[..8] == *b"!<arch>\n" {
+        return Ok(());
+    }
+    if size >= 20 {
+        let elf = header[..4] == *b"\x7fELF"
+            && match header[5] {
+                1 => u16::from_le_bytes([header[16], header[17]]) == 1,
+                2 => u16::from_be_bytes([header[16], header[17]]) == 1,
+                _ => false,
+            };
+        let coff = matches!(
+            u16::from_le_bytes([header[0], header[1]]),
+            0x14c | 0x8664 | 0xaa64
+        ) && header[16..18] == [0, 0];
+        let macho = match &header[..4] {
+            [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => {
+                u32::from_le_bytes(header[12..16].try_into().map_err(|_| "native header")?) == 1
+            }
+            [0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] => {
+                u32::from_be_bytes(header[12..16].try_into().map_err(|_| "native header")?) == 1
+            }
+            _ => false,
+        };
+        if elf || coff || macho {
+            return Ok(());
+        }
+    }
+    Err("native input format has unmodeled indirect inputs")
 }
 
 /// A plain `-l foo` or `static:-bundle=foo` can defer linking to a downstream
@@ -185,13 +224,6 @@ fn add_transitive_archives(
             let path = entry
                 .map_err(|_| "unreadable native directory entry")?
                 .path();
-            if !path.extension().is_some_and(|ext| {
-                ext.to_str().is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("a") || ext.eq_ignore_ascii_case("lib")
-                })
-            }) {
-                continue;
-            }
             if !path
                 .metadata()
                 .map_err(|_| "unreadable native archive")?
@@ -199,6 +231,7 @@ fn add_transitive_archives(
             {
                 continue;
             }
+            require_self_contained_native(&path)?;
             paths.push(NormalizedPath::new(path));
         }
         paths.sort();
@@ -242,8 +275,7 @@ pub(super) async fn add_inputs_async(
         .unknown_flags
         .iter()
         .any(|flag| flag.starts_with("-l "))
-        && (super::link_key::linked_product(parsed).is_none()
-            || native_search_dirs(raw, cwd).is_empty())
+        && native_search_dirs(parsed).is_empty()
     {
         return true;
     }

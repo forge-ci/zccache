@@ -24,6 +24,9 @@ use zccache::core::NormalizedPath;
 use zccache::daemon::DaemonServer;
 use zccache::protocol::{Request, Response};
 
+#[path = "library_search.rs"]
+mod library_search;
+
 #[cfg(unix)]
 type ClientConn = zccache::ipc::IpcConnection;
 #[cfg(windows)]

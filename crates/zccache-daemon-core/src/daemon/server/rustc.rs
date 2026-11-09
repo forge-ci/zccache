@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(super) mod library_inputs;
+mod library_metadata;
 mod link_key;
 mod native_inputs;
 

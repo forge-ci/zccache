@@ -1779,3 +1779,17 @@ a separate behavior decision and regression coverage.
 - [ ] Verify unchanged hits, changed misses, search ordering and refusal cases.
 - [ ] Run lint, Clippy, pinned local gate and pre-push review.
 - [ ] Push PR, enable auto merge and post PUSHED to board.
+
+## #1930 — sysroot and implicit library search inputs
+
+- [x] Real compiler RED/GREEN: same-path implicit extern and custom core replacement; search kind/order.
+- [x] Fail closed for custom sysroots and unresolved direct crate searches; retain explicit Cargo externs.
+- [x] Rebase onto merged #1945 (042b6f0c); reuse its native input owner.
+- [x] Verify transitive Rust, source-declared native, indirection and alias regressions with outer build caching disabled: 2 compiler + 54 daemon + 11 integration GREEN (local-test-lrHEF8.log).
+- [x] Record unchanged escaping source +verbatim native-path limitation in #2173.
+- [x] Run sanctioned eight-cell perf matrix; known #2170 provisioning failure waived, evidence retained in .perf-local/results/.
+- [x] Document parser ownership and native limits; format; isolated RED/GREEN; one clud-review reviewer CLEAN.
+- [x] Final standalone lint + workspace Clippy; scoped argfile correction format/Clippy and review CLEAN.
+- [x] Gate found an old unqualified -L argfile HIT expectation; correct admission coverage and audit 413 compiler + 528 depgraph + 26 Rust cache + 3 ignored argfile tests GREEN (aswA8C.log).
+- [ ] Complete pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
+- [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.

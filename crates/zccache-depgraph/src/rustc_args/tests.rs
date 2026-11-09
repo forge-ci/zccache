@@ -277,7 +277,13 @@ fn search_paths_excluded_from_cache_key() {
         &cwd(),
     );
     assert_eq!(parsed.search_paths.len(), 2);
-    // search_paths are stored but NOT in codegen_flags/cfgs/unknown_flags
+    assert_eq!(parsed.search_paths[0].kind, "dependency");
+    assert_eq!(
+        parsed.search_paths[0].path,
+        NormalizedPath::new("/target/deps")
+    );
+    assert_eq!(parsed.search_paths[1].kind, "native");
+    // Kinds/order drive file resolution, not blanket directory key material.
     assert!(parsed.codegen_flags.is_empty());
     assert!(parsed.unknown_flags.is_empty());
 }
