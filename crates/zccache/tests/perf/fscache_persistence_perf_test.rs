@@ -124,6 +124,15 @@ fn perf_metadata_load_enables_fast_path_after_restart() {
     // `get_cached_hash_if_stat_valid` has something to compare against.
     let file_path = dir.path().join("header.h");
     fs::write(&file_path, b"#pragma once\nint x = 1;\n").unwrap();
+    // Stat-only reuse is valid only after the write's timestamp tick (#1989).
+    // Use a stable old mtime instead of depending on runner scheduling.
+    kernal_api::platform::fs::set_file_mtime(
+        &file_path,
+        kernal_api::platform::fs::FileTime::from_system_time(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+        ),
+    )
+    .unwrap();
     let normalized = NormalizedPath::from(file_path.as_path());
 
     // Populate via the real lookup path so (mtime, size, hash) match
