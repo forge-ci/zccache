@@ -162,6 +162,12 @@ pub(super) fn inspect(
     if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
         return Err("Rust library changed while snapshotting metadata");
     }
+    if library
+        .extension()
+        .is_some_and(|extension| extension == "rlib")
+    {
+        super::native_inputs::require_regular_archive(&snapshot)?;
+    }
     let spec = super::super::compiler_spawn::rustc_library_metadata_probe_spawn(
         compiler.as_path(),
         &snapshot,

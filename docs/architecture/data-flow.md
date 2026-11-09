@@ -259,9 +259,16 @@ its own:
   Unsupported metadata output fails closed. Warm lookups do not spawn rustc
   again, and no extra IPC exchange is introduced.
 - **Native library inputs share the #1945 resolver.** Explicit `native=`
-  directories supply static/import archives, shared libraries and linker
-  stubs to content verification for every admitted product, including rlibs
+  directories supply regular static/import archives to content verification
+  for every admitted product, including rlibs
   whose source `#[link]` attribute bundles an archive without argv `-l`.
+  Archive detection uses file headers rather than suffixes, covering source
+  `+verbatim` names. Relocatable ELF, COFF and Mach-O objects left by cc-rs are also tracked.
+  Any other regular file format in those directories
+  refuses caching: thin archives, shared libraries, linker scripts and unknown auxiliary
+  files need input modeling beyond the regular archive bytes. Explicit thin
+  Rust archives are also refused during immutable metadata inspection.
+  An explicit alias cannot substitute for transitive dependency search.
   Requests with `-L` resolve membership before request-cache hits, so a new
   earlier candidate cannot hide behind freshness of previously known files.
   The ordinary fast-hit path remains available after resolution. Rust context

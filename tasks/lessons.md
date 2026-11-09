@@ -441,3 +441,7 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 
 - A sysroot can contain both libcore `.rmeta` and `.rlib`; corrupting only the archive does not prove rustc must fail. Replace both fixture entries and require a direct compiler error control before asserting the cache result.
 - Keep replacement libraries' mtimes old but distinct, so a library-selection regression does not accidentally depend on watcher timing or the racy-stat guard.
+
+- Unused explicit extern aliases do not satisfy rustc transitive lookup: resolve the metadata-named dependency through search paths even when another root has matching identity.
+- Native suffixes cannot establish self-contained inputs: source +verbatim accepts arbitrary names. Regular ar files contain their bytes; thin archives and linker scripts need refusal until their indirect inputs are modeled.
+- Disable outer Soldr caching with its public `soldr --no-cache cargo ...` option before trusting integration RED/GREEN; an internal propagated environment toggle is not a CLI override.

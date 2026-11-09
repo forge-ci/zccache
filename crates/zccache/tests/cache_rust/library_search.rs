@@ -481,6 +481,11 @@ fn native_object(h: &TestHarness, value: u32) {
 fn native_archive(h: &TestHarness, value: u32, directory: &str) {
     native_object(h, value);
     std::fs::create_dir_all(h.path(directory)).unwrap();
+    // cc-rs leaves relocatable objects beside the archive. They must not
+    // disable unchanged-build hits or be mistaken for shared-library input.
+    let object = std::fs::read(h.path("native.o")).unwrap();
+    let object_path = h.path(&format!("{directory}/native.o"));
+    std::fs::write(&object_path, object).unwrap();
     let output = format!("{directory}/libchoice.a");
     let mut command = std::process::Command::new("ar");
     command
@@ -492,6 +497,11 @@ fn native_archive(h: &TestHarness, value: u32, directory: &str) {
         .unwrap();
     assert_eq!(result.code, Some(0), "{}", result.stderr_text());
     use kernal_api::platform::fs::{set_file_mtime, FileTime};
+    set_file_mtime(
+        object_path.as_path(),
+        FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0),
+    )
+    .unwrap();
     set_file_mtime(
         h.path(&output).as_path(),
         FileTime::from_unix_time(1_600_000_000 + i64::from(value), 0),

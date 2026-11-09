@@ -8,7 +8,7 @@ use crate::depgraph::{ExternCrate, RustcParsedArgs, NATIVE_INPUT_PREFIX};
 mod tests;
 
 /// Keep search-path kinds: dependency/crate/framework directories cannot
-/// resolve a native archive. The general argument parser drops these kinds.
+/// resolve a native archive. Preserve the parser's kind and search order.
 fn native_search_dirs(parsed: &RustcParsedArgs) -> Vec<NormalizedPath> {
     parsed
         .search_paths
@@ -152,6 +152,59 @@ fn inputs(
     Ok(inputs)
 }
 
+/// Native names can be arbitrary with source `#[link(..., +verbatim)]`.
+/// Only regular ar files contain their own input bytes. Thin archives,
+/// linker scripts, shared libraries and unknown formats require more inputs.
+pub(super) fn require_regular_archive(path: &Path) -> Result<(), &'static str> {
+    use std::io::Read;
+    let mut header = [0; 8];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|_| "unreadable native archive header")?;
+    if header != *b"!<arch>\n" {
+        return Err("native library format has unmodeled indirect inputs");
+    }
+    Ok(())
+}
+
+// cc-rs leaves relocatable objects alongside its archives. These also own
+// their bytes, unlike shared objects or linker scripts with the same suffix.
+fn require_self_contained_native(path: &Path) -> Result<(), &'static str> {
+    use std::io::Read;
+    let mut header = [0; 32];
+    let size = std::fs::File::open(path)
+        .and_then(|mut file| file.read(&mut header))
+        .map_err(|_| "unreadable native input header")?;
+    if size >= 8 && header[..8] == *b"!<arch>\n" {
+        return Ok(());
+    }
+    if size >= 20 {
+        let elf = header[..4] == *b"\x7fELF"
+            && match header[5] {
+                1 => u16::from_le_bytes([header[16], header[17]]) == 1,
+                2 => u16::from_be_bytes([header[16], header[17]]) == 1,
+                _ => false,
+            };
+        let coff = matches!(
+            u16::from_le_bytes([header[0], header[1]]),
+            0x14c | 0x8664 | 0xaa64
+        ) && header[16..18] == [0, 0];
+        let macho = match &header[..4] {
+            [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => {
+                u32::from_le_bytes(header[12..16].try_into().map_err(|_| "native header")?) == 1
+            }
+            [0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] => {
+                u32::from_be_bytes(header[12..16].try_into().map_err(|_| "native header")?) == 1
+            }
+            _ => false,
+        };
+        if elf || coff || macho {
+            return Ok(());
+        }
+    }
+    Err("native input format has unmodeled indirect inputs")
+}
+
 /// A plain `-l foo` or `static:-bundle=foo` can defer linking to a downstream
 /// binary without changing the rlib bytes. Cargo forwards its native search
 /// directories, but not its `-l` flags, to that binary. Track every static
@@ -171,20 +224,6 @@ fn add_transitive_archives(
             let path = entry
                 .map_err(|_| "unreadable native directory entry")?
                 .path();
-            let library_extension = path.extension().is_some_and(|ext| {
-                ext.to_str().is_some_and(|ext| {
-                    ["a", "lib", "so", "dylib", "dll", "tbd"]
-                        .iter()
-                        .any(|known| ext.eq_ignore_ascii_case(known))
-                })
-            });
-            let versioned_shared = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(".so."));
-            if !library_extension && !versioned_shared {
-                continue;
-            }
             if !path
                 .metadata()
                 .map_err(|_| "unreadable native archive")?
@@ -192,6 +231,7 @@ fn add_transitive_archives(
             {
                 continue;
             }
+            require_self_contained_native(&path)?;
             paths.push(NormalizedPath::new(path));
         }
         paths.sort();

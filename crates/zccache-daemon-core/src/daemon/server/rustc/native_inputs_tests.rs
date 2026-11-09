@@ -15,7 +15,7 @@ fn archive(root: &Path, directory: &str, name: &str) -> NormalizedPath {
     let directory = root.join(directory);
     std::fs::create_dir_all(&directory).expect("directory");
     let path = directory.join(name);
-    std::fs::write(&path, b"archive content").expect("archive");
+    std::fs::write(&path, b"!<arch>\narchive content").expect("archive");
     path.into()
 }
 
@@ -114,8 +114,7 @@ fn native_products_hash_libraries_without_explicit_l_flags() {
     let temp = tempfile::tempdir().expect("fixture");
     let first = archive(temp.path(), "native", "libfoo.a");
     let second = archive(temp.path(), "native", "bar.LIB");
-    archive(temp.path(), "native", "not-an-archive.txt");
-    let shared = archive(temp.path(), "native", "libshared.so");
+    let verbatim = archive(temp.path(), "native", "choice.custom");
     for kind in ["bin", "staticlib", "rlib", "lib", "proc-macro"] {
         let (args, raw) = parsed(&["--crate-type", kind, "-Lnative=native"], temp.path());
         let paths: Vec<_> = inputs(&args, &raw, temp.path())
@@ -126,7 +125,7 @@ fn native_products_hash_libraries_without_explicit_l_flags() {
         assert_eq!(paths.len(), 3);
         assert!(paths.contains(&first));
         assert!(paths.contains(&second));
-        assert!(paths.contains(&shared));
+        assert!(paths.contains(&verbatim));
     }
     let (args, raw) = parsed(&["--crate-type=bin", "-Lnative=missing"], temp.path());
     assert!(inputs(&args, &raw, temp.path()).is_err());
@@ -178,4 +177,20 @@ fn native_archive_unknown_windows_abi_requires_matching_resolutions() {
         resolve_target_archive("foo", true, &dirs, temp.path(), Some("custom.json"), false)
             .is_err()
     );
+}
+
+#[test]
+fn native_search_refuses_indirect_and_unknown_formats() {
+    for (name, bytes) in [
+        ("libchoice.a", &b"!<thin>\nmember.o"[..]),
+        ("libchoice.so", &b"INPUT(/other/libchoice.so)"[..]),
+        ("choice.custom", &b"INPUT(/other/libchoice.so)"[..]),
+        ("helper.o", &b"\x7fELFobject"[..]),
+    ] {
+        let temp = tempfile::tempdir().expect("fixture");
+        let path = archive(temp.path(), "native", name);
+        std::fs::write(path, bytes).expect("unsupported format");
+        let (args, raw) = parsed(&["--crate-type=rlib", "-Lnative=native"], temp.path());
+        assert!(inputs(&args, &raw, temp.path()).is_err(), "{name}");
+    }
 }

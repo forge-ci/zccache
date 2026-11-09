@@ -121,25 +121,23 @@ fn inputs(
         // rustc's crate-number table includes the complete external crate
         // closure, not only the producer's direct --extern declarations.
         for dependency in &metadata.dependencies {
-            let explicit: Vec<_> = externs
-                .iter()
-                .zip(&roots)
-                .filter(|(_, root)| root.stem == dependency.stem && root.hash == dependency.hash)
-                .map(|(external, _)| external.path.clone())
-                .collect();
-            let paths = match explicit.len() {
-                0 => resolve(
-                    dependency,
-                    &search,
-                    compiler,
-                    compiler_hash,
-                    files,
-                    probe_dir,
-                )?,
-                1 => explicit,
-                _ => return Err("ambiguous explicit Rust dependency identity"),
-            };
+            // An unused explicit alias need not participate in rustc's crate
+            // lookup. Resolve each named dependency through its search paths.
+            let paths = resolve(
+                dependency,
+                &search,
+                compiler,
+                compiler_hash,
+                files,
+                probe_dir,
+            )?;
             for path in paths {
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "rlib")
+                {
+                    super::native_inputs::require_regular_archive(path.as_path())?;
+                }
                 if resolved
                     .iter()
                     .any(|input: &ExternCrate| input.path == path)
