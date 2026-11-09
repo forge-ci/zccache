@@ -453,3 +453,4 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Zero parsed paths cannot distinguish an explicitly empty search list from a broken probe. Preserve parser provenance through both memory and persisted discovery caches.
 - Test the header-edit contract with empty defaults: explicit `-isystem` and environment roots still need dependency hashes.
 - Daemon-core isolated unit tests require `--features test-support`; mtime fixtures use the platform `FileTime` conversion.
+- Inline pipeline tests also obey the host-platform boundary lint: use runtime `platform::host::is_windows()` and the product discovery API, rather than native cfg/imports.

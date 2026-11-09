@@ -564,9 +564,11 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn known_empty_discovery_is_not_degraded_and_survives_daemon_restart() {
+        if crate::platform::host::is_windows() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let compiler = tmp.path().join("fake-gcc");
         let probes = tmp.path().join("probes");
@@ -623,21 +625,35 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn failed_probe_cannot_confirm_empty_roots() {
-        use std::os::unix::process::ExitStatusExt;
-        let output = std::process::Output {
-            status: std::process::ExitStatus::from_raw(256),
-            stdout: Vec::new(),
-            stderr: b"#include <...> search starts here:\nEnd of search list.\n".to_vec(),
-        };
-        assert!(parse_verbose_discovery(&output).is_none());
+    #[tokio::test]
+    async fn failed_probe_cannot_confirm_empty_roots() {
+        if crate::platform::host::is_windows() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let compiler = tmp.path().join("fake-gcc");
+        std::fs::write(&compiler,
+            "#!/bin/sh\necho '#include <...> search starts here:' >&2\necho 'End of search list.' >&2\nexit 1\n").unwrap();
+        crate::platform::fs::permissions::make_executable(&compiler).unwrap();
+        let lineage = crate::daemon::lineage::Lineage::current(None, None);
+        let paths = discover_system_include_paths(
+            &NormalizedPath::new(compiler),
+            &lineage,
+            CompilePriority::Normal,
+            false,
+        )
+        .await;
+        assert!(
+            paths.is_none(),
+            "nonzero exit cannot confirm an empty root set"
+        );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn fast_probe_falls_back_to_confirmed_empty_verbose_list() {
+        if crate::platform::host::is_windows() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let compiler = tmp.path().join("fake-clang");
         let probes = tmp.path().join("probes");
