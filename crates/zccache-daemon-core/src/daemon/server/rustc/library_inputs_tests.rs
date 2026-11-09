@@ -5,6 +5,45 @@ use super::*;
 const ROOT: &str = "Crate info:\nname umbrella-123\nhash 123 stable_crate_id StableCrateId(7)\nproc_macro false\ntriple x86_64-unknown-linux-gnu\n=External Dependencies=\n1 choice-456 hash abc host_hash None kind Explicit public\n\n";
 
 #[test]
+fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
+    let compiler = crate::test_support::find_rustc().expect("real rustc required");
+    let fixture = tempfile::tempdir().unwrap();
+    let dir: NormalizedPath = fixture.path().join("deps").into();
+    std::fs::create_dir(&dir).unwrap();
+    let mut externs = Vec::new();
+    for index in 0..50 {
+        let path = dir.join(format!("libunit_{index}.rlib"));
+        // Own-byte archives deliberately have no compiler metadata. The cold
+        // inventory must not launch -Zls. The compiler validates on a miss.
+        std::fs::write(&path, format!("!<arch>\n{index}")).unwrap();
+        externs.push(ExternCrate {
+            name: format!("unit_{index}"),
+            path,
+        });
+    }
+    let before = library_metadata::probe_count();
+    let files = MetadataCache::new();
+    let resolved = inputs(
+        &externs,
+        &[dir],
+        &compiler,
+        crate::hash::hash_bytes(b"2174 cold inventory spawn count"),
+        &files,
+        fixture.path(),
+        None,
+    )
+    .unwrap();
+    for external in &externs {
+        assert!(resolved.iter().any(|input| input.path == external.path));
+    }
+    assert_eq!(
+        library_metadata::probe_count(),
+        before + 1,
+        "cold links need only the default target-directory probe, independent of extern count"
+    );
+}
+
+#[test]
 fn metadata_preserves_exact_crate_identities_and_fails_closed() {
     let metadata = library_metadata::parse(ROOT).unwrap();
     assert_eq!(metadata.stem, "umbrella-123");
@@ -76,9 +115,13 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     let first =
         library_metadata::inspect(&compiler, compiler_hash, &library, &files, fixture.path())
             .unwrap();
-    let directory =
-        library_metadata::target_directory(&compiler, compiler_hash, &first.triple, fixture.path())
-            .unwrap();
+    let directory = library_metadata::target_directory(
+        &compiler,
+        compiler_hash,
+        Some(&first.triple),
+        fixture.path(),
+    )
+    .unwrap();
     for _ in 0..20 {
         let again =
             library_metadata::inspect(&compiler, compiler_hash, &library, &files, fixture.path())
@@ -88,7 +131,7 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
             library_metadata::target_directory(
                 &compiler,
                 compiler_hash,
-                &first.triple,
+                Some(&first.triple),
                 fixture.path()
             )
             .unwrap(),
@@ -119,6 +162,7 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
             compiler_hash,
             &files,
             fixture.path(),
+            None,
         )
         .unwrap();
         best_ns = best_ns.min(start.elapsed().as_nanos());

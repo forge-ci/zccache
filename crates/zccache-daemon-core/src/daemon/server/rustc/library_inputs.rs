@@ -16,6 +16,7 @@ use super::library_metadata::{self, Dependency};
 use super::BuildContextResult;
 
 const INPUT_PREFIX: &str = "__zccache_rust_library__:";
+const INVENTORY_MIN_EXTERNS: usize = 8;
 
 fn candidates(stem: &str, dirs: &[NormalizedPath]) -> Result<Vec<NormalizedPath>, &'static str> {
     let mut selected = Vec::new();
@@ -102,6 +103,44 @@ fn inputs(
     compiler_hash: ContentHash,
     files: &MetadataCache,
     probe_dir: &Path,
+    target: Option<&str>,
+) -> Result<Vec<ExternCrate>, &'static str> {
+    // Amortize the default sysroot inventory only across a large fanout. Small
+    // graphs and explicit targets retain exact discovery and relocation reuse.
+    if externs.len() >= INVENTORY_MIN_EXTERNS && target.is_none() {
+        for external in externs {
+            if external
+                .path
+                .extension()
+                .is_some_and(|extension| extension == "rlib")
+            {
+                let hash = files
+                    .lookup_normalized(&external.path)
+                    .map_err(|_| "unreadable Rust library")?;
+                library_metadata::regular_archive(&external.path, hash, probe_dir)?;
+            }
+        }
+        if let Some(inputs) = super::library_inventory::inputs(
+            dirs,
+            compiler,
+            compiler_hash,
+            target,
+            files,
+            probe_dir,
+        )? {
+            return Ok(inputs);
+        }
+    }
+    named_inputs(externs, dirs, compiler, compiler_hash, files, probe_dir)
+}
+
+fn named_inputs(
+    externs: &[ExternCrate],
+    dirs: &[NormalizedPath],
+    compiler: &NormalizedPath,
+    compiler_hash: ContentHash,
+    files: &MetadataCache,
+    probe_dir: &Path,
 ) -> Result<Vec<ExternCrate>, &'static str> {
     let mut resolved = Vec::new();
     let roots = externs
@@ -132,7 +171,7 @@ fn inputs(
         let sysroot = library_metadata::target_directory(
             compiler,
             compiler_hash,
-            &metadata.triple,
+            Some(&metadata.triple),
             probe_dir,
         )?;
         let mut search = dirs.to_vec();
@@ -225,6 +264,7 @@ pub(in crate::daemon::server) async fn complete_context(
         .collect::<Vec<_>>();
     let compiler = super::rustc_identity_path(compilation, cwd);
     let compiler_hash = rustc_ctx.compiler_hash;
+    let target = rustc_args.target.clone();
     let state = Arc::clone(state);
     let resolved = kernal_api::async_engine::launch_blocking(move || {
         inputs(
@@ -234,6 +274,7 @@ pub(in crate::daemon::server) async fn complete_context(
             compiler_hash,
             state.cache_system.metadata(),
             state.depfile_tmpdir.as_path(),
+            target.as_deref(),
         )
     })
     .await;

@@ -128,6 +128,67 @@ async fn explicit_extern_content_and_search_path_reuse() {
 }
 
 #[tokio::test]
+async fn large_extern_inventory_rechecks_missing_transitive_library() {
+    let mut h = TestHarness::new().await.expect("real rustc required");
+    library(&mut h, "deps", 17).await;
+    write_old(
+        &h,
+        "umbrella.rs",
+        "extern crate choice; pub fn value() -> u32 { choice::VALUE }",
+    );
+    let (exit, _) = h
+        .compile_args(
+            &[
+                "--crate-name",
+                "umbrella",
+                "--crate-type",
+                "rlib",
+                "umbrella.rs",
+                "--extern=choice=deps/libchoice.rlib",
+                "-o",
+                "libumbrella.rlib",
+            ],
+            None,
+        )
+        .await;
+    assert_eq!(exit, 0);
+    age(h.path("libumbrella.rlib").as_path());
+    write_old(
+        &h,
+        "consumer.rs",
+        "extern crate umbrella; pub fn value() -> u32 { umbrella::value() }",
+    );
+    let mut flags = vec![
+        "--extern=umbrella=libumbrella.rlib".to_string(),
+        "-Ldependency=deps".to_string(),
+    ];
+    for index in 0..49 {
+        flags.push(format!("--extern=unused_{index}=libumbrella.rlib"));
+    }
+    let flags = flags.iter().map(String::as_str).collect::<Vec<_>>();
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(!cached);
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(cached, "unchanged large-extern inventories must hit");
+    let library = h.path("deps/libchoice.rlib");
+    let removed = h.path("removed.rlib");
+    std::fs::rename(&library, &removed).unwrap();
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_ne!(exit, 0, "the missing transitive input must reach rustc");
+    assert!(!cached);
+    std::fs::rename(&removed, &library).unwrap();
+    let (exit, cached, _) = consumer(&mut h, &flags).await;
+    assert_eq!(exit, 0);
+    assert!(
+        cached,
+        "restoring identical candidate bytes must restore the hit"
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn library_search_kind_and_order() {
     let mut h = TestHarness::new().await.expect("real rustc required");
     write_old(

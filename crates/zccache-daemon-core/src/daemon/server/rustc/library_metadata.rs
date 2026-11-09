@@ -1,6 +1,6 @@
 //! Bounded, cached inspection of rustc's own metadata; never changes compile argv.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -28,9 +28,10 @@ pub(super) struct Metadata {
 }
 
 type ParsedCache = HashMap<(ContentHash, ContentHash), Arc<Metadata>>;
-type DirectoryCache = HashMap<(NormalizedPath, ContentHash, String), NormalizedPath>;
+type DirectoryCache = HashMap<(NormalizedPath, ContentHash, Option<String>), NormalizedPath>;
 static PARSED: OnceLock<State<ParsedCache>> = OnceLock::new();
 static DIRECTORIES: OnceLock<State<DirectoryCache>> = OnceLock::new();
+static REGULAR_ARCHIVES: OnceLock<State<HashSet<ContentHash>>> = OnceLock::new();
 
 #[cfg(test)]
 std::thread_local! { static PROBE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
@@ -150,6 +151,29 @@ fn snapshot(
     Ok((snapshot_dir, snapshot))
 }
 
+/// The format verdict belongs to the verified bytes, never a path/mtime alone.
+pub(super) fn regular_archive(
+    library: &NormalizedPath,
+    digest: ContentHash,
+    probe_dir: &Path,
+) -> Result<(), &'static str> {
+    let cache = REGULAR_ARCHIVES.get_or_init(|| State::new(HashSet::new()));
+    if cache.with_blocking_for(STATE_WAIT, |cache| cache.contains(&digest)) {
+        return Ok(());
+    }
+    let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
+    super::native_inputs::require_regular_archive(&snapshot)?;
+    cache.with_blocking_for(STATE_WAIT, |cache| {
+        if cache.len() >= MAX_ENTRIES {
+            if let Some(old) = cache.iter().next().copied() {
+                cache.remove(&old);
+            }
+        }
+        cache.insert(digest);
+    });
+    Ok(())
+}
+
 pub(super) fn inspect(
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
@@ -206,11 +230,11 @@ pub(super) fn inspect(
 pub(super) fn target_directory(
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
-    triple: &str,
+    triple: Option<&str>,
     probe_dir: &Path,
 ) -> Result<NormalizedPath, &'static str> {
     let cache = DIRECTORIES.get_or_init(|| State::new(HashMap::new()));
-    let key = (compiler.clone(), compiler_hash, triple.to_string());
+    let key = (compiler.clone(), compiler_hash, triple.map(str::to_owned));
     if let Some(path) = cache.with_blocking_for(STATE_WAIT, |cache| cache.get(&key).cloned()) {
         return Ok(path);
     }
