@@ -8,6 +8,20 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 use zccache_core::NormalizedPath;
 
+// No filesystem-type probe on the hot path. Windows includes FAT's two-second
+// ticks; Linux/macOS use 10 ms conservatively for ext4/APFS. Hash-start time,
+// rather than completion time, keeps a long read from aging out a racy entry.
+#[cfg(windows)]
+pub(crate) const HASH_TIMESTAMP_GRANULARITY: Duration = Duration::from_secs(2);
+#[cfg(not(windows))]
+pub(crate) const HASH_TIMESTAMP_GRANULARITY: Duration = Duration::from_millis(10);
+
+fn hash_timestamp_is_racy(mtime: SystemTime, hashed_at: Option<SystemTime>) -> bool {
+    hashed_at
+        .and_then(|time| time.checked_sub(HASH_TIMESTAMP_GRANULARITY))
+        .is_none_or(|floor| mtime >= floor)
+}
+
 // ── mtime drift tolerance (issue #469) ──────────────────────────────────────
 
 /// Default tolerated mtime drift, in nanoseconds, when comparing a cached
@@ -101,6 +115,8 @@ pub struct FileMetadata {
     pub confidence: Confidence,
     /// When this entry was last verified via stat.
     pub last_verified: Instant,
+    /// Wall-clock start of the content-hash read; None when not hash-verified.
+    pub hashed_at: Option<SystemTime>,
     /// Cached content hash (blake3, 32 bytes), if computed.
     pub content_hash: Option<[u8; 32]>,
     /// Unix `(ctime, inode)`; detects same-size, restored-mtime edits (#1943).
@@ -158,6 +174,12 @@ pub struct MetadataCache {
 }
 
 impl FileMetadata {
+    /// Stat equality cannot prove freshness inside the hash's timestamp tick.
+    pub(crate) fn hash_is_racy(&self, mtime: SystemTime) -> bool {
+        hash_timestamp_is_racy(self.mtime, self.hashed_at)
+            || hash_timestamp_is_racy(mtime, self.hashed_at)
+    }
+
     /// Whether two stats describe the same file state: `(mtime, size)` plus the
     /// unforgeable `(ctime, inode)` identity (#1943).
     #[must_use]
@@ -361,7 +383,7 @@ impl MetadataCache {
         // Copy the entry out under a short read guard so the stat below runs
         // with no shard guard alive — same lock discipline as `rescan_all`
         // and `fingerprint/verify.rs` (#1908, the #724 class).
-        let (recorded_mtime, recorded_size, recorded_identity, hash) = {
+        let (recorded_mtime, recorded_size, recorded_identity, hashed_at, hash) = {
             let entry = self.entries.get(path)?;
             match entry.confidence {
                 Confidence::High | Confidence::Medium => {}
@@ -370,13 +392,24 @@ impl MetadataCache {
             let hash = entry
                 .content_hash
                 .map(zccache_hash::ContentHash::from_bytes)?;
-            (entry.mtime, entry.size, entry.identity, hash)
+            (
+                entry.mtime,
+                entry.size,
+                entry.identity,
+                entry.hashed_at,
+                hash,
+            )
         };
 
         // One stat syscall to verify mtime + size still match.
         let fs_meta = std::fs::metadata(path).ok()?;
         let mtime = fs_meta.modified().ok()?;
         let size = fs_meta.len();
+        if hash_timestamp_is_racy(recorded_mtime, hashed_at)
+            || hash_timestamp_is_racy(mtime, hashed_at)
+        {
+            return None;
+        }
         if mtimes_match(recorded_mtime, mtime)
             && recorded_size == size
             && recorded_identity == crate::identity::FileIdentity::from_metadata(&fs_meta)

@@ -60,6 +60,7 @@ fn populate(cache: &MetadataCache, count: usize) {
                 size: 4096 + i as u64,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: None,
                 identity: Default::default(),
                 // 32-byte hash, deterministic per index so the bytes
                 // round-trip predictably and we can spot decode bugs.

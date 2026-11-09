@@ -146,5 +146,6 @@ fn synthetic_metadata(hash: [u8; 32]) -> crate::fscache::FileMetadata {
         identity: Default::default(),
         confidence: crate::fscache::Confidence::High,
         last_verified: std::time::Instant::now(),
+        hashed_at: None,
     }
 }

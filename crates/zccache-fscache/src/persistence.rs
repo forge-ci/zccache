@@ -34,7 +34,7 @@
 //! ## Forward/backward compatibility
 //!
 //! The on-disk format embeds a `version: u32` (currently
-//! [`FORMAT_VERSION`] = `2`; v2 added the `(ctime, inode)` identity, #1943). On a version mismatch
+//! [`FORMAT_VERSION`] = `3`; v3 added hash-start time, #1989). On a version mismatch
 //! [`MetadataCache::load_from_disk`] returns `Err`; callers (the daemon)
 //! treat that as "start with an empty cache" and log a warning. Old
 //! daemons reading a future snapshot will silently fall back to empty;
@@ -62,7 +62,7 @@ use zccache_core::NormalizedPath;
 /// `PersistedEntry` changes in a way that older daemons cannot read.
 /// Mismatches are handled by [`MetadataCache::load_from_disk`] returning
 /// `Err`; the caller (daemon) treats that as "start empty".
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Persisted form of one [`FileMetadata`] entry.
 ///
@@ -74,6 +74,7 @@ pub const FORMAT_VERSION: u32 = 2;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedEntry {
     mtime: SystemTime,
+    hashed_at: Option<SystemTime>,
     size: u64,
     identity: crate::identity::FileIdentity,
     content_hash: [u8; 32],
@@ -124,6 +125,7 @@ impl MetadataCache {
                         key,
                         PersistedEntry {
                             mtime: value.mtime,
+                            hashed_at: value.hashed_at,
                             size: value.size,
                             identity: value.identity,
                             content_hash,
@@ -237,6 +239,7 @@ impl MetadataCache {
                     identity: entry.identity,
                     confidence: Confidence::Medium,
                     last_verified: now,
+                    hashed_at: entry.hashed_at,
                     content_hash: Some(entry.content_hash),
                 },
             );
@@ -311,6 +314,7 @@ mod tests {
                     size: 100 + i as u64,
                     confidence: Confidence::High,
                     last_verified: Instant::now(),
+                    hashed_at: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2_000)),
                     content_hash: Some([i as u8; 32]),
                     identity: Default::default(),
                 },
@@ -336,6 +340,7 @@ mod tests {
             let entry = loaded.get(&key).unwrap();
             assert_eq!(entry.size, 100 + i as u64);
             assert_eq!(entry.content_hash, Some([i as u8; 32]));
+            assert_eq!(entry.hashed_at, cache.get(&key).unwrap().hashed_at);
             // Loaded entries land at Medium confidence, per safety-net contract.
             assert_eq!(entry.confidence, Confidence::Medium);
         }
@@ -376,6 +381,7 @@ mod tests {
                 size: 1,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: None,
                 content_hash: Some([7u8; 32]),
                 identity: Default::default(),
             },
@@ -387,6 +393,7 @@ mod tests {
                 size: 2,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: None,
                 content_hash: None,
                 identity: Default::default(),
             },

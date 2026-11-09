@@ -3,6 +3,23 @@ use kernal_api::platform::fs::{set_file_mtime, FileTime};
 use std::collections::HashSet;
 use std::fs;
 
+#[test]
+fn racy_hash_timestamp_boundaries_fail_closed() {
+    let hashed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    let floor = hashed_at - HASH_TIMESTAMP_GRANULARITY;
+    assert!(hash_timestamp_is_racy(floor, Some(hashed_at)));
+    assert!(hash_timestamp_is_racy(hashed_at, Some(hashed_at)));
+    assert!(hash_timestamp_is_racy(
+        hashed_at + Duration::from_secs(10),
+        Some(hashed_at)
+    ));
+    assert!(!hash_timestamp_is_racy(
+        floor - Duration::from_millis(1),
+        Some(hashed_at)
+    ));
+    assert!(hash_timestamp_is_racy(floor, None));
+}
+
 // ── mtime tolerance (issue #469) ─────────────────────────────────────
 
 fn ts(secs: u64, nanos: u32) -> SystemTime {
@@ -88,6 +105,7 @@ fn stat_fast_path_rejects_same_size_fine_grained_mtime_change() {
             size: 4,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some([42; 32]),
             identity: Default::default(),
         },
@@ -117,6 +135,7 @@ fn stat_fast_path_accepts_archive_truncated_mtime() {
             size: 4,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some([42; 32]),
             identity: crate::identity::FileIdentity::from_metadata(
                 &std::fs::metadata(&file).unwrap(),
@@ -136,6 +155,7 @@ fn insert_and_get() {
         size: 100,
         confidence: Confidence::High,
         last_verified: Instant::now(),
+        hashed_at: Some(SystemTime::now()),
         content_hash: None,
         identity: Default::default(),
     };
@@ -159,6 +179,7 @@ fn insert_overwrites_existing() {
         size: 100,
         confidence: Confidence::High,
         last_verified: Instant::now(),
+        hashed_at: Some(SystemTime::now()),
         content_hash: None,
         identity: Default::default(),
     };
@@ -170,6 +191,7 @@ fn insert_overwrites_existing() {
         size: 999,
         confidence: Confidence::Medium,
         last_verified: Instant::now(),
+        hashed_at: Some(SystemTime::now()),
         content_hash: None,
         identity: Default::default(),
     };
@@ -191,6 +213,7 @@ fn downgrade_single_path() {
                 size: 10,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: Some(SystemTime::now()),
                 content_hash: None,
                 identity: Default::default(),
             },
@@ -219,6 +242,7 @@ fn remove_entry() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -249,6 +273,7 @@ fn is_empty_and_len() {
             size: 1,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -269,6 +294,7 @@ fn get_cached_hash_high_confidence() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some(hash_bytes),
             identity: Default::default(),
         },
@@ -291,6 +317,7 @@ fn get_cached_hash_medium_confidence() {
             size: 10,
             confidence: Confidence::Medium,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some(hash_bytes),
             identity: Default::default(),
         },
@@ -311,6 +338,7 @@ fn get_cached_hash_low_confidence_returns_none() {
             size: 10,
             confidence: Confidence::Low,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some([1u8; 32]),
             identity: Default::default(),
         },
@@ -330,6 +358,7 @@ fn get_cached_hash_no_hash_returns_none() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -357,6 +386,7 @@ fn clear_removes_all_entries() {
                 size: i as u64,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: Some(SystemTime::now()),
                 content_hash: None,
                 identity: Default::default(),
             },
@@ -378,6 +408,7 @@ fn trim_removes_old_entries() {
             size: 10,
             confidence: Confidence::High,
             last_verified: old,
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -389,6 +420,7 @@ fn trim_removes_old_entries() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -411,6 +443,7 @@ fn trim_keeps_recent_entries() {
                 size: 10,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: Some(SystemTime::now()),
                 content_hash: None,
                 identity: Default::default(),
             },
@@ -433,6 +466,7 @@ fn evict_oldest_removes_n() {
                 size: 10,
                 confidence: Confidence::High,
                 last_verified: base + Duration::from_secs(i * 10),
+                hashed_at: Some(SystemTime::now()),
                 content_hash: None,
                 identity: Default::default(),
             },
@@ -455,6 +489,7 @@ fn eviction_candidate_preserves_entry_refreshed_after_read_pass() {
             size: 10,
             confidence: Confidence::High,
             last_verified: selected_at,
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -471,6 +506,7 @@ fn eviction_candidate_preserves_entry_refreshed_after_read_pass() {
             size: 10,
             confidence: Confidence::High,
             last_verified: refreshed_at,
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -492,6 +528,7 @@ fn nonblocking_eviction_revalidates_candidate_timestamp() {
             size: 10,
             confidence: Confidence::High,
             last_verified: selected_at,
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -505,6 +542,7 @@ fn nonblocking_eviction_revalidates_candidate_timestamp() {
             size: 10,
             confidence: Confidence::High,
             last_verified: selected_at + Duration::from_secs(1),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -525,6 +563,7 @@ fn nonblocking_eviction_reports_busy_candidate_for_forced_retry() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -553,6 +592,7 @@ fn evict_oldest_zero_noop() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -572,6 +612,7 @@ fn evict_oldest_exceeds_count() {
             size: 10,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         },
@@ -595,6 +636,7 @@ fn paths_returns_all() {
                 size: 10,
                 confidence: Confidence::High,
                 last_verified: Instant::now(),
+                hashed_at: Some(SystemTime::now()),
                 content_hash: None,
                 identity: Default::default(),
             },
@@ -627,6 +669,7 @@ fn downgrade_all_works() {
             size: 100,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: None,
             identity: Default::default(),
         };
@@ -650,6 +693,7 @@ mod dirty_flag {
             size: 1,
             confidence: Confidence::High,
             last_verified: Instant::now(),
+            hashed_at: Some(SystemTime::now()),
             content_hash: Some([0x42; 32]),
             identity: Default::default(),
         }

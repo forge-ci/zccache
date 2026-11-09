@@ -151,6 +151,7 @@ async fn shutdown_persists_every_cache_when_dirty() {
             identity: Default::default(),
             confidence: crate::fscache::Confidence::High,
             last_verified: std::time::Instant::now(),
+            hashed_at: None,
         },
     );
 
