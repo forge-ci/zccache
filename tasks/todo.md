@@ -1775,7 +1775,7 @@ a separate behavior decision and regression coverage.
 # #1945 bundled native archive identity
 
 - [ ] Reproduce stale rlib with a real two-crate Cargo workspace.
-- [ ] Resolve native archives fail closed and reuse extern content hashing.
+- [x] Resolve native archives fail closed and reuse extern content hashing.
 - [ ] Verify unchanged hits, changed misses, search ordering and refusal cases.
 - [ ] Run lint, Clippy, pinned local gate and pre-push review.
 - [ ] Push PR, enable auto merge and post PUSHED to board.

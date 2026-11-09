@@ -350,10 +350,11 @@ pub(super) async fn discover_request_system_includes(
 
 pub(super) struct ParsedSingleRequest {
     pub(super) compilation: crate::compiler::CacheableCompilation,
+    pub(super) build_result: BuildContextResult,
+    pub(super) context_start: std::time::Instant,
     pub(super) cwd_path: NormalizedPath,
     pub(super) source_path: NormalizedPath,
     pub(super) output_path: NormalizedPath,
-    pub(super) system_includes: Vec<NormalizedPath>,
     pub(super) client_env: Option<Vec<(String, String)>>,
     pub(super) stdin: Vec<u8>,
     pub(super) parse_args_ns: u64,
@@ -475,22 +476,33 @@ pub(super) async fn parse_single_compile_request(
     } else {
         cwd_path.join(&compilation.output_file)
     };
-    if compilation.family == crate::compiler::CompilerFamily::Rustc {
-        let rustc_args = crate::depgraph::parse_rustc_args(
-            crate::compiler::dylint_inner_rustc_args(compiler_str, effective_args)
-                .ok()
-                .flatten()
-                .map_or(effective_args, |(_, inner)| inner),
-            cwd,
-        );
-        if rustc_args.crate_types == ["cdylib"]
-            && !dylint_cdylib_has_complete_output_identity(
-                &rustc_args,
-                output_path.as_path(),
-                cwd,
-                client_env.as_deref(),
-            )
+    let context_start = std::time::Instant::now();
+    let build_result = build_compile_context_async(
+        &compilation,
+        cwd,
+        &system_includes,
+        client_env.as_deref().unwrap_or(&[]),
+        &state.compiler_hash_cache,
+    )
+    .await;
+    if let BuildContextResult::Rustc {
+        rustc_args,
+        native_inputs_complete,
+        ..
+    } = &build_result
+    {
+        if !native_inputs_complete
+            || (rustc_args.crate_types == ["cdylib"]
+                && !dylint_cdylib_has_complete_output_identity(
+                    rustc_args,
+                    output_path.as_path(),
+                    cwd,
+                    client_env.as_deref(),
+                ))
         {
+            crate::daemon::compile_journal::record_miss_reason(
+                crate::daemon::compile_journal::miss_reason::UNCACHEABLE_INPUT,
+            );
             state.stats.record_non_cacheable();
             test_harness_admission::observe_bypass();
             record_session_stat(&state.sessions, sid, |tracker| {
@@ -499,7 +511,7 @@ pub(super) async fn parse_single_compile_request(
             write_session_log(
                 &state.sessions,
                 sid,
-                "non-cacheable: Dylint cdylib output identity is incomplete",
+                "non-cacheable: native inputs or Dylint output identity is incomplete",
             );
             return Err(run_compiler_direct(
                 state,
@@ -518,10 +530,11 @@ pub(super) async fn parse_single_compile_request(
 
     Ok(ParsedSingleRequest {
         compilation,
+        build_result,
+        context_start,
         cwd_path,
         source_path,
         output_path,
-        system_includes,
         client_env,
         stdin,
         parse_args_ns,

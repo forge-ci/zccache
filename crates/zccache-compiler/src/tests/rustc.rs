@@ -5,6 +5,28 @@ use super::super::{detect_family, parse_invocation, CompilerFamily, ParsedInvoca
 use super::args;
 use zccache_core::{config::CACHE_TEST_BINS_ENV, NormalizedPath};
 
+#[test]
+fn native_library_split_and_joined_spellings_are_cacheable() {
+    for library in ["foo", "static=foo"] {
+        for flags in [
+            vec!["-l".into(), library.into()],
+            vec![format!("-l{library}")],
+        ] {
+            let mut argv = args(&["--crate-type", "rlib", "lib.rs"]);
+            argv.extend(flags);
+            let ParsedInvocation::Cacheable(compilation) = parse_invocation("rustc", &argv) else {
+                panic!("native library flag must be admitted: {argv:?}");
+            };
+            assert_eq!(&*compilation.original_args, &argv);
+            argv.push("stray".into());
+            assert!(matches!(
+                parse_invocation("rustc", &argv),
+                ParsedInvocation::NonCacheable { .. }
+            ));
+        }
+    }
+}
+
 // ─── Rustc detection tests ────────────────────────────────────────────
 
 #[test]

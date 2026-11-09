@@ -11,6 +11,7 @@ use super::{CompileContext, RustcCompileContext};
 use crate::search_paths::IncludeSearchPaths;
 
 mod cc;
+mod native_inputs;
 mod rustc;
 mod rustc_env;
 

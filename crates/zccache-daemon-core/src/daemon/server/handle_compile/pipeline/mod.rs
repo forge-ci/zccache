@@ -132,10 +132,11 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
 
     let ParsedSingleRequest {
         compilation,
+        build_result,
+        context_start: t1,
         cwd_path,
         source_path,
         output_path,
-        system_includes,
         client_env,
         stdin,
         parse_args_ns,
@@ -163,16 +164,6 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
     // ── Phase: build context + register ──────────────────────────────
     wait_for_startup_depgraph_load(state, &sid).await;
 
-    let t1 = std::time::Instant::now();
-    let env_slice = client_env.as_deref().unwrap_or(&[]);
-    let build_result = build_compile_context_async(
-        &compilation,
-        &cwd_path,
-        &system_includes,
-        env_slice,
-        &state.compiler_hash_cache,
-    )
-    .await;
     let native_cpu_family = match &build_result {
         BuildContextResult::Cc { ctx, .. } => ctx
             .flags
@@ -268,6 +259,7 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
             rustc_ctx,
             compat_ctx,
             rustc_args,
+            ..
         } => {
             let remap_gate =
                 rust_remap_gate(&rustc_args.remap_path_prefixes, worktree_root.as_ref());
