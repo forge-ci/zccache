@@ -1797,6 +1797,6 @@ a separate behavior decision and regression coverage.
 ## #1791 Windows write seal
 
 - [x] Read handoffs and issue discussion; verify kernal-api 0.1.33 facade.
-- [ ] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
-- [ ] Route Windows seal/unseal/detection through kernal-api; document permission model.
+- [x] Require wrapper-less rebuild success on Windows and cover legacy seal upgrade.
+- [x] Route Windows seal/unseal/detection through kernal-api; document permission model.
 - [ ] Run focused tests, review, rebase and final local gate; push ci-full PR with auto-merge.
