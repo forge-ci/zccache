@@ -1789,5 +1789,7 @@ a separate behavior decision and regression coverage.
 - [x] Record unchanged escaping source +verbatim native-path limitation in #2173.
 - [x] Run sanctioned eight-cell perf matrix; known #2170 provisioning failure waived, evidence retained in .perf-local/results/.
 - [x] Document parser ownership and native limits; format; isolated RED/GREEN; one clud-review reviewer CLEAN.
-- [ ] Complete final lint/Clippy and pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
+- [x] Final standalone lint + workspace Clippy; scoped argfile correction format/Clippy and review CLEAN.
+- [x] Gate found an old unqualified -L argfile HIT expectation; correct admission coverage and audit 413 compiler + 528 depgraph + 26 Rust cache + 3 ignored argfile tests GREEN (aswA8C.log).
+- [ ] Complete pinned local gate on frozen head; Local-Gate/Ci-Attestation trailers record the final receipt.
 - [ ] Push, create closing PR, enable auto-merge, post PUSHED; leave queue to chaperone.

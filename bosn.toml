@@ -182,3 +182,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tes
 [task.native-archive-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features zccache-bin --test cache_rust native_archive:: -- --ignored --test-threads=1"
+
+[task.sysroot-argfile-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-compiler --lib --locked && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-depgraph --lib --locked && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache --features test-support --test cache_rust --locked -- --test-threads=1 && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test --locked -- --ignored --test-threads=1"

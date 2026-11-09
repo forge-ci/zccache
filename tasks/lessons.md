@@ -445,3 +445,5 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Unused explicit extern aliases do not satisfy rustc transitive lookup: resolve the metadata-named dependency through search paths even when another root has matching identity.
 - Native suffixes cannot establish self-contained inputs: source +verbatim accepts arbitrary names. Regular ar files contain their bytes; thin archives and linker scripts need refusal until their indirect inputs are modeled.
 - Disable outer Soldr caching with its public `soldr --no-cache cargo ...` option before trusting integration RED/GREEN; an internal propagated environment toggle is not a CLI override.
+
+- #1930 final-gate audit: response-file tests can encode library-search admission expectations. Keep literal-@ execution coverage, but require unqualified -L to bypass and qualified dependency= searches to retain hits. Run the CI filter with --ignored when reproducing these regressions.
