@@ -33,10 +33,17 @@ async fn old_exec_persist_completion_preserves_new_same_key_instance() {
     let endpoint = crate::ipc::unique_test_endpoint();
     let cache_dir: NormalizedPath = temp.path().join("cache").into();
     let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
-    let blocked = Arc::clone(&server.state.persist_semaphore)
-        .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
-        .await
-        .unwrap();
+    let permit_count = server.state.persist_semaphore.available_permits();
+    let mut blocked = Vec::with_capacity(permit_count);
+    for _ in 0..permit_count {
+        blocked.push(
+            server
+                .state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let artifact = |value: &[u8]| ArtifactData {
         outputs: vec![ArtifactOutput {
             name: "result.bin".to_string(),
@@ -144,10 +151,17 @@ async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
     let endpoint = crate::ipc::unique_test_endpoint();
     let cache_dir: NormalizedPath = temp.path().join("cache").into();
     let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
-    let blocked_persist = Arc::clone(&server.state.persist_semaphore)
-        .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
-        .await
-        .unwrap();
+    let permit_count = server.state.persist_semaphore.available_permits();
+    let mut blocked_persist = Vec::with_capacity(permit_count);
+    for _ in 0..permit_count {
+        blocked_persist.push(
+            server
+                .state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let bytes = Arc::new(b"durable exec payload".to_vec());
     let weak = Arc::downgrade(&bytes);
     let artifact = ArtifactData {
