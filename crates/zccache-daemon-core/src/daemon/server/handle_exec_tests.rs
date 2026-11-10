@@ -60,7 +60,14 @@ async fn old_exec_persist_completion_preserves_new_same_key_instance() {
     let task_key = key.clone();
     let old = artifact(b"old");
     let publisher = tokio::spawn(async move {
-        store_exec_artifact_with_handoff_gate(&task_state, task_key, old, task_gate).await
+        store_exec_artifact_with_handoff_gate(
+            &task_state,
+            task_key,
+            old,
+            task_gate,
+            crate::core::wait::PROBE,
+        )
+        .await
     });
     tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_acquired())
         .await
@@ -114,7 +121,14 @@ async fn failed_exec_persistence_retains_a_correct_resident_hit() {
     let task_gate = Arc::clone(&gate);
     let task_key = key.clone();
     let publisher = tokio::spawn(async move {
-        store_exec_artifact_with_handoff_gate(&task_state, task_key, artifact, task_gate).await
+        store_exec_artifact_with_handoff_gate(
+            &task_state,
+            task_key,
+            artifact,
+            task_gate,
+            crate::core::wait::PROBE,
+        )
+        .await
     });
     tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_acquired())
         .await
@@ -184,6 +198,7 @@ async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
             publisher_key,
             artifact,
             publisher_gate,
+            crate::core::wait::PROBE,
         )
         .await
     });

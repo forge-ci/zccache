@@ -912,33 +912,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_cache_hit_delivery_path_uses_the_daemon_shared_materialization_lease() {
-        let consumers = [
-            (
-                "single compile",
-                include_str!("handle_compile/cached_hit.rs"),
-            ),
-            (
-                "multi compile",
-                include_str!("handle_compile_multi_lookup.rs"),
-            ),
-            ("exact exec", include_str!("handle_exec.rs")),
-            (
-                "link and directory bundle",
-                include_str!("link_cache_hit.rs"),
-            ),
-        ];
-        for (name, source) in consumers {
-            assert!(
-                source.contains("ensure_payloads_for_materialization_for_state("),
-                "{name} bypasses the typed staged materialization lease"
-            );
-        }
-        assert!(
-            include_str!("link_cache_hit.rs")
-                .contains("materialize_directory_payload(&payloads[0], &output_path)"),
-            "directory-bundle unpacking must consume payloads from the leased resolver"
-        );
-    }
 }

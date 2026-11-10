@@ -23,7 +23,7 @@ fn demotion_releases_bytes_after_existing_hit_finishes_and_preserves_access() {
     let provisional = ProvisionalArtifact::new(&data, vec![0o755]);
     let map = DashMap::new();
     let key = "7".repeat(64);
-    provisional.publish(&map, key.clone());
+    let _retired = provisional.publish(&map, key.clone());
     let hit = map.get(&key).unwrap().clone();
     let now = Instant::now();
     hit.record_access(now);
@@ -59,7 +59,7 @@ fn demotion_releases_bytes_after_existing_hit_finishes_and_preserves_access() {
 fn old_completion_does_not_resurrect_a_removed_entry() {
     let provisional = ProvisionalArtifact::new(&artifact(Arc::new(vec![1])), Vec::new());
     let map = DashMap::new();
-    provisional.publish(&map, "key".to_string());
+    let _retired = provisional.publish(&map, "key".to_string());
     map.remove("key");
     provisional.demote_to_durable(&map, "key");
     assert!(map.is_empty());
@@ -136,7 +136,7 @@ fn every_cache_hit_delivery_path_uses_the_daemon_shared_materialization_lease() 
             "single compile",
             include_str!("handle_compile/cached_hit.rs"),
         ),
-        ("multi compile", include_str!("handle_compile_multi.rs")),
+        ("multi compile", include_str!("handle_compile_multi_lookup.rs")),
         ("exact exec", include_str!("handle_exec.rs")),
         (
             "link and directory bundle",

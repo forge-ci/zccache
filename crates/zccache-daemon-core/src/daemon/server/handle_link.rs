@@ -860,7 +860,7 @@ pub(super) async fn handle_link_ephemeral(
                     }
                 } else {
                     let sem = Arc::clone(&state.persist_semaphore);
-                    cached.publish(&state.artifacts, key_hex.clone());
+                    let _retired = cached.publish(&state.artifacts, key_hex.clone());
                     let published = cached.clone();
                     let persist_state = Arc::clone(state);
                     let publication_guard_for_task = publication_guard

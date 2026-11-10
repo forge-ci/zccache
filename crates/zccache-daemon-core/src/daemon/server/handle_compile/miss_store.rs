@@ -717,13 +717,13 @@ fn store_single_output(
             enqueue_index_insert(state, key_hex.clone(), persist_meta.clone());
         }
         stats.persist_enqueue_ns = t_persist_enqueue.elapsed().as_nanos() as u64;
-        if written {
+        let _retired = if written {
             state
                 .artifacts
-                .insert(artifact_key_hex.to_string(), cached.durable());
+                .insert(artifact_key_hex.to_string(), cached.durable())
         } else {
-            cached.publish(&state.artifacts, artifact_key_hex.to_string());
-        }
+            cached.publish(&state.artifacts, artifact_key_hex.to_string())
+        };
         let latency_ns = compile_start.elapsed().as_nanos() as u64;
         state.stats.record_miss(latency_ns, artifact_bytes);
         let src = source_path.clone();
@@ -745,7 +745,7 @@ fn store_single_output(
     // Publish the in-process payload before handing persistence to the
     // detached task. A failed persist retains its owned bytes for correct
     // in-process hits, while the typed outcome prevents durable index publication.
-    cached.publish(&state.artifacts, artifact_key_hex.to_string());
+    let _retired = cached.publish(&state.artifacts, artifact_key_hex.to_string());
     let _pending = pending_writes::register(&state.pending_cache_writes, artifact_key_hex);
     let sem = Arc::clone(&state.persist_semaphore);
     let state_ref = Arc::clone(state_arc);

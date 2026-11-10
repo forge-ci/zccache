@@ -17,14 +17,17 @@ pub struct TestMaterializationLease<'a> {
 impl TestMaterializationOwner {
     /// Build a filesystem-free record; runtime filesystem behavior has separate tests.
     pub fn inline() -> Self {
-        Self {
-            cached: CachedArtifact::from_artifact_data(&ArtifactData {
-                outputs: Vec::new(),
-                stdout: Arc::new(Vec::new()),
-                stderr: Arc::new(Vec::new()),
-                exit_code: 0,
-            }),
-        }
+        let cached = CachedArtifact::from_index(ArtifactIndex::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            0,
+        ));
+        // The empty artifact has no resident bytes or disk payloads. Initialize
+        // its real delivery cell without bypassing the provisional-owner API.
+        cached.payloads.get_or_init(|| Arc::from([]));
+        Self { cached }
     }
 
     /// Expose the actual payload type's ownership contract to the compiler.

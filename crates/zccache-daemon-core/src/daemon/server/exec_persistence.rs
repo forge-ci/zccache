@@ -9,7 +9,7 @@ pub(super) async fn store_exec_artifact_inner(
     handoff_gate: Option<Arc<PublicationHandoffGate>>,
     admission_bound: std::time::Duration,
 ) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    let cached = CachedArtifact::from_artifact_data(&artifact);
+    let cached = ProvisionalArtifact::new(&artifact, Vec::new());
     let retired;
     let publication_guard = if staged_sources.is_none() {
         let Some(guard) = begin_artifact_publication(state).await else {
@@ -20,18 +20,17 @@ pub(super) async fn store_exec_artifact_inner(
         None
     };
     if let Some(sources) = staged_sources {
-        publish_artifact_paths_observed(state, &key_hex, cached.meta.clone(), &sources)?;
-        return Ok(Some(cached));
+        publish_artifact_paths_observed(state, &key_hex, cached.meta().clone(), &sources)?;
+        return Ok(Some(cached.durable()));
     }
     {
-        let artifact_dir = state.artifact_dir.clone();
         let key_for_persist = key_hex.clone();
         let payloads: Vec<Arc<Vec<u8>>> = artifact
             .outputs
             .iter()
             .filter_map(|o| o.payload.as_bytes().cloned())
             .collect();
-        let persist_meta = cached.meta.clone();
+        let persist_meta = cached.meta().clone();
         if payloads.is_empty() {
             // Stdout/stderr-only artifacts have no payload files to persist,
             // so expose their index entry to the final shutdown flush now.
@@ -52,11 +51,11 @@ pub(super) async fn store_exec_artifact_inner(
             .cache_root_lock
             .lease_for(crate::core::sync::STATE_TIMEOUT)
             .ok_or(StagedPublishFailure::StoreSetup)?;
-        retired = state.artifacts.insert(key_hex.clone(), cached);
+        retired = cached.publish(&state.artifacts, key_hex.clone());
+        let persist_state = Arc::clone(state);
         let sem = Arc::clone(&state.persist_semaphore);
         let publication_guard_for_task =
             publication_guard.expect("direct exec publication acquired an owned guard");
-        let index_writer_tx = state.index_writer_tx.clone();
         kernal_api::async_engine::launch(async move {
             // Release publication before the root lease on cancellation.
             let _ = &publication_guard_for_task;
@@ -67,11 +66,8 @@ pub(super) async fn store_exec_artifact_inner(
                         let _ = &publication_guard_for_task;
                         let _cache_lifetime = persistence_root;
                         let _publication_guard = publication_guard_for_task;
-                        if persist_artifact_payloads(&artifact_dir, &key_for_persist, &payloads)
-                            .is_ok()
-                        {
-                            let _ = index_writer_tx
-                                .send(IndexWriterCommand::Insert(key_for_persist, persist_meta));
+                        if let Err(error) = cached.persist_bytes(&persist_state, &key_for_persist, &payloads) {
+                            tracing::warn!(%error, "exec artifact persistence failed; retaining resident payloads");
                         }
                     })
                     .detach_on_drop()
