@@ -483,13 +483,23 @@ or overdue marker causes startup catch-up. Consequently the 30-day expiry is
 eventual even when no new compile requests arrive while the daemon remains
 alive, and restarts catch up after daemon downtime.
 
-Each selected logical key is removed across legacy flat/pack files and staged
-v2 generations. The live artifact map, persistent artifact index, and depgraph
-references are invalidated only after file removal succeeds. Reports rescan the
+Each selected logical key is retired across legacy flat/pack files, digest
+sidecars and staged v2 generations. Under publication/store exclusion, live
+names are renamed into private trash and their map, index and depgraph references
+are invalidated. Recursive deletion runs after exclusion ends. Failed sweeps
+remain durable retry work and continue to count against the cache budget.
+Reports rescan the
 owned root, so `usage_after_bytes` and `bytes_reclaimed` reflect what is no
 longer present rather than an eviction estimate. The embedded
 `ZccacheService::maintain_disk` method lets a host request an immediate pressure
 or full pass against that same root; it does not broaden ownership.
+
+Clear reserves the index actor before acquiring publication exclusion, so an
+earlier index flush cannot stall publishers behind Clear. The reservation then
+receives the publication permit and applies the ordered in-memory reset. It
+releases that permit before flushing to disk; a cancelled or timed-out waiter
+cannot let a delayed reset erase a newer publication. Clear awaits durability
+and sweeps retired names on its owned blocking worker.
 
 Scans walk the live store while publishers rename and remove temporaries, so an
 entry that vanishes between listing and stat is skipped. Only `NotFound` on an
