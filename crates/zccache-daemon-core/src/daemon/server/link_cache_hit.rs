@@ -55,6 +55,7 @@ pub(super) fn materialize_link_cache_hit(
             valid_bundle.then(|| materialize_directory_payload(&payloads[0], &output_path));
         payloads.record_staged_lock_timings(&state.profiler.staged);
         drop(payloads);
+        drop(entry);
         // Remove a failed unpack's temp tree only after the lease is gone.
         let observed = materialized
             .and_then(|result| result.map_err(DirectoryUnpackFailure::cleanup).ok())

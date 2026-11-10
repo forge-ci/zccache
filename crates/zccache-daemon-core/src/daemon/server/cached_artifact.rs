@@ -911,5 +911,4 @@ mod tests {
             "byte-backed payloads must not acquire the staged-store lock"
         );
     }
-
 }

@@ -136,7 +136,10 @@ fn every_cache_hit_delivery_path_uses_the_daemon_shared_materialization_lease() 
             "single compile",
             include_str!("handle_compile/cached_hit.rs"),
         ),
-        ("multi compile", include_str!("handle_compile_multi_lookup.rs")),
+        (
+            "multi compile",
+            include_str!("handle_compile_multi_lookup.rs"),
+        ),
         ("exact exec", include_str!("handle_exec.rs")),
         (
             "link and directory bundle",
