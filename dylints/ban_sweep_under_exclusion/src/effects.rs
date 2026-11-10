@@ -24,7 +24,7 @@ pub(super) fn call<'tcx>(
                     .skip_binder()
                     .types()
                     .next()
-                    .map(|value| *value.kind())
+                    .map(|value| *value.peel_refs().kind())
                 {
                     Some(ty::Closure(definition, args)) => function(cx, definition, args, seen),
                     Some(ty::FnDef(definition, args)) => {
@@ -73,6 +73,9 @@ fn function<'tcx>(
                 | "zccache_daemon_core::daemon::server::wal::reserve_index_clear_blocking"
         ) {
             return SWEEP;
+        }
+        if super::output_policy::unlink(cx, definition) {
+            return BULK;
         }
         if super::guard_escapes::leaks(
             cx,

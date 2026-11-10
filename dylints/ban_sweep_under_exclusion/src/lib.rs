@@ -22,6 +22,7 @@ mod guard_initialization;
 mod guard_types;
 mod index_clear_policy;
 mod ordered_drop;
+mod output_policy;
 mod runtime_mir;
 extern crate rustc_span;
 
@@ -42,11 +43,12 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         cx: &LateContext<'tcx>,
         _: rustc_hir::intravisit::FnKind<'tcx>,
         _: &'tcx rustc_hir::FnDecl<'tcx>,
-        _: &'tcx rustc_hir::Body<'tcx>,
+        body: &'tcx rustc_hir::Body<'tcx>,
         span: Span,
         owner: rustc_hir::def_id::LocalDefId,
     ) {
         if checks_guards(cx, span) {
+            output_policy::check_fn(cx, body, owner.to_def_id());
             guard_analysis::check(cx, owner);
         }
     }
@@ -54,6 +56,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
     fn check_pat(&mut self, cx: &LateContext<'tcx>, pat: &'tcx rustc_hir::Pat<'tcx>) {
         if checks_guards(cx, pat.span) {
             index_clear_policy::check_pat(cx, pat);
+            output_policy::check_pat(cx, pat);
         }
     }
 
@@ -71,6 +74,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
             return;
         }
         index_clear_policy::check_expr(cx, expr);
+        output_policy::check_expr(cx, expr);
         guard_escapes::check(cx, expr);
         let definition = match expr.kind {
             ExprKind::Path(path) => match cx.qpath_res(&path, expr.hir_id) {

@@ -12,6 +12,9 @@ pub(super) enum Scope {
 }
 
 pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> Option<Scope> {
+    if super::output_policy::authority(cx, definition) {
+        return Some(Scope::Ownership);
+    }
     if super::index_clear_policy::token(cx, definition) {
         return Some(Scope::Critical);
     }
@@ -30,11 +33,15 @@ pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId)
     match krate.as_str() {
         "zccache_daemon_core"
             if name.as_str() == "MaterializationPermit"
+                && super::canonical_path(cx, definition)
+                    == "zccache_daemon_core::daemon::spawn_exclusion::MaterializationPermit"
                 && cx.tcx.opt_parent(definition).is_some_and(|parent| {
                     cx.tcx.item_name(parent).as_str() == "spawn_exclusion"
                 }) =>
         {
-            Some(Scope::Any)
+            // This data-free permit owns a complete spawn-safe I/O operation,
+            // not publication/store exclusion. Ownership still cannot escape.
+            Some(Scope::Ownership)
         }
         "zccache_core" => match name.as_str() {
             "PublicationCommitPermit" | "MutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard" => {

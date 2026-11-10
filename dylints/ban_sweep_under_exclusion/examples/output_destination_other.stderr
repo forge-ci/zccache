@@ -1,0 +1,95 @@
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:15:61
+   |
+LL |                       fn unlink(&self) -> std::io::Result<()> {
+   |  _____________________________________________________________^
+LL | |                         let _cleanup = DropSweep;
+LL | |                         std::fs::remove_file(&self.path)
+LL | |                     }
+   | |_____________________^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:20:25
+   |
+LL |                         Self { path }
+   |                         ^^^^^^^^^^^^^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:25:29
+   |
+LL |                     let _ = Alias { path };
+   |                             ^^^^^^^^^^^^^^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:28:25
+   |
+LL |                     let Alias { path } = output;
+   |                         ^^^^^^^^^^^^^^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:32:26
+   |
+LL |                     drop(output.path);
+   |                          ^^^^^^^^^^^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:35:29
+   |
+LL |                       let _ = OutputScope {
+   |  _____________________________^
+LL | |                         cache_roots: vec![],
+LL | |                     };
+   | |_____________________^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:40:29
+   |
+LL |                     let _ = PrivateOutputNamespace { root };
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: output mutation requires its sealed namespace authority
+  --> $DIR/output_destination_other.rs:43:29
+   |
+LL |                     let _ = PrivateOutputNamespace::create;
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/output_destination_other.rs:46:30
+   |
+LL |                     unsafe { std::mem::transmute(path) }
+   |                              ^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/output_destination_other.rs:49:29
+   |
+LL |                     let _ = Box::new(output) as Box<dyn std::any::Any>;
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/output_destination_other.rs:49:29
+   |
+LL |                     let _ = Box::new(output) as Box<dyn std::any::Any>;
+   |                             ^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/output_destination_other.rs:52:21
+   |
+LL |                     std::mem::forget(output);
+   |                     ^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/output_destination_other.rs:56:29
+   |
+LL |                     let _ = output.unlink();
+   |                             ^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/output_destination_other.rs:60:29
+   |
+LL |                     let _ = std::fs::remove_file("live-cache");
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 14 previous errors
+
