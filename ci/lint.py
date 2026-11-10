@@ -451,6 +451,7 @@ def lint_workspace():
             "dylints/ban_raw_env_flag/Cargo.toml",
             "dylints/ban_raw_network_access/Cargo.toml",
             "dylints/ban_resident_artifact_publication/Cargo.toml",
+            "dylints/ban_sweep_under_exclusion/Cargo.toml",
         ):
             result = run_cmd(cargo_command(
                 "fmt",

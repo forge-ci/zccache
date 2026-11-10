@@ -20,7 +20,9 @@ Custom Rust lints used by this workspace.
 - `ban_raw_network_access`: confines `reqwest`, `hyper` and `ureq` to the budgeted `zccache_download::http` boundary (#1968).
 - `ban_resident_artifact_publication`: confines resident entries to the provisional owner (#1965).
 
-All fifteen libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
+- `ban_sweep_under_exclusion`: confines raw tree deletion to approved cleanup owners (#1964; guard lifetime enforcement is in progress).
+
+All sixteen libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

@@ -229,3 +229,54 @@ fn an_unlocked_root_with_recent_writes_survives_the_sweep() {
     assert_eq!(cleaner.cleanup_abandoned().unwrap(), 1);
     assert!(!dead.exists());
 }
+
+/// Poll `done` until it holds or `bound` elapses; the sweeper is a thread.
+fn eventually(bound: Duration, done: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + bound;
+    while std::time::Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    done()
+}
+
+#[test]
+fn detached_private_root_leaves_its_path_at_once_and_the_sweeper_reclaims_it() {
+    let cache = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let root = StagingRoot::new(cache.path(), Some(staging.path()), 3).unwrap();
+    let plan = root.path().join("plan-1");
+    std::fs::create_dir_all(plan.join("nested")).unwrap();
+    std::fs::write(plan.join("nested").join("out.o"), b"object").unwrap();
+
+    detach_private_root(&plan);
+
+    // One rename: the private path is gone before any recursive removal.
+    assert!(!plan.exists());
+    let trash = root.path().join(PRIVATE_TRASH);
+    assert!(
+        eventually(Duration::from_secs(20), || std::fs::read_dir(&trash)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true)),
+        "the staging sweeper must reclaim retired private roots"
+    );
+    assert!(root.path().join(STAGING_LOCK_FILE).is_file());
+}
+
+#[test]
+fn dropping_a_staging_root_hands_its_removal_to_the_sweeper() {
+    let cache = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let root = StagingRoot::new(cache.path(), Some(staging.path()), 4).unwrap();
+    let path = root.path().to_path_buf();
+    std::fs::write(path.join("partial.o"), b"partial").unwrap();
+
+    drop(root);
+
+    assert!(
+        eventually(Duration::from_secs(20), || !path.exists()),
+        "the stopped sweeper removes its own staging root"
+    );
+}

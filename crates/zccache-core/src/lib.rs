@@ -20,6 +20,7 @@ pub mod scan_entry;
 pub mod small_tool;
 pub mod sync;
 mod sync_barrier;
+mod sync_publication;
 mod sync_watchdog;
 pub mod version;
 pub mod wait;

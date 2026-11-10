@@ -342,10 +342,9 @@ fn warm_waits_for_the_staged_store_lock_before_materializing() {
     seed_staged_fixture(&artifact_dir, key, b"staged-rlib");
 
     // Stand in for daemon maintenance holding the store exclusively.
-    let staged = zccache_artifact::staged_lock::staged_root(&artifact_dir);
-    let gc_lock = zccache_artifact::staged_lock::open_store_lock(staged.as_path()).unwrap();
     let gc_lock_guard =
-        zccache_core::wait::lock_exclusive_for(&gc_lock, zccache_core::wait::PROBE).unwrap();
+        zccache_artifact::StagedCommitGuard::acquire_for(&artifact_dir, zccache_core::wait::PROBE)
+            .unwrap();
 
     // The outcome travels through the channel, not just a unit tick, so that an
     // early `Err` return (which would also unblock the recv and look exactly
@@ -369,7 +368,6 @@ fn warm_waits_for_the_staged_store_lock_before_materializing() {
     // Releasing the guard is what unblocks `warm`; the lock lives on the
     // guard now, so dropping the `File` alone would not release it.
     drop(gc_lock_guard);
-    drop(gc_lock);
 
     let outcome = rx
         .recv_timeout(std::time::Duration::from_secs(30))

@@ -66,13 +66,22 @@ pub(crate) fn test_spawn_shared() -> RwLockReadGuard<'static, ()> {
     spawn_shared()
 }
 
+/// Data-free operation ownership covering a complete materialization.
+/// This deliberately spans copy I/O, unlike a short publication commit.
+#[must_use = "retain materialization exclusion until writable descriptors close"]
+pub(crate) struct MaterializationPermit {
+    _permit: RwLockWriteGuard<'static, ()>,
+}
+
 /// Exclusive guard for one materialization copy + publish. Hold it from before
 /// the sibling temporary is opened for writing until after the rename.
 #[track_caller]
-pub(crate) fn materialize_exclusive() -> RwLockWriteGuard<'static, ()> {
-    SPAWN_MATERIALIZE_LOCK
-        .write_for(zccache_core::sync::OPERATION_TIMEOUT)
-        .unwrap_or_else(PoisonError::into_inner)
+pub(crate) fn materialize_exclusive() -> MaterializationPermit {
+    MaterializationPermit {
+        _permit: SPAWN_MATERIALIZE_LOCK
+            .write_for(zccache_core::sync::OPERATION_TIMEOUT)
+            .unwrap_or_else(PoisonError::into_inner),
+    }
 }
 
 /// Longest a publisher waits for a foreign child to exec. A fork-to-exec

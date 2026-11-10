@@ -25,6 +25,8 @@
 //! fires.
 
 use super::*;
+#[path = "exec_persistence.rs"]
+mod persistence;
 use crate::depgraph::scanner::scan_recursive_cached;
 use crate::depgraph::search_paths::IncludeSearchPaths;
 use crate::protocol::{ExecCachePolicy, ExecOutputStreams};
@@ -147,20 +149,18 @@ impl ExecStagedPlan {
         self.outputs.len()
     }
 
+    /// Retire the private root; the staging sweeper removes it (#1964).
     fn cleanup(&self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+        crate::daemon::server::detach_private_root(self.root.as_path());
+        Ok(())
     }
 }
 
 impl Drop for ExecStagedPlan {
+    // Retire by rename only: the owner may drop under publication or store
+    // exclusion, so the staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        crate::daemon::server::detach_private_root(self.root.as_path());
     }
 }
 
@@ -543,11 +543,18 @@ pub(super) async fn handle_generic_tool_exec(
                 message: format!("failed to materialize generic tool outputs: {error}"),
             };
         }
-        if let Some(cached) = staged_cached_artifact {
-            state.artifacts.insert(final_full_hex.clone(), cached);
-        }
     }
-    drop(staged_publication_guard);
+    if let Some(cached) = staged_cached_artifact {
+        super::exec_publication::finish_staged_exec_publication(
+            state,
+            &final_full_hex,
+            cached,
+            staged_publication_guard,
+        )
+        .await;
+    } else {
+        drop(staged_publication_guard);
+    }
 
     drop(coalesce_guard); // Releasing the guard wakes any waiters.
 
@@ -672,12 +679,17 @@ async fn try_exec_cache_hit(
     output_streams: ExecOutputStreams,
     mode: MaterializationMode,
 ) -> Option<Response> {
+    let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        return Some(Response::Error {
+            message: "exec cache lookup declined because cache-root ownership was released".into(),
+        });
+    };
     let work_state = Arc::clone(state);
     let key_hex = key_hex.to_owned();
     let cwd = cwd.to_path_buf();
     let output_files = output_files.to_vec();
     match state
-        .launch_blocking(move || {
+        .launch_blocking_with_root(root, move || {
             try_exec_cache_hit_blocking(
                 &work_state,
                 &key_hex,
@@ -863,7 +875,15 @@ pub(super) async fn store_exec_artifact(
     artifact: ArtifactData,
     staged_sources: Option<Vec<NormalizedPath>>,
 ) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    store_exec_artifact_inner(state, key_hex, artifact, staged_sources, None).await
+    persistence::store_exec_artifact_inner(
+        state,
+        key_hex,
+        artifact,
+        staged_sources,
+        None,
+        crate::core::sync::OPERATION_TIMEOUT,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -872,75 +892,17 @@ pub(super) async fn store_exec_artifact_with_handoff_gate(
     key_hex: String,
     artifact: ArtifactData,
     gate: Arc<PublicationHandoffGate>,
+    admission_bound: std::time::Duration,
 ) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    store_exec_artifact_inner(state, key_hex, artifact, None, Some(gate)).await
-}
-
-async fn store_exec_artifact_inner(
-    state: &Arc<SharedState>,
-    key_hex: String,
-    artifact: ArtifactData,
-    staged_sources: Option<Vec<NormalizedPath>>,
-    handoff_gate: Option<Arc<PublicationHandoffGate>>,
-) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    let cached = ProvisionalArtifact::new(&artifact, Vec::new());
-    let publication_guard = if staged_sources.is_none() {
-        let Some(guard) = begin_artifact_publication(state).await else {
-            return Ok(None);
-        };
-        Some(guard)
-    } else {
-        None
-    };
-    if let Some(sources) = staged_sources {
-        publish_artifact_paths_observed(state, &key_hex, cached.meta().clone(), &sources)?;
-        return Ok(Some(cached.durable()));
-    }
-    {
-        let key_for_persist = key_hex.clone();
-        let payloads: Vec<Arc<Vec<u8>>> = artifact
-            .outputs
-            .iter()
-            .filter_map(|o| o.payload.as_bytes().cloned())
-            .collect();
-        let persist_meta = cached.meta().clone();
-        if payloads.is_empty() {
-            // Stdout/stderr-only artifacts have no payload files to persist,
-            // so expose their index entry to the final shutdown flush now.
-            state.artifact_store.insert(&key_hex, &persist_meta);
-        }
-        let completion_gate = if let Some(gate) = handoff_gate {
-            gate.acquired.notify_one();
-            gate.resume.notified().await;
-            Some(gate)
-        } else {
-            None
-        };
-        cached.publish(&state.artifacts, key_hex.clone());
-        let persist_state = Arc::clone(state);
-        let sem = Arc::clone(&state.persist_semaphore);
-        let publication_guard_for_task =
-            publication_guard.expect("direct exec publication acquired an owned guard");
-        kernal_api::async_engine::launch(async move {
-            let _permit = sem.acquire_for(OPERATION_TIMEOUT).await;
-            let written = kernal_api::async_engine::launch_blocking(move || {
-                let _publication_guard = publication_guard_for_task;
-                if let Err(error) = cached.persist_bytes(&persist_state, &key_for_persist, &payloads) {
-                    tracing::warn!(%error, "exec artifact persistence failed; retaining resident payloads");
-                }
-            })
-            .detach_on_drop()
-            .await;
-            if let Err(error) = written {
-                tracing::warn!(%error, "exec artifact persistence task failed to join");
-            }
-            if let Some(gate) = completion_gate {
-                gate.persisted.notify_one();
-            }
-        })
-        .detach();
-    }
-    Ok(None)
+    persistence::store_exec_artifact_inner(
+        state,
+        key_hex,
+        artifact,
+        None,
+        Some(gate),
+        admission_bound,
+    )
+    .await
 }
 
 // ─── Path normalization ─────────────────────────────────────────────────

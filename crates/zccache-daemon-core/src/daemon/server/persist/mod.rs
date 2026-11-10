@@ -78,8 +78,12 @@ pub(crate) fn evict_v2_artifact_keys(
 pub(crate) fn evict_v2_artifact_keys_if_unchanged(
     artifact_dir: &Path,
     expected: &std::collections::HashMap<String, Option<String>>,
-) -> std::io::Result<std::collections::HashSet<String>> {
-    staged_store::evict_staged_artifact_keys_if_unchanged(artifact_dir, expected)
+) -> std::io::Result<DetachedStagedEviction> {
+    staged_store::detach_staged_artifact_keys_if_unchanged(
+        artifact_dir,
+        expected,
+        std::time::Duration::from_secs(2),
+    )
 }
 
 #[cfg(test)]

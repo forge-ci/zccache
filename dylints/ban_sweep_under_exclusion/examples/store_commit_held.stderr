@@ -1,0 +1,10 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/store_commit_held.rs:4:13
+   |
+LL |     let _ = std::fs::read_dir("owned-cache");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: aborting due to 1 previous error
+

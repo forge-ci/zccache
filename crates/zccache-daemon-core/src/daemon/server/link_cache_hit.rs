@@ -1,5 +1,4 @@
-//! Requested-output delivery for cached link results.
-
+//! Link-cache hit materialization.
 use super::*;
 
 pub(super) enum LinkCacheHitOutcome {
@@ -52,18 +51,18 @@ pub(super) fn materialize_link_cache_hit(
             payloads.len() == 1 && names.len() == 1 && is_directory_output_name(&names[0]);
         let materialize_started = std::time::Instant::now();
         payloads.record_staged_pre_materialization(&state.profiler.staged);
-        let observed = valid_bundle
-            .then(|| materialize_directory_payload(&payloads[0], &output_path))
-            .transpose()
-            .ok()
-            .flatten()
+        let materialized =
+            valid_bundle.then(|| materialize_directory_payload(&payloads[0], &output_path));
+        payloads.record_staged_lock_timings(&state.profiler.staged);
+        drop(payloads);
+        // Remove a failed unpack's temp tree only after the lease is gone.
+        let observed = materialized
+            .and_then(|result| result.map_err(DirectoryUnpackFailure::cleanup).ok())
             .map(|copy_bytes| StagedMaterializationStats {
                 copy_count: 1,
                 copy_bytes,
                 ..StagedMaterializationStats::default()
             });
-        payloads.record_staged_lock_timings(&state.profiler.staged);
-        drop(payloads);
         return if record_staged_hit_materialization(state, 1, materialize_started, observed) {
             LinkCacheHitOutcome::Hit(Box::new(Response::LinkResult {
                 exit_code,

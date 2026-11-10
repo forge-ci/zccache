@@ -1,0 +1,40 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:22:1
+   |
+LL | }
+   | ^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:36:1
+   |
+LL | }
+   | ^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:44:9
+   |
+LL |         drop(old);
+   |         ^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:50:1
+   |
+LL | }
+   | ^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:52:5
+   |
+LL |     drop(Reversed { cleanup, permit });
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_owner_other.rs:59:5
+   |
+LL |     drop(Ordered { permit, cleanup });
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 6 previous errors
+

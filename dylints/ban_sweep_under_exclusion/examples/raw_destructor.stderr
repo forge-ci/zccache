@@ -1,0 +1,34 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/raw_destructor.rs:15:9
+   |
+LL |         std::ptr::drop_in_place(&mut *value);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/raw_destructor.rs:22:9
+   |
+LL |         std::mem::ManuallyDrop::drop(&mut value);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/raw_destructor.rs:29:9
+   |
+LL |         value.assume_init_drop();
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/raw_destructor.rs:44:9
+   |
+LL |         destroy(&mut *value);
+   |         ^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/raw_destructor.rs:52:9
+   |
+LL |         destroy(&mut value);
+   |         ^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 5 previous errors
+

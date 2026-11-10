@@ -1,0 +1,38 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/blocking_transfer_other.rs:8:5
+   |
+LL | /     kernal_api::async_engine::launch_blocking(move || {
+LL | |         drop(first);
+LL | |         drop(value);
+LL | |     })
+   | |______^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/blocking_transfer_other.rs:16:5
+   |
+LL | /     kernal_api::async_engine::launch_blocking(move || {
+LL | |         let value = value;
+LL | |         drop(permit);
+LL | |         drop(value);
+LL | |     })
+   | |______^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/blocking_transfer_other.rs:26:9
+   |
+LL |         drop(value);
+   |         ^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/blocking_transfer_other.rs:32:5
+   |
+LL | /     kernal_api::async_engine::launch_blocking(move || {
+LL | |         drop(permit);
+LL | |         drop(value);
+LL | |     })
+   | |______^
+
+error: aborting due to 4 previous errors
+

@@ -1,0 +1,15 @@
+error[E0505]: cannot move out of `owner` because it is borrowed
+  --> $DIR/owner_dropped_early.rs:5:10
+   |
+LL |     let owner = TestMaterializationOwner::inline();
+   |         ----- binding `owner` declared here
+LL |     let lease = owner.lease();
+   |                 ----- borrow of `owner` occurs here
+LL |     drop(owner);
+   |          ^^^^^ move out of `owner` occurs here
+LL |     assert_eq!(lease.payload_count(), 0);
+   |                ----- borrow later used here
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0505`.
