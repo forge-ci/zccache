@@ -257,7 +257,7 @@ export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
 export CARGO_TARGET_DIR=/target/dylint-ui
 export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
 unset RUSTUP_TOOLCHAIN RUSTC
-ZCCACHE_DYLINT_EXPLAIN=1 SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
+SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 ZCCACHE_DYLINT_EXPLAIN=1 SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
 '''
 
 [task.clear-index-detach-test]
@@ -359,3 +359,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.compiler-hash-durability-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compiler_hash --locked"
+
+[task.private-output-namespace-regression]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib private_namespace_normalizes_before_claiming_a_new_directory --locked"

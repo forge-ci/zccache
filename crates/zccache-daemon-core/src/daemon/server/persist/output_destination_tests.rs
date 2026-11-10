@@ -160,3 +160,22 @@ async fn output_scope_also_protects_a_configured_external_staging_root() {
     assert!(result.is_err());
     assert_eq!(std::fs::read(protected).unwrap(), b"live");
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn private_namespace_normalizes_before_claiming_a_new_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner = directory.path().join("owner");
+    let existing = owner.join(".tmp-existing");
+    std::fs::create_dir_all(&existing).unwrap();
+    std::fs::write(existing.join("live"), b"live").unwrap();
+    let outside = directory.path().join("outside").join("child");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, owner.join("redirect")).unwrap();
+    let raw = owner.join("redirect").join("..").join(".tmp-existing");
+    assert!(
+        PrivateOutputNamespace::create(&raw).is_err(),
+        "private authority claimed a different directory than it created"
+    );
+    assert_eq!(std::fs::read(existing.join("live")).unwrap(), b"live");
+}

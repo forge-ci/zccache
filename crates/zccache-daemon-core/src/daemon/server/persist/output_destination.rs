@@ -63,7 +63,8 @@ pub(super) struct PrivateOutputNamespace {
 
 impl PrivateOutputNamespace {
     pub(super) fn create(path: &Path) -> io::Result<Self> {
-        if !path
+        let root = NormalizedPath::new(path);
+        if !root
             .file_name()
             .is_some_and(|name| name.to_string_lossy().starts_with(".tmp-"))
         {
@@ -72,22 +73,19 @@ impl PrivateOutputNamespace {
                 "private generation must use an unpublished temporary name",
             ));
         }
-        std::fs::create_dir(path)?;
-        Ok(Self {
-            root: NormalizedPath::new(path),
-        })
+        std::fs::create_dir(&root)?;
+        Ok(Self { root })
     }
 
     pub(super) fn output(&self, path: &Path) -> io::Result<OutputDestination> {
+        let path = NormalizedPath::new(path);
         if path.parent() != Some(self.root.as_path()) || path.file_name().is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "output is not a private generation child",
             ));
         }
-        Ok(OutputDestination {
-            path: NormalizedPath::new(path),
-        })
+        Ok(OutputDestination { path })
     }
 }
 
