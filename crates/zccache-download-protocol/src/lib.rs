@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use zccache_core::NormalizedPath;
 use zccache_download::{DownloadDaemonStatus, DownloadOptions, DownloadStatus};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+// Keep the version distinct from every legacy unversioned enum discriminant.
+const FRAME_VERSION: u32 = 0x5A44_0000 | PROTOCOL_VERSION;
 
 /// Largest bincode payload accepted by the download daemon protocol.
 ///
@@ -22,12 +24,18 @@ pub enum ProtocolError {
     Bincode(bincode::Error),
     /// A peer announced, or an encoder produced, a payload beyond the cap.
     MessageTooLarge { size: usize, max: usize },
+    /// The peer speaks a different download protocol.
+    VersionMismatch { received: u32 },
 }
 
 impl std::fmt::Display for ProtocolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bincode(error) => error.fmt(formatter),
+            Self::VersionMismatch { received } => write!(
+                formatter,
+                "unsupported download frame version {received:#x}; expected {FRAME_VERSION:#x}"
+            ),
             Self::MessageTooLarge { size, max } => {
                 write!(
                     formatter,
@@ -42,7 +50,7 @@ impl std::error::Error for ProtocolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Bincode(error) => Some(error.as_ref()),
-            Self::MessageTooLarge { .. } => None,
+            Self::MessageTooLarge { .. } | Self::VersionMismatch { .. } => None,
         }
     }
 }
@@ -65,7 +73,7 @@ pub enum Request {
     },
     DownloadStatus,
     DownloadWait {
-        timeout_ms: Option<u64>,
+        timeout_ms: u64,
     },
     DownloadCancel,
 }
@@ -97,9 +105,10 @@ pub enum Response {
 pub fn encode_message<T: Serialize>(msg: &T) -> Result<Vec<u8>, ProtocolError> {
     let payload = bincode::serialize(msg)?;
     ensure_message_size(payload.len())?;
-    let mut out = Vec::with_capacity(4 + payload.len());
+    let mut out = Vec::with_capacity(8 + payload.len());
     // The 1 MiB cap above is well within the u32 length prefix.
     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(&FRAME_VERSION.to_le_bytes());
     out.extend_from_slice(&payload);
     Ok(out)
 }
@@ -112,11 +121,18 @@ pub fn decode_message<T: serde::de::DeserializeOwned>(
     }
     let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
     ensure_message_size(len)?;
-    if buf.len() < 4 + len {
+    if buf.len() < 8 {
         return Ok(None);
     }
-    let payload = buf.split_to(4 + len).freeze();
-    let msg = bincode::deserialize::<T>(&payload[4..])?;
+    let received = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    if received != FRAME_VERSION {
+        return Err(ProtocolError::VersionMismatch { received });
+    }
+    if buf.len() < 8 + len {
+        return Ok(None);
+    }
+    let payload = buf.split_to(8 + len).freeze();
+    let msg = bincode::deserialize::<T>(&payload[8..])?;
     Ok(Some(msg))
 }
 
@@ -136,6 +152,30 @@ mod tests {
     use std::error::Error as _;
 
     #[test]
+    fn wait_frame_carries_its_protocol_version() {
+        let encoded = encode_message(&Request::DownloadWait { timeout_ms: 25 }).unwrap();
+        assert_eq!(&encoded[4..8], &FRAME_VERSION.to_le_bytes());
+        let mut buf = bytes::BytesMut::from(encoded.as_slice());
+        assert_eq!(
+            decode_message::<Request>(&mut buf).unwrap(),
+            Some(Request::DownloadWait { timeout_ms: 25 })
+        );
+    }
+
+    #[test]
+    fn legacy_and_mismatched_frames_are_rejected_before_decoding() {
+        for received in [0, 1, FRAME_VERSION + 1] {
+            let mut encoded = encode_message(&Request::DownloadWait { timeout_ms: 25 }).unwrap();
+            encoded[4..8].copy_from_slice(&received.to_le_bytes());
+            let mut buf = bytes::BytesMut::from(encoded.as_slice());
+            assert!(
+                matches!(decode_message::<Request>(&mut buf), Err(ProtocolError::VersionMismatch { received: actual }) if actual == received)
+            );
+            assert_eq!(buf.len(), encoded.len(), "reject without consuming bytes");
+        }
+    }
+
+    #[test]
     fn bincode_error_keeps_its_error_kind_as_source() {
         let error = ProtocolError::Bincode(Box::new(bincode::ErrorKind::Custom("bad".into())));
         assert!(error
@@ -153,7 +193,7 @@ mod tests {
         // Bincode prefixes `Vec<u8>` with an eight-byte length.
         let message = vec![0xA5; MAX_MESSAGE_SIZE - 8];
         let encoded = encode_message(&message).expect("payload at the cap encodes");
-        assert_eq!(encoded.len() - 4, MAX_MESSAGE_SIZE);
+        assert_eq!(encoded.len() - 8, MAX_MESSAGE_SIZE);
 
         let mut buf = bytes::BytesMut::from(encoded.as_slice());
         let decoded: Option<Vec<u8>> =

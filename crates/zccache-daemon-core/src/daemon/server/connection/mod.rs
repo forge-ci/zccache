@@ -121,13 +121,7 @@ pub(in crate::daemon::server) async fn guarded_dispatch<F>(
 where
     F: std::future::Future<Output = (Response, Option<PendingJournalContext>)>,
 {
-    let mut handler = std::pin::pin!(handler);
-    let disconnect = conn.wait_for_disconnect();
-    let mut disconnect = std::pin::pin!(disconnect);
-    match kernal_api::biased_race!((handler.as_mut()), (disconnect.as_mut())).await {
-        kernal_api::async_engine::BiasedRace2::First(out) => Some(out),
-        kernal_api::async_engine::BiasedRace2::Second(()) => None,
-    }
+    conn.run_while_peer_connected(handler).await
 }
 
 /// Resolve the heartbeat interval, or `None` when heartbeats are disabled.

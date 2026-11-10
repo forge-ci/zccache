@@ -85,7 +85,7 @@ impl DaemonControlRequest {
 pub async fn daemon_release_worktree_handles_roundtrip(
     endpoint: &str,
     path: std::path::PathBuf,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let selection = wire_prost::client_wire_selection_from_env().map_err(IpcError::Endpoint)?;
     let request = protocol::Request::ReleaseWorktreeHandles {
@@ -115,23 +115,20 @@ pub async fn daemon_release_worktree_handles_roundtrip(
 async fn send_prost(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let mut conn = connect_control_client(endpoint).await?;
     let prost_req =
         wire_prost::supported_control_request_to_prost(request).map_err(IpcError::Endpoint)?;
     conn.send_prost(&prost_req).await?;
-    conn.recv_response_for_wire_with_timeout(
-        recv_timeout.unwrap_or(DEFAULT_CLIENT_RECV_TIMEOUT),
-        wire_prost::WireFormat::ProstV16,
-    )
-    .await
+    conn.recv_response_for_wire_with_timeout(recv_timeout, wire_prost::WireFormat::ProstV16)
+        .await
 }
 
 async fn send_frame(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let mut conn = connect_control_client(endpoint).await?;
     let prost_req =
@@ -152,7 +149,7 @@ async fn send_frame(
 pub async fn daemon_control_roundtrip(
     endpoint: &str,
     request: DaemonControlRequest,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let selection = wire_prost::client_wire_selection_from_env().map_err(IpcError::Endpoint)?;
     daemon_control_roundtrip_with_selection(endpoint, request, recv_timeout, selection).await
@@ -161,7 +158,7 @@ pub async fn daemon_control_roundtrip(
 async fn daemon_control_roundtrip_with_selection(
     endpoint: &str,
     request: DaemonControlRequest,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
     selection: wire_prost::ClientWireSelection,
 ) -> Result<Option<Response>, IpcError> {
     // Issue #720 Phase 1: when the broker lane carries the connection, the data
@@ -214,24 +211,21 @@ async fn connect_control_client_with_route(
 async fn send_prost_control(
     endpoint: &str,
     request: DaemonControlRequest,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let mut conn = connect_control_client(endpoint).await?;
     let request = request.to_protocol_request();
     let request =
         wire_prost::supported_control_request_to_prost(&request).map_err(IpcError::Endpoint)?;
     conn.send_prost(&request).await?;
-    conn.recv_response_for_wire_with_timeout(
-        recv_timeout.unwrap_or(DEFAULT_CLIENT_RECV_TIMEOUT),
-        wire_prost::WireFormat::ProstV16,
-    )
-    .await
+    conn.recv_response_for_wire_with_timeout(recv_timeout, wire_prost::WireFormat::ProstV16)
+        .await
 }
 
 async fn send_frame_control(
     endpoint: &str,
     request: DaemonControlRequest,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let mut conn = connect_control_client(endpoint).await?;
     let request = request.to_protocol_request();
@@ -243,13 +237,10 @@ async fn send_frame_control(
 
 async fn recv_control_wire_response(
     conn: &mut ClientConnection,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     let response: Option<protocol::DecodedWireMessage<wire_prost::zccache_v1::Response>> =
-        match recv_timeout {
-            Some(timeout) => conn.recv_wire_with_timeout(timeout).await?,
-            None => conn.recv_wire().await?,
-        };
+        conn.recv_wire_with_timeout(recv_timeout).await?;
 
     match response {
         Some(

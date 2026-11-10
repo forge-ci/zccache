@@ -1,0 +1,52 @@
+error: raw `kernal_api::..::Runtime::run` blocks without a bound; use `Runtime::run_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:6:5
+   |
+LL |     runtime.run(async {});
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_unbounded_sync)]` on by default
+
+error: raw `kernal_api::..::Runtime::run` blocks without a bound; use `Runtime::run_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:7:18
+   |
+LL |     let _alias = Engine::run::<std::future::Ready<()>>;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: raw `kernal_api::..::PlatformChild::wait_with_output_bounded` blocks without a bound; use `PlatformChild::wait_with_output_bounded_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:8:20
+   |
+LL |     let _capture = kernal_api::PlatformChild::wait_with_output_bounded;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: raw `kernal_api::..::Receiver::recv` blocks without a bound; use `Receiver::recv_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:9:20
+   |
+LL |     let _receive = kernal_api::async_engine::Receiver::<()>::recv;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: raw `kernal_api::..::Sender::send` blocks without a bound; use `Sender::send_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:10:17
+   |
+LL |     let _send = kernal_api::async_engine::Sender::<()>::send;
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: optional-timeout command runner bypasses the mandatory budget; use zccache_core::wait::output_for
+  --> $DIR/timeout_bypasses.rs:11:13
+   |
+LL |     let _ = capture(kernal_api::SpawnSpec::new("probe"), None, 1024);
+   |             ^^^^^^^
+
+error: raw `kernal_api::..::Semaphore::acquire` blocks without a bound; use `Semaphore::acquire_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:15:19
+   |
+LL |     let _permit = gate.acquire().await;
+   |                   ^^^^^^^^^^^^^^
+
+error: raw `kernal_api::..::Semaphore::acquire_many` blocks without a bound; use `Semaphore::acquire_many_within`, which takes a mandatory timeout (soldr#3836)
+  --> $DIR/timeout_bypasses.rs:16:26
+   |
+LL |     let _function_item = Admission::acquire_many;
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 8 previous errors
+

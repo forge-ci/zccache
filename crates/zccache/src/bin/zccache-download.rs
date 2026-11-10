@@ -74,7 +74,7 @@ enum Command {
         url: String,
         destination: PathBuf,
         #[arg(long)]
-        timeout_ms: Option<u64>,
+        timeout_ms: u64,
     },
     Status {
         url: String,
@@ -130,7 +130,10 @@ fn main() -> std::process::ExitCode {
                     return std::process::ExitCode::SUCCESS;
                 }
                 loop {
-                    match handle.wait(Some(250)).or_else(|_| handle.status()) {
+                    match handle
+                        .wait(std::time::Duration::from_millis(250))
+                        .or_else(|_| handle.status())
+                    {
                         Ok(status) => {
                             print_status(&status, cli.json);
                             if is_terminal(&status) {
@@ -240,7 +243,7 @@ fn main() -> std::process::ExitCode {
             destination,
             timeout_ms,
         } => match client.download(&url, &destination, DownloadOptions::default()) {
-            Ok(mut handle) => match handle.wait(timeout_ms) {
+            Ok(mut handle) => match handle.wait(std::time::Duration::from_millis(timeout_ms)) {
                 Ok(status) => {
                     print_status(&status, cli.json);
                     std::process::ExitCode::SUCCESS

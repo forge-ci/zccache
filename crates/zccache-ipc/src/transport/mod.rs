@@ -72,14 +72,10 @@ impl DaemonWireMessage for zccache_protocol::Response {
 /// the linker finishes â€” while still bounding the rare "daemon alive but
 /// stuck" failure mode.
 ///
-/// **This is an opt-in default; the IPC layer does not apply it on its
-/// own.** Callers that want timeout enforcement must call
-/// `set_recv_timeout(DEFAULT_CLIENT_RECV_TIMEOUT)` after connecting (or
-/// pass a per-call value to `recv_with_timeout`). Server-side and
-/// idle-style readers leave the field as `None` and keep the historical
-/// unbounded behavior. Peer death is OS-detected and surfaces as
-/// `IpcError::Io(_)` or `IpcError::ConnectionClosed` without involving
-/// this timeout.
+/// Every connection starts with this finite budget. Callers may select a
+/// different real `Duration` with `set_recv_timeout` or a per-call receive.
+/// Lifecycle listeners are owned by their service shutdown/handler race;
+/// ordinary message receives never acquire an unbounded default.
 ///
 /// Five minutes is intentionally generous for Compile/Link responses. Cheap
 /// daemon-health probes that need fast recovery, such as `ensure_daemon`'s
@@ -102,10 +98,8 @@ pub struct IpcConnection {
     pub(super) reader: ReadHalf<StreamType>,
     pub(super) writer: WriteHalf<StreamType>,
     pub(super) read_buf: BytesMut,
-    /// Optional default timeout for `recv`. `None` means unbounded
-    /// (today's historical behavior, kept for server-side and other
-    /// idle-style readers). Set via `set_recv_timeout`.
-    pub(super) recv_timeout: Option<Duration>,
+    /// Mandatory default budget for message receives.
+    pub(super) recv_timeout: Duration,
     /// Monotonic correlation id for outgoing running-process `Frame`
     /// envelopes on the FrameV1 lane.
     pub(super) next_frame_request_id: u64,
@@ -120,7 +114,7 @@ impl IpcConnection {
             reader,
             writer,
             read_buf: BytesMut::with_capacity(4096),
-            recv_timeout: None,
+            recv_timeout: DEFAULT_CLIENT_RECV_TIMEOUT,
             next_frame_request_id: 1,
         }
     }
@@ -198,38 +192,23 @@ impl IpcConnection {
         Ok(())
     }
 
-    /// Configure the default timeout applied to subsequent `recv` calls.
-    ///
-    /// Until called, `recv` is unbounded (today's behavior). After this
-    /// call, `recv` returns `Err(IpcError::Timeout(_))` if the next
-    /// message does not arrive within `timeout`. Use this once after
-    /// `connect()` on the client side to bound request/response round
-    /// trips. Server-side readers should leave it unset.
+    /// Configure the mandatory budget applied to subsequent message receives.
     pub fn set_recv_timeout(&mut self, timeout: Duration) {
-        self.recv_timeout = Some(timeout);
+        self.recv_timeout = timeout;
     }
 
-    /// Clear the default `recv` timeout, restoring unbounded behavior.
-    pub fn clear_recv_timeout(&mut self) {
-        self.recv_timeout = None;
-    }
-
-    /// Current default `recv` timeout. `None` means unbounded.
-    pub fn recv_timeout(&self) -> Option<Duration> {
+    /// Current default message receive budget.
+    pub fn recv_timeout(&self) -> Duration {
         self.recv_timeout
     }
 
-    /// Receive a daemon message from the connection.
+    /// Receive a daemon message within the configured finite budget.
     ///
-    /// Returns `None` if the connection was closed cleanly. If a default
-    /// timeout has been configured via [`Self::set_recv_timeout`] and the
-    /// next message does not arrive within that window, returns
+    /// Returns `None` if the connection was closed cleanly. If the
+    /// next message does not arrive within the configured window, returns
     /// `Err(IpcError::Timeout(_))`.
     pub async fn recv<T: DaemonWireMessage>(&mut self) -> Result<Option<T>, IpcError> {
-        match self.recv_timeout {
-            Some(t) => self.recv_with_timeout(t).await,
-            None => self.recv_loop().await,
-        }
+        self.recv_with_timeout(self.recv_timeout).await
     }
 
     /// Receive a daemon message with a per-call timeout override.
@@ -259,14 +238,10 @@ impl IpcConnection {
         E: std::fmt::Display,
         Decode: FnMut(&mut BytesMut) -> Result<Option<T>, E>,
     {
-        match self.recv_timeout {
-            Some(timeout) => {
-                match tokio::time::timeout(timeout, self.recv_opaque_with_loop(&mut decode)).await {
-                    Ok(result) => result,
-                    Err(_) => Err(IpcError::Timeout(timeout)),
-                }
-            }
-            None => self.recv_opaque_with_loop(&mut decode).await,
+        let timeout = self.recv_timeout;
+        match tokio::time::timeout(timeout, self.recv_opaque_with_loop(&mut decode)).await {
+            Ok(result) => result,
+            Err(_) => Err(IpcError::Timeout(timeout)),
         }
     }
 
@@ -279,10 +254,7 @@ impl IpcConnection {
     where
         Prost: prost::Message + Default,
     {
-        match self.recv_timeout {
-            Some(t) => self.recv_wire_with_timeout(t).await,
-            None => self.recv_wire_loop().await,
-        }
+        self.recv_wire_with_timeout(self.recv_timeout).await
     }
 
     /// Receive a version-dispatched daemon wire message with a timeout.
@@ -357,7 +329,7 @@ impl IpcConnection {
         decode_response_wire(message)
     }
 
-    /// Resolve when the peer disconnects while the server is NOT otherwise
+    /// Own a disconnect listener while the server is NOT otherwise
     /// reading a request â€” i.e. while a long-running handler (compile / link /
     /// exec) is in flight and the client is blocked awaiting the response.
     ///
@@ -372,11 +344,25 @@ impl IpcConnection {
     ///
     /// Bytes that arrive while waiting (an unexpected pipelined request) are
     /// buffered via the shared `read_next_chunk` path and the method keeps
-    /// waiting â€” it resolves ONLY on disconnect, never on data. This is
+    /// waiting â€” the internal listener resolves only on disconnect. This is
     /// cancellation-safe: dropping the returned future (the common case, when
     /// the handler wins the race) leaves any buffered bytes intact in
     /// `read_buf` for the next `recv`/`recv_wire` call.
-    pub async fn wait_for_disconnect(&mut self) {
+    /// Run one owned operation while its peer remains connected. Completing
+    /// or dropping the operation also drops the disconnect listener; a peer
+    /// disconnect drops the operation and its owned process cleanup state.
+    pub async fn run_while_peer_connected<F: std::future::Future>(
+        &mut self,
+        operation: F,
+    ) -> Option<F::Output> {
+        tokio::select! {
+            biased;
+            result = operation => Some(result),
+            () = self.wait_for_disconnect() => None,
+        }
+    }
+
+    async fn wait_for_disconnect(&mut self) {
         loop {
             match framing::read_next_chunk(&mut self.reader, &mut self.read_buf).await {
                 // Unexpected pipelined bytes: keep them buffered for the next

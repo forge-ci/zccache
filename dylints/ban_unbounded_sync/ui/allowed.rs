@@ -7,3 +7,5 @@ async fn released_before_await(guard: std::sync::MutexGuard<'_, u32>) {
     std::future::ready(()).await;
 }
 fn main() { Other.lock(); Other.recv(); }
+fn receive(timeout: std::time::Duration) { let _ = timeout; }
+fn observed_elapsed(elapsed: Option<std::time::Duration>) { let _ = elapsed; }

@@ -75,3 +75,22 @@ def test_parse_handles_ci_forced_color() -> None:
         "   \x1b[1m\x1b[94m--> \x1b[0mcrates/a/src/x.rs:1:2\n"
     )
     assert lint.parse_feature_findings(output) == {("crates/a/src/x.rs", "raw wait"): 1}
+
+
+def test_product_wait_lint_is_not_capped(monkeypatch, tmp_path) -> None:
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("", encoding="utf-8")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr(lint, "DYLINT_FEATURE_BASELINE", baseline)
+    monkeypatch.setattr(lint.subprocess, "run", fake_run)
+    assert lint.dylint_product_pass({}, [None, "x86_64-pc-windows-msvc"]) == 0
+    strict = [entry for entry in commands if "dylints/ban_unbounded_sync" in entry[0]]
+    assert len(strict) == 2
+    for command, env in strict:
+        assert "--features" in command
+        assert "--cap-lints=warn" not in env.get("DYLINT_RUSTFLAGS", "")

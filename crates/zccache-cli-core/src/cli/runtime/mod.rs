@@ -62,7 +62,7 @@ pub(crate) async fn check_daemon_version(endpoint: &str) -> VersionCheck {
     match crate::ipc::daemon_control_roundtrip(
         endpoint,
         crate::ipc::DaemonControlRequest::Status,
-        Some(super::status_probe_timeout()),
+        super::status_probe_timeout(),
     )
     .await
     {
@@ -496,7 +496,7 @@ async fn probe_says_daemon_is_merely_busy(endpoint: &str) -> bool {
     use crate::cli::commands::wrap::ipc::{
         classify_probe_outcome, probe_daemon_responsive, wedge_probe_budget, WedgeAction,
     };
-    let Some(budget) = wedge_probe_budget() else {
+    let crate::cli::WedgeProbePolicy::Within(budget) = wedge_probe_budget() else {
         return false;
     };
     matches!(
@@ -645,7 +645,7 @@ async fn stop_daemon_instance(
     let _ = crate::ipc::daemon_control_roundtrip(
         endpoint,
         crate::ipc::DaemonControlRequest::Shutdown,
-        None,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
     )
     .await;
 
@@ -754,16 +754,14 @@ pub async fn ensure_daemon(endpoint: &str) -> Result<(), String> {
             "daemon recovery already failed on this cache root and is in its cool-down: {reason}"
         ));
     }
-    let outcome = match super::recovery::recovery_budget() {
-        Some(budget) => match tokio::time::timeout(budget, ensure_daemon_ladder(endpoint)).await {
-            Ok(outcome) => outcome,
-            Err(_) => Err(format!(
-                "daemon recovery exceeded its {}ms budget ({})",
-                budget.as_millis(),
-                super::recovery::RECOVERY_BUDGET_ENV
-            )),
-        },
-        None => ensure_daemon_ladder(endpoint).await,
+    let budget = super::recovery::recovery_budget();
+    let outcome = match tokio::time::timeout(budget, ensure_daemon_ladder(endpoint)).await {
+        Ok(outcome) => outcome,
+        Err(_) => Err(format!(
+            "daemon recovery exceeded its {}ms budget ({})",
+            budget.as_millis(),
+            super::recovery::RECOVERY_BUDGET_ENV
+        )),
     };
     match outcome {
         // A working daemon is proof the outage is over. Clearing on every

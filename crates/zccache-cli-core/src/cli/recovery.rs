@@ -42,25 +42,23 @@ const BREAKER_MARKER_SUFFIX: &str = ".spawn-failed";
 
 /// Resolved recovery budget, `ZCCACHE_RECOVERY_BUDGET_MS` or the default.
 ///
-/// `0` disables the cap — the escape hatch for anyone bisecting against the
-/// pre-#1170 unbounded behaviour. An unparseable value is ignored rather than
-/// fatal: this is on the compile hot path, and refusing to build because a
-/// tuning knob was misspelled is worse than the knob being ignored.
-pub(crate) fn recovery_budget() -> Option<Duration> {
+/// Zero and malformed overrides retain the finite default; recovery may not
+/// opt out of its total deadline.
+pub(crate) fn recovery_budget() -> Duration {
     recovery_budget_from(|name| std::env::var(name).ok())
 }
 
-fn recovery_budget_from<F>(lookup: F) -> Option<Duration>
+fn recovery_budget_from<F>(lookup: F) -> Duration
 where
     F: Fn(&str) -> Option<String>,
 {
     let Some(raw) = lookup(RECOVERY_BUDGET_ENV) else {
-        return Some(DEFAULT_RECOVERY_BUDGET);
+        return DEFAULT_RECOVERY_BUDGET;
     };
     match raw.trim().parse::<u64>() {
-        Ok(0) => None,
-        Ok(ms) => Some(Duration::from_millis(ms)),
-        Err(_) => Some(DEFAULT_RECOVERY_BUDGET),
+        Ok(0) => DEFAULT_RECOVERY_BUDGET,
+        Ok(ms) => Duration::from_millis(ms),
+        Err(_) => DEFAULT_RECOVERY_BUDGET,
     }
 }
 
@@ -203,16 +201,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_budget_defaults_and_zero_disables_the_cap() {
-        assert_eq!(
-            recovery_budget_from(|_| None),
-            Some(DEFAULT_RECOVERY_BUDGET)
-        );
+    fn the_budget_defaults_and_zero_cannot_disable_the_cap() {
+        assert_eq!(recovery_budget_from(|_| None), DEFAULT_RECOVERY_BUDGET);
         assert_eq!(
             recovery_budget_from(|_| Some("1500".to_string())),
-            Some(Duration::from_millis(1500))
+            Duration::from_millis(1500)
         );
-        assert_eq!(recovery_budget_from(|_| Some("0".to_string())), None);
+        assert_eq!(
+            recovery_budget_from(|_| Some("0".to_string())),
+            DEFAULT_RECOVERY_BUDGET
+        );
     }
 
     /// A misspelled tuning knob must not fail the build. This runs on the
@@ -222,7 +220,7 @@ mod tests {
     fn an_unparseable_budget_falls_back_to_the_default() {
         assert_eq!(
             recovery_budget_from(|_| Some("banana".to_string())),
-            Some(DEFAULT_RECOVERY_BUDGET)
+            DEFAULT_RECOVERY_BUDGET
         );
     }
 

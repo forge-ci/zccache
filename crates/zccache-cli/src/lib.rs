@@ -347,14 +347,13 @@ impl NativeDownloadHandle {
             .map_err(runtime_to_py_err)
     }
 
-    #[pyo3(signature = (timeout_ms=None))]
-    fn wait(&mut self, timeout_ms: Option<u64>) -> PyResult<NativeDownloadStatus> {
+    fn wait(&mut self, timeout_ms: u64) -> PyResult<NativeDownloadStatus> {
         let handle = self
             .handle
             .as_mut()
             .ok_or_else(|| runtime_to_py_err("download handle is closed".to_string()))?;
         handle
-            .wait(timeout_ms)
+            .wait(std::time::Duration::from_millis(timeout_ms))
             .map(NativeDownloadStatus::from)
             .map_err(runtime_to_py_err)
     }

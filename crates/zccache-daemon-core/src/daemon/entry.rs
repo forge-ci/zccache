@@ -238,7 +238,7 @@ async fn query_daemon_status(
     let resp = crate::ipc::daemon_control_roundtrip(
         endpoint,
         crate::ipc::DaemonControlRequest::Status,
-        None,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
     )
     .await?;
     match resp {

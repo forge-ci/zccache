@@ -287,16 +287,12 @@ async fn handle_connection(
                 }
 
                 let mut rx = job.updates.subscribe();
-                let wait_result = if let Some(timeout_ms) = timeout_ms {
-                    kernal_api::async_engine::timeout(
-                        std::time::Duration::from_millis(timeout_ms),
-                        rx.changed(),
-                    )
-                    .await
-                    .ok()
-                } else {
-                    Some(rx.changed().await)
-                };
+                let wait_result = kernal_api::async_engine::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    rx.changed(),
+                )
+                .await
+                .ok();
                 let status = job
                     .status
                     .with_for(STATE_TIMEOUT, |status| status.clone())

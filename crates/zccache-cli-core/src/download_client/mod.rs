@@ -340,6 +340,9 @@ async fn ensure_daemon_with(
 #[path = "liveness_tests.rs"]
 mod liveness_tests;
 
+#[cfg(test)]
+mod wait_tests;
+
 #[derive(Clone)]
 pub struct DownloadClient {
     endpoint: Option<String>,
@@ -494,8 +497,15 @@ impl AsyncDownloadHandle {
         send_download_command(&mut self.conn, Request::DownloadStatus).await
     }
 
-    pub async fn wait(&mut self, timeout_ms: Option<u64>) -> Result<DownloadStatus, String> {
-        send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }).await
+    pub async fn wait(&mut self, timeout: std::time::Duration) -> Result<DownloadStatus, String> {
+        let timeout_ms = u64::try_from(timeout.as_millis())
+            .map_err(|_| "download wait budget exceeds the protocol range".to_string())?;
+        tokio::time::timeout(
+            timeout.saturating_add(crate::core::wait::PROBE),
+            send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }),
+        )
+        .await
+        .map_err(|_| "download daemon did not respond within the wait budget".to_string())?
     }
 
     pub async fn cancel(&mut self) -> Result<DownloadStatus, String> {
@@ -534,11 +544,13 @@ impl DownloadHandle {
         .map_err(|error| error.to_string())?
     }
 
-    pub fn wait(&mut self, timeout_ms: Option<u64>) -> Result<DownloadStatus, String> {
+    pub fn wait(&mut self, timeout: std::time::Duration) -> Result<DownloadStatus, String> {
+        let timeout_ms = u64::try_from(timeout.as_millis())
+            .map_err(|_| "download wait budget exceeds the protocol range".to_string())?;
         crate::core::wait::block_on_for(
             &self.runtime,
             send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }),
-            crate::core::wait::WHOLE_COMMAND,
+            timeout.saturating_add(crate::core::wait::PROBE),
         )
         .map_err(|error| error.to_string())?
     }

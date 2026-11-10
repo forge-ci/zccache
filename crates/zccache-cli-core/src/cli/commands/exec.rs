@@ -198,7 +198,13 @@ pub(crate) fn cmd_exec(params: ExecParams) -> ExitCode {
             eprintln!("zccache exec: failed to start daemon: {e}");
             return ExitCode::from(2);
         }
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(Response::GenericToolExecResult {
                 exit_code,
                 stdout,

@@ -417,7 +417,8 @@ fn compile_result(exit_code: i32) -> crate::protocol::Response {
 // injected directly so parallel tests can't race the process-global env
 // (#745). The matching test for the env-var parser lives in
 // `crate::cli` next to `wedge_recv_timeout`.
-const TEST_BUDGET: Option<std::time::Duration> = Some(std::time::Duration::from_secs(1));
+const TEST_BUDGET: crate::cli::CompileReceivePolicy =
+    crate::cli::CompileReceivePolicy::DetectWedge(std::time::Duration::from_secs(1));
 
 #[tokio::test]
 async fn wedge_detection_returns_done_on_normal_response() {
@@ -956,7 +957,7 @@ async fn wedge_detection_disabled_when_budget_is_none() {
     };
     let outcome = compile_recv_with_wedge_detection(
         &mut conn,
-        None,
+        crate::cli::CompileReceivePolicy::TransportOnly(crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT),
         crate::protocol::wire_prost::WireFormat::ProstV16,
     )
     .await;

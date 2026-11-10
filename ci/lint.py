@@ -114,6 +114,23 @@ def dylint_product_pass(env: dict[str, str], targets: list[str | None]) -> int:
     capped = {**env, "DYLINT_RUSTFLAGS": "--cap-lints=warn", "SOLDR_VERDICTS": "off"}
     findings: Counter[tuple[str, str]] = Counter()
     for target in targets:
+        # Timeout policy is deny-level even while unrelated feature findings
+        # are ratcheted below. Never admit a raw wait into that baseline.
+        strict_env = {**env, "SOLDR_VERDICTS": "off"}
+        strict_env.pop("DYLINT_RUSTFLAGS", None)
+        strict = subprocess.run(
+            [
+                "soldr", "dylint", "--path", "dylints/ban_unbounded_sync", "--",
+                "--workspace", "--lib", "--bins",
+                "--keep-going",
+                "--features", ",".join(DYLINT_PRODUCT_FEATURES),
+                *(["--target", target] if target else []),
+            ],
+            cwd=str(SCRIPT_DIR),
+            env=strict_env,
+        )
+        if strict.returncode != 0:
+            return strict.returncode
         command = [
             "soldr", "dylint", "--all", "--",
             "--workspace", "--lib", "--bins",
@@ -434,12 +451,13 @@ def lint_workspace():
                 )
                 return result.returncode
 
-    result = run_cmd(cargo_command(
-        "clippy", "--workspace", "--all-targets",
-        "--", "-D", "warnings",
-    ))
-    if result.returncode != 0:
-        return result.returncode
+    for features in ([], ["--features", ",".join(DYLINT_PRODUCT_FEATURES)]):
+        result = run_cmd(cargo_command(
+            "clippy", "--workspace", "--all-targets", *features,
+            "--", "-D", "warnings",
+        ))
+        if result.returncode != 0:
+            return result.returncode
 
     if not skip_dylint:
         result = lint_dylint_only()

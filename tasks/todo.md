@@ -1584,6 +1584,11 @@ next child, then sync/rebase against origin/main and leave a clean tree.
 - [ ] #1965 durable-entry payload demotion.
 - [ ] #1966 default eligible native/link/exec staging.
 - [ ] #1967 complete timeout/feature enforcement.
+  - [ ] Capture RED for typed fetch-lock expiry and mandatory API budgets.
+  - [ ] Migrate optional download/IPC budgets; classify owned lifecycle waits.
+  - [ ] Enforce signatures and resolved raw waits with Dylint UI fixtures.
+  - [ ] Cover shipped feature combinations in clippy and OS Dylint passes.
+  - [ ] Run isolated regressions, review, clean-tree local gate and publish with ci-full.
 - [ ] #1968 HTTP budget owner and Dylint.
 - [ ] #1969 canonical owned environment flags.
 - [ ] #1970 retained helper diagnostics and Dylint.

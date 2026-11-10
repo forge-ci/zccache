@@ -652,7 +652,7 @@ The refusal is loud on three surfaces (`wrap/unavailable.rs`):
 
 Because unavailability is now fatal, recovery has to be robust *and* bounded (`cli/recovery.rs`):
 
-- **Total deadline** — `ZCCACHE_RECOVERY_BUDGET_MS`, default 30 s, `0` disables. Previously the ladder had no overall cap and the worst case was minutes inside one compile.
+- **Total deadline** — `ZCCACHE_RECOVERY_BUDGET_MS`, default 30 s; zero retains that finite default. Previously the ladder had no overall cap and the worst case was minutes inside one compile.
 - **Wedge classification on every arm** — a wedge is probed before any kill (#753). A busy daemon under a `-j16` burst is indistinguishable from a hung one from one client's timeout; the wrapper retries once without killing and kills only when the follow-up probe also fails.
 - **Identity-scoped cleanup** — the kill names the instance that failed (#1161), and clears the lock file, `<lock>.spawn`, and the backend identity file together.
 - **Stale records from another PID namespace (#2035)** — on a persistent `ZCCACHE_CACHE_DIR` a record can outlive its container: `boot_id` still matches and the PID may be reused. `check_running_daemon_for` treats a live PID as stale when the sidecar `<identity>.pid-namespace` names another PID namespace, or `verify_live` proves another program holds it, then retires the record so a new daemon spawns. A missing record, a changed digest and a deleted executable stay conservative: a live daemon whose binary was replaced still serves clients.
@@ -982,7 +982,23 @@ whose optional timeout otherwise bypasses our mandatory `Duration` facade.
 Use bounded command capture for status as well; raw child output collection
 and untimed rendezvous barriers have no supported product entry point.
 
-This audit also found existing optional receive budgets in IPC and optional
-`DownloadWait` budgets. These are separate protocol/lifecycle APIs and remain
-to be migrated; the current lint does not establish that **all** async waiting
-functions require timeout arguments. Do not describe this guarantee as complete.
+Issue #1967 removes optional budgets from IPC roundtrips and download handles.
+Message receives always have a finite default (300 seconds), while each
+roundtrip caller passes its selected `Duration`. Download waits require a
+`Duration`, transmit mandatory milliseconds, and bound the request/response by
+that budget plus `wait::PROBE` for transport. Download framing version 2 carries
+its version in each frame; legacy frames fail before decoding the new wait field.
+
+The remaining optional durations have distinct, bounded roles:
+
+| Surface | Policy |
+| --- | --- |
+| HTTP `HttpPolicy::total` | Optional tightening of mandatory connect/read and stall budgets; see the download HTTP owner (#1968). |
+| Process-session `post_exit_grace`, elapsed/CPU observations | Diagnostic observations, not wait inputs; `ProcessLiveness` owns finite execution, output and post-exit budgets (#1963). |
+| Compile progress interval | Optional heartbeat emission, not an optional receive deadline. |
+| Wedge detection/probing | `CompileReceivePolicy` retains a finite receive budget when wedge recovery is disabled; `WedgeProbePolicy::Skip` performs no probe. |
+
+Service listeners retain an explicit service shutdown owner; the disconnect
+listener is borrowed by the active handler's cancellation race (#967). Neither
+is a generic optional-budget message receive. The lints prove selected static
+API constraints, not arbitrary callback termination or lock ordering.

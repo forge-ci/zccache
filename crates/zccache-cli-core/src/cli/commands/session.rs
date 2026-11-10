@@ -151,7 +151,13 @@ pub(crate) async fn cmd_session_start(
             }
         }),
     };
-    let recv_result = match crate::ipc::full_family_roundtrip(endpoint, &request, None).await {
+    let recv_result = match crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!("zccache[err][R]: daemon roundtrip failed: {e}");
@@ -238,7 +244,13 @@ pub(crate) async fn cmd_session_stats(endpoint: &str, session_id: String, json: 
     let request = crate::protocol::Request::SessionStats {
         session_id: session_id.clone(),
     };
-    let recv_result = match crate::ipc::full_family_roundtrip(endpoint, &request, None).await {
+    let recv_result = match crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             let message = format!("zccache: daemon roundtrip failed: {e}");
@@ -533,9 +545,13 @@ pub(crate) async fn query_session_stats(
     let request = crate::protocol::Request::SessionStats {
         session_id: session_id.to_string(),
     };
-    let recv_result = crate::ipc::full_family_roundtrip(endpoint, &request, None)
-        .await
-        .map_err(|err| format!("session stats daemon roundtrip failed: {err}"))?;
+    let recv_result = crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    .map_err(|err| format!("session stats daemon roundtrip failed: {err}"))?;
     match recv_result {
         Some(crate::protocol::Response::SessionStatsResult { stats }) => Ok(stats),
         Some(crate::protocol::Response::Error { message }) => Err(message),

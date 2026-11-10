@@ -170,9 +170,10 @@ pub(super) async fn cmd_compile(
 /// `ZCCACHE_WEDGE_PROBE_BUDGET_MS=0` disables the probe and preserves the
 /// pre-#753 unconditional-replace behaviour for anyone A/B-testing it.
 async fn wedge_action(endpoint: &str) -> WedgeAction {
+    use crate::cli::WedgeProbePolicy::{Skip, Within};
     match wedge_probe_budget() {
-        Some(budget) => classify_probe_outcome(probe_daemon_responsive(endpoint, budget).await),
-        None => WedgeAction::EscalateKill,
+        Within(budget) => classify_probe_outcome(probe_daemon_responsive(endpoint, budget).await),
+        Skip => WedgeAction::EscalateKill,
     }
 }
 
@@ -307,10 +308,14 @@ fn report_relay_outcome_to_writer<W: Write>(outcome: RelayOutcome, stderr: &mut 
 /// emits *nothing* for a full budget still trips the #753/#955 handling.
 async fn compile_recv_with_wedge_detection<C: ConnRecv>(
     conn: &mut C,
-    budget: Option<std::time::Duration>,
+    policy: crate::cli::CompileReceivePolicy,
     wire: crate::protocol::wire_prost::WireFormat,
 ) -> CompileRecvOutcome {
-    let recv_timeout = budget.unwrap_or(crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT);
+    use crate::cli::CompileReceivePolicy::{DetectWedge, TransportOnly};
+    let (recv_timeout, detect_wedge) = match policy {
+        DetectWedge(budget) => (budget, true),
+        TransportOnly(budget) => (budget, false),
+    };
     loop {
         match conn.recv_with_timeout(recv_timeout, wire).await {
             Ok(Some(crate::protocol::Response::CompileProgress {
@@ -324,10 +329,9 @@ async fn compile_recv_with_wedge_detection<C: ConnRecv>(
                 // progress reset that makes wedge detection progress-based.
             }
             Ok(opt) => return CompileRecvOutcome::Done(opt),
-            // Only a configured budget turns a quiet daemon into a wedge; with
-            // `budget == None` wedge classification is disabled, so the IPC
-            // default timeout is reported as a plain transport failure.
-            Err(crate::ipc::IpcError::Timeout(_)) if budget.is_some() => {
+            // Transport-only policy retains a finite budget but never kills
+            // a daemon in response to silence.
+            Err(crate::ipc::IpcError::Timeout(_)) if detect_wedge => {
                 return CompileRecvOutcome::Wedged
             }
             Err(e) => {
@@ -488,7 +492,7 @@ pub(crate) async fn probe_daemon_responsive(
         crate::ipc::daemon_control_roundtrip(
             endpoint,
             crate::ipc::DaemonControlRequest::Ping,
-            Some(budget),
+            budget,
         )
         .await?;
         // We don't need to parse Pong out — receiving any response
@@ -512,17 +516,16 @@ pub(crate) async fn probe_daemon_responsive(
 /// diagnostic A/B against the fix).
 pub(crate) const WEDGE_PROBE_DEFAULT_MS: u64 = 3_000;
 
-/// Returns the probe budget configured for this run. `None` means
-/// "probe disabled — kill unconditionally" (the pre-#753 behavior).
-pub(crate) fn wedge_probe_budget() -> Option<std::time::Duration> {
+/// A probe is either skipped entirely or run within a mandatory budget.
+pub(crate) fn wedge_probe_budget() -> crate::cli::WedgeProbePolicy {
     let ms = std::env::var("ZCCACHE_WEDGE_PROBE_BUDGET_MS")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(WEDGE_PROBE_DEFAULT_MS);
     if ms == 0 {
-        None
+        crate::cli::WedgeProbePolicy::Skip
     } else {
-        Some(std::time::Duration::from_millis(ms))
+        crate::cli::WedgeProbePolicy::Within(std::time::Duration::from_millis(ms))
     }
 }
 

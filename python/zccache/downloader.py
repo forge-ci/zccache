@@ -110,7 +110,7 @@ class DownloadHandle:
     def status(self) -> DownloadStatus:
         return _coerce_status(self._native.status(), self.initiator)
 
-    def wait(self, timeout_ms: int | None = None) -> DownloadStatus:
+    def wait(self, timeout_ms: int) -> DownloadStatus:
         return _coerce_status(self._native.wait(timeout_ms), self.initiator)
 
     def cancel(self) -> DownloadStatus:

@@ -58,7 +58,15 @@ pub(crate) mod process {
                 .stack_size(8 * 1024 * 1024)
                 .spawn(entry)
             {
-                Ok(handle) => handle.join().unwrap_or(std::process::ExitCode::FAILURE),
+                Ok(handle) => crate::core::wait::join_for(handle, crate::core::wait::WHOLE_COMMAND)
+                    .unwrap_or_else(|_owned_thread| {
+                        // The CLI thread owns the complete command. Rust cannot
+                        // cancel it safely; terminate its owning process rather
+                        // than detach it and continue with live command state.
+                        eprintln!("zccache: CLI thread exceeded the whole-command budget");
+                        std::process::exit(125);
+                    })
+                    .unwrap_or(std::process::ExitCode::FAILURE),
                 Err(error) => {
                     eprintln!("zccache: failed to start CLI thread: {error}");
                     std::process::ExitCode::FAILURE
