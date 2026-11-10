@@ -456,7 +456,7 @@ impl CompilerHashCache {
 
     /// Persist the cache to `path` as a versioned bincode snapshot.
     ///
-    /// Atomic on success: writes to `<path>.tmp-<pid>`, then renames over
+    /// Atomic on success: writes to a uniquely owned sibling temporary, then renames over
     /// `path`. Empty snapshots short-circuit without touching disk. Stale
     /// entries on disk are harmless: `get_or_hash_with` re-stats every key
     /// before trusting the hash, so a mismatch silently downgrades to a
@@ -492,16 +492,9 @@ impl CompilerHashCache {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "compiler_hash.bin".into());
-        let tmp = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
-
-        let result = write_atomic_durable(&tmp, path, &bytes);
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        // A NamedTempFile owns only its newly created private file. Failed
+        // persistence cannot unlink a caller-supplied or live cache pathname.
+        let result = write_atomic_durable(path, &bytes);
         if result.is_ok() {
             tracing::info!(
                 path = %path.display(),
@@ -566,17 +559,17 @@ impl CompilerHashCache {
     }
 }
 
-fn write_atomic_durable(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    {
-        let mut f = std::fs::File::create(tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(tmp, target)?;
-    if let Some(parent) = target.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+fn write_atomic_durable(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(target).map_err(|error| error.error)?;
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
