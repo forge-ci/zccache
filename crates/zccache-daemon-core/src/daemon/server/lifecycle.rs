@@ -311,7 +311,7 @@ pub(super) fn new_shared_state(
             artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
             staged_materialization_init: Arc::new(Gate::new()),
-            persist_semaphore: Arc::new(tokio::sync::Semaphore::new(persist_workers_default())),
+            persist_semaphore: Arc::new(Gate::with_capacity(persist_workers_default())),
             compile_concurrency,
             compile_resource_gate:
                 crate::daemon::server::compile_resource_gate::CompileResourceGate::default(),

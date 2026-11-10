@@ -5,6 +5,7 @@ Usage:
     ./lint --fix            # auto-fix formatting + clippy (no Dylint)
     ./lint <file.rs>        # single-file rustfmt + per-crate clippy (no Dylint)
     ./lint --dylint-only    # Dylint for the host and every other OS target
+    ./lint --clippy-only    # default and shipped-product clippy passes
 """
 
 import filecmp
@@ -114,6 +115,23 @@ def dylint_product_pass(env: dict[str, str], targets: list[str | None]) -> int:
     capped = {**env, "DYLINT_RUSTFLAGS": "--cap-lints=warn", "SOLDR_VERDICTS": "off"}
     findings: Counter[tuple[str, str]] = Counter()
     for target in targets:
+        # Timeout policy is deny-level even while unrelated feature findings
+        # are ratcheted below. Never admit a raw wait into that baseline.
+        strict_env = {**env, "SOLDR_VERDICTS": "off"}
+        strict_env.pop("DYLINT_RUSTFLAGS", None)
+        strict = subprocess.run(
+            [
+                "soldr", "dylint", "--path", "dylints/ban_unbounded_sync", "--",
+                "--workspace", "--lib", "--bins",
+                "--keep-going",
+                "--features", ",".join(DYLINT_PRODUCT_FEATURES),
+                *(["--target", target] if target else []),
+            ],
+            cwd=str(SCRIPT_DIR),
+            env=strict_env,
+        )
+        if strict.returncode != 0:
+            return strict.returncode
         command = [
             "soldr", "dylint", "--all", "--",
             "--workspace", "--lib", "--bins",
@@ -395,6 +413,18 @@ def lint_single_file(file_path):
     return result.returncode
 
 
+def lint_clippy_only() -> int:
+    """Check both default and shipped feature selections through one owner."""
+    for features in ([], ["--features", ",".join(DYLINT_PRODUCT_FEATURES)]):
+        result = run_cmd(cargo_command(
+            "clippy", "--workspace", "--all-targets", *features,
+            "--", "-D", "warnings",
+        ))
+        if result.returncode != 0:
+            return result.returncode
+    return 0
+
+
 def lint_workspace():
     """Full workspace lint: fmt check, clippy, Dylint, and doc check."""
     result = run_cmd(cargo_command("fmt", "--all", "--check"))
@@ -434,12 +464,9 @@ def lint_workspace():
                 )
                 return result.returncode
 
-    result = run_cmd(cargo_command(
-        "clippy", "--workspace", "--all-targets",
-        "--", "-D", "warnings",
-    ))
-    if result.returncode != 0:
-        return result.returncode
+    clippy_result = lint_clippy_only()
+    if clippy_result != 0:
+        return clippy_result
 
     if not skip_dylint:
         result = lint_dylint_only()
@@ -485,20 +512,19 @@ def main():
             return result.returncode
         if not args:
             # Stop-hook case: --fix with no positional args.
-            # Run clippy ONCE here and return — do NOT fall through to
+            # Run only the declared clippy passes — do NOT fall through to
             # lint_workspace() below (which also runs clippy + dylint + doc)
             # otherwise clippy would run twice. See #139 fix 5.
-            result = run_cmd(cargo_command(
-                "clippy", "--workspace", "--all-targets",
-                "--", "-D", "warnings",
-            ))
-            return result.returncode
+            return lint_clippy_only()
 
     if args and args[0].endswith(".rs"):
         return lint_single_file(args[0])
 
     if args == ["--dylint-only"]:
         return lint_dylint_only()
+
+    if args == ["--clippy-only"]:
+        return lint_clippy_only()
 
     return lint_workspace()
 

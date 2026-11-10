@@ -30,5 +30,11 @@ error: raw `std::..::Command::output` blocks without a bound; use `wait::output_
 LL |     let _ = std::process::Command::new("probe").output();
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: aborting due to 5 previous errors
+error: optional-timeout entry point bypasses mandatory budgets; use a bounded product facade with Duration
+  --> $DIR/raw.rs:10:20
+   |
+LL |     let _timeout = std::net::TcpStream::set_read_timeout;
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 6 previous errors
 

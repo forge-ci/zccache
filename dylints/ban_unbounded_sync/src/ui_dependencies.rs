@@ -46,6 +46,20 @@ pub(super) fn core_flags() -> Vec<String> {
     let mut flags = vec!["--edition=2021".into()];
     flags.extend(dependency_dirs(&messages));
     flags.push(format!("--extern=zccache_core={}", core.display()));
+    let kernel = messages
+        .iter()
+        .find(|message| {
+            message["reason"] == "compiler-artifact" && message["target"]["name"] == "kernal_api"
+        })
+        .expect("Cargo JSON must identify the kernal-api dependency artifact");
+    let kernel_rlib = kernel["filenames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|name| name.as_str())
+        .find(|name| name.ends_with(".rlib"))
+        .expect("kernal-api must have an rlib");
+    flags.push(format!("--extern=kernal_api={kernel_rlib}"));
     flags
 }
 

@@ -170,7 +170,7 @@ async fn daemon_control_roundtrip_auto_prefers_prost_for_status() {
     let response = daemon_control_roundtrip_with_selection(
         &endpoint,
         DaemonControlRequest::Status,
-        None,
+        DEFAULT_CLIENT_RECV_TIMEOUT,
         wire_prost::ClientWireSelection::Auto,
     )
     .await
@@ -228,7 +228,7 @@ async fn daemon_control_roundtrip_auto_prefers_prost_for_clear() {
     let response = daemon_control_roundtrip_with_selection(
         &endpoint,
         DaemonControlRequest::Clear,
-        None,
+        DEFAULT_CLIENT_RECV_TIMEOUT,
         wire_prost::ClientWireSelection::Auto,
     )
     .await
@@ -319,7 +319,7 @@ async fn broker_lane_control_roundtrip_uses_frame_v1() {
     let response = daemon_control_roundtrip_with_selection(
         &endpoint,
         DaemonControlRequest::Status,
-        None,
+        DEFAULT_CLIENT_RECV_TIMEOUT,
         wire_prost::ClientWireSelection::Auto,
     )
     .await

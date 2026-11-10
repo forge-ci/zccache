@@ -1,6 +1,6 @@
 //! Prost full-family request roundtrips.
 
-use super::{connect_control_client, IpcError, DEFAULT_CLIENT_RECV_TIMEOUT};
+use super::{connect_control_client, IpcError};
 use zccache_protocol::{self as protocol, wire_prost, Response};
 
 /// Point in a full-family roundtrip at which an IPC failure occurred.
@@ -51,7 +51,7 @@ impl FullFamilyRoundtripFailure {
 pub async fn full_family_roundtrip(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, IpcError> {
     full_family_roundtrip_classified(endpoint, request, recv_timeout)
         .await
@@ -67,7 +67,7 @@ pub async fn full_family_roundtrip(
 pub async fn full_family_roundtrip_classified(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
 ) -> Result<Option<Response>, FullFamilyRoundtripFailure> {
     let selection = wire_prost::full_family_wire_selection_from_env().map_err(|error| {
         FullFamilyRoundtripFailure {
@@ -82,7 +82,7 @@ pub async fn full_family_roundtrip_classified(
 async fn full_family_roundtrip_with_selection_classified(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
     selection: wire_prost::ClientWireSelection,
 ) -> Result<Option<Response>, FullFamilyRoundtripFailure> {
     send_full_family_classified(
@@ -97,7 +97,7 @@ async fn full_family_roundtrip_with_selection_classified(
 async fn send_full_family_classified(
     endpoint: &str,
     request: &protocol::Request,
-    recv_timeout: Option<std::time::Duration>,
+    recv_timeout: std::time::Duration,
     wire: wire_prost::WireFormat,
 ) -> Result<Option<Response>, FullFamilyRoundtripFailure> {
     let mut conn =
@@ -113,13 +113,10 @@ async fn send_full_family_classified(
             phase: FullFamilyFailurePhase::DeliveryUnknown,
             error,
         })?;
-    conn.recv_response_for_wire_with_timeout(
-        recv_timeout.unwrap_or(DEFAULT_CLIENT_RECV_TIMEOUT),
-        wire,
-    )
-    .await
-    .map_err(|error| FullFamilyRoundtripFailure {
-        phase: FullFamilyFailurePhase::DeliveryUnknown,
-        error,
-    })
+    conn.recv_response_for_wire_with_timeout(recv_timeout, wire)
+        .await
+        .map_err(|error| FullFamilyRoundtripFailure {
+            phase: FullFamilyFailurePhase::DeliveryUnknown,
+            error,
+        })
 }

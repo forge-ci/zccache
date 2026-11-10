@@ -7,3 +7,7 @@ async fn released_before_await(guard: std::sync::MutexGuard<'_, u32>) {
     std::future::ready(()).await;
 }
 fn main() { Other.lock(); Other.recv(); }
+fn receive(timeout: std::time::Duration) { let _ = timeout; }
+fn observed_elapsed(elapsed: Option<std::time::Duration>) { let _ = elapsed; }
+fn optional_identifier(id: Option<u64>) { let _ = id; }
+fn wait_for_identity(pid: Option<u32>) { let _ = pid; }

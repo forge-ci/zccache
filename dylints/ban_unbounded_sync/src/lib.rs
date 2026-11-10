@@ -10,7 +10,9 @@ extern crate rustc_span;
 dylint_linting::dylint_library!();
 
 use rustc_errors::DiagDecorator;
-use rustc_hir::def::Res;
+use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::intravisit::FnKind;
 use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_span::{symbol::Symbol, FileName, RemapPathScopeComponents};
@@ -90,6 +92,75 @@ const BANNED: &[(&str, &str, &str)] = &[
 /// `zccache_core::wait` (or soldr-core's bounded command runners).
 /// `(crate, type-or-module, method, replacement)`.
 const BANNED_WAITS: &[(&str, &str, &str, &str)] = &[
+    ("kernal_api", "Receiver", "recv", "Receiver::recv_within"),
+    (
+        "kernal_api",
+        "UnboundedReceiver",
+        "recv",
+        "UnboundedReceiver::recv_within",
+    ),
+    ("kernal_api", "Sender", "send", "Sender::send_within"),
+    (
+        "kernal_api",
+        "PlatformChild",
+        "wait",
+        "PlatformChild::wait_within",
+    ),
+    (
+        "kernal_api",
+        "PlatformChild",
+        "wait_with_output_bounded",
+        "PlatformChild::wait_with_output_bounded_within",
+    ),
+    ("kernal_api", "Runtime", "run", "Runtime::run_within"),
+    (
+        "kernal_api",
+        "Semaphore",
+        "acquire",
+        "Semaphore::acquire_within",
+    ),
+    (
+        "kernal_api",
+        "Semaphore",
+        "acquire_many",
+        "Semaphore::acquire_many_within",
+    ),
+    (
+        "kernal_api",
+        "SpawnedChild",
+        "wait",
+        "SpawnedChild::wait_within",
+    ),
+    (
+        "kernal_api",
+        "DaemonChild",
+        "wait",
+        "DaemonChild::wait_within",
+    ),
+    (
+        "tokio",
+        "Semaphore",
+        "acquire",
+        "zccache_core::sync::Gate::acquire_for",
+    ),
+    (
+        "tokio",
+        "Semaphore",
+        "acquire_owned",
+        "zccache_core::sync::Gate::acquire_for",
+    ),
+    (
+        "tokio",
+        "Semaphore",
+        "acquire_many",
+        "zccache_core::sync::Gate::acquire_for",
+    ),
+    (
+        "tokio",
+        "Semaphore",
+        "acquire_many_owned",
+        "zccache_core::sync::Gate::acquire_for",
+    ),
     ("std", "Receiver", "recv", "wait::recv_for"),
     ("std", "SyncSender", "send", "wait::send_for"),
     ("std", "JoinHandle", "join", "wait::join_for"),
@@ -140,6 +211,93 @@ const BANNED_WAITS: &[(&str, &str, &str, &str)] = &[
 ];
 
 impl<'tcx> LateLintPass<'tcx> for BoundedSync {
+    fn check_fn(
+        &mut self,
+        cx: &LateContext<'tcx>,
+        kind: FnKind<'tcx>,
+        decl: &'tcx rustc_hir::FnDecl<'tcx>,
+        body: &'tcx rustc_hir::Body<'tcx>,
+        span: rustc_span::Span,
+        id: LocalDefId,
+    ) {
+        if matches!(kind, FnKind::Closure) || !span_is_in_scope(cx, span) {
+            return;
+        }
+        let signature = cx.tcx.fn_sig(id).instantiate_identity().skip_binder();
+        for ((ty, input), param) in signature.inputs().iter().zip(decl.inputs).zip(body.params) {
+            let rustc_middle::ty::Adt(def, args) = ty.kind() else {
+                continue;
+            };
+            if !cx
+                .tcx
+                .is_diagnostic_item(Symbol::intern("Option"), def.did())
+            {
+                continue;
+            }
+            let duration = is_duration(cx, args.type_at(0));
+            let budget_scalar = duration || args.type_at(0).is_integral();
+            // Legacy waits use u64 milliseconds. Other integers need budget
+            // naming so an optional u32 process identity remains ordinary data.
+            let milliseconds = args.type_at(0) == cx.tcx.types.u64;
+            let name = match param.pat.kind {
+                rustc_hir::PatKind::Binding(_, _, ident, _) => ident.name,
+                _ => continue,
+            };
+            let name = name.as_str();
+            let function = cx.tcx.item_name(id.to_def_id());
+            let waiting = is_wait_name(function.as_str());
+            if (duration && cx.tcx.visibility(id).is_public())
+                || ((duration || milliseconds) && waiting)
+                || (budget_scalar && is_budget_name(name))
+            {
+                emit(cx, input.span, BAN_UNBOUNDED_SYNC,
+                    "optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy".into());
+            }
+        }
+    }
+
+    fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx rustc_hir::TraitItem<'tcx>) {
+        let rustc_hir::TraitItemKind::Fn(sig, rustc_hir::TraitFn::Required(names)) = &item.kind
+        else {
+            return;
+        };
+        if !span_is_in_scope(cx, item.span) {
+            return;
+        }
+        let waiting = is_wait_name(item.ident.name.as_str());
+        let public = cx.tcx.visibility(item.owner_id.def_id).is_public();
+        let signature = cx
+            .tcx
+            .fn_sig(item.owner_id.def_id)
+            .instantiate_identity()
+            .skip_binder();
+        for (index, (ty, input)) in signature.inputs().iter().zip(sig.decl.inputs).enumerate() {
+            let rustc_middle::ty::Adt(def, args) = ty.kind() else {
+                continue;
+            };
+            if !cx
+                .tcx
+                .is_diagnostic_item(Symbol::intern("Option"), def.did())
+            {
+                continue;
+            }
+            let inner = args.type_at(0);
+            let duration = is_duration(cx, inner);
+            let milliseconds = inner == cx.tcx.types.u64;
+            let named = names
+                .get(index)
+                .and_then(Option::as_ref)
+                .is_some_and(|name| is_budget_name(name.name.as_str()));
+            if (duration && public)
+                || ((duration || milliseconds) && waiting)
+                || ((duration || inner.is_integral()) && named)
+            {
+                emit(cx, input.span, BAN_UNBOUNDED_SYNC,
+                    "optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy".into());
+            }
+        }
+    }
+
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         if !span_is_in_scope(cx, expr.span) {
             return;
@@ -160,9 +318,12 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
         };
         let path = cx.get_def_path(def_id);
         if path.first() == Some(&Symbol::intern("kernal_api"))
-            && path
-                .last()
-                .is_some_and(|name| name.as_str() == "run_bounded_command")
+            && path.last().is_some_and(|name| {
+                matches!(
+                    name.as_str(),
+                    "run_bounded_command" | "run_bounded_command_async"
+                )
+            })
         {
             emit(cx, expr.span, BAN_UNBOUNDED_SYNC,
                 "optional-timeout command runner bypasses the mandatory budget; use zccache_core::wait::output_for".into());
@@ -184,6 +345,14 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
             .coroutine_kind(cx.tcx.hir_enclosing_body_owner(expr.hir_id))
             .is_some();
         let name = path.last().map(Symbol::as_str);
+        if matches!(path.first().map(Symbol::as_str), Some("kernal_api" | "std"))
+            && name.is_some_and(|name| is_wait_name(name) || name.contains("timeout"))
+            && has_optional_budget(cx, def_id)
+        {
+            emit(cx, expr.span, BAN_UNBOUNDED_SYNC,
+                "optional-timeout entry point bypasses mandatory budgets; use a bounded product facade with Duration".into());
+            return;
+        }
         let blocking_facade = path.first() == Some(&Symbol::intern("zccache_core"))
             && ((path.iter().any(|part| part.as_str() == "wait")
                 && matches!(
@@ -292,6 +461,38 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
             );
         }
     }
+}
+
+fn is_duration(cx: &LateContext<'_>, ty: rustc_middle::ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), rustc_middle::ty::Adt(inner, _) if cx.tcx.is_diagnostic_item(Symbol::intern("Duration"), inner.did()))
+}
+
+fn has_optional_budget(cx: &LateContext<'_>, id: DefId) -> bool {
+    if !matches!(cx.tcx.def_kind(id), DefKind::Fn | DefKind::AssocFn) {
+        return false;
+    }
+    let signature = cx.tcx.fn_sig(id).instantiate_identity().skip_binder();
+    signature.inputs().iter().any(|ty| {
+        let rustc_middle::ty::Adt(def, args) = ty.kind() else {
+            return false;
+        };
+        cx.tcx
+            .is_diagnostic_item(Symbol::intern("Option"), def.did())
+            && (is_duration(cx, args.type_at(0)) || args.type_at(0) == cx.tcx.types.u64)
+    })
+}
+
+fn is_budget_name(name: &str) -> bool {
+    name.contains("timeout")
+        || name.contains("budget")
+        || name.contains("deadline")
+        || name == "wait_ms"
+}
+
+fn is_wait_name(name: &str) -> bool {
+    ["wait", "recv", "receive", "capture", "acquire"]
+        .iter()
+        .any(|part| name.contains(part))
 }
 
 /// Production sources of every workspace crate, minus the boundary module

@@ -299,15 +299,7 @@ fn store_rustc_outputs(
         let t_persist_enqueue = Instant::now();
         kernal_api::async_engine::launch(async move {
             let plan_for_publish = Arc::clone(&staged_plan);
-            #[expect(
-                clippy::expect_used,
-                reason = "persist_semaphore is owned by ServerState for the daemon's lifetime; AcquireError here would be a logic bug"
-            )]
-            let _permit = state_ref
-                .persist_semaphore
-                .acquire()
-                .await
-                .expect("persist_semaphore is owned by ServerState and never closed");
+            let _permit = state_ref.persist_semaphore.acquire_for(OPERATION_TIMEOUT).await;
             let published = kernal_api::async_engine::launch_blocking(move || {
                 let _publication_guard = publication_guard;
                 let _resource_admission = resource_admission;
@@ -859,14 +851,7 @@ fn store_single_output(
     kernal_api::async_engine::launch(crate::daemon::staged_stats::scope_optional_request_profile(
         request_profile,
         async move {
-        #[expect(
-            clippy::expect_used,
-            reason = "persist_semaphore is owned by ServerState for the daemon's lifetime; AcquireError here would be a logic bug (semaphore explicitly closed), not a runtime condition"
-        )]
-        let _permit = sem
-            .acquire()
-            .await
-            .expect("persist_semaphore is owned by ServerState and never closed");
+        let _permit = sem.acquire_for(OPERATION_TIMEOUT).await;
         let written = kernal_api::async_engine::launch_blocking(move || {
             let _guard = guard;
             let _publication_guard = publication_guard;

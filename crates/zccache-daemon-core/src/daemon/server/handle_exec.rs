@@ -922,14 +922,7 @@ async fn store_exec_artifact_inner(
         let publication_guard_for_task =
             publication_guard.expect("direct exec publication acquired an owned guard");
         kernal_api::async_engine::launch(async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "persist_semaphore is owned by ServerState for the daemon's lifetime; AcquireError here would be a logic bug (semaphore explicitly closed), not a runtime condition"
-            )]
-            let _permit = sem
-                .acquire()
-                .await
-                .expect("persist_semaphore is owned by ServerState and never closed");
+            let _permit = sem.acquire_for(OPERATION_TIMEOUT).await;
             let written = kernal_api::async_engine::launch_blocking(move || {
                 let _publication_guard = publication_guard_for_task;
                 if let Err(error) = cached.persist_bytes(&persist_state, &key_for_persist, &payloads) {
@@ -944,7 +937,8 @@ async fn store_exec_artifact_inner(
             if let Some(gate) = completion_gate {
                 gate.persisted.notify_one();
             }
-        }).detach();
+        })
+        .detach();
     }
     Ok(None)
 }

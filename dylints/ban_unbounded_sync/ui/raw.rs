@@ -7,4 +7,5 @@ fn main() {
     let (_, rx) = std::sync::mpsc::channel::<()>();
     let _ = rx.recv();
     let _ = std::process::Command::new("probe").output();
+    let _timeout = std::net::TcpStream::set_read_timeout;
 }

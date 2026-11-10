@@ -1,10 +1,8 @@
 //! Integration tests for the per-recv timeout API on `IpcConnection` /
 //! `IpcClientConnection`. Validates four invariants:
 //!
-//! 1. The default is **unbounded** — preserves today's behavior for
-//!    callers that don't opt in (server-side `handle_connection`,
-//!    `zccache-download-client`).
-//! 2. `set_recv_timeout` is honored — once the caller opts in, a
+//! 1. Every connection starts with a finite default receive budget.
+//! 2. `set_recv_timeout` is honored — when the caller selects a budget, a
 //!    `recv` that doesn't complete in time returns `Err(Timeout)`.
 //! 3. `recv_with_timeout` works independent of any stored default.
 //! 4. **Peer death surfaces as `Io` / `ConnectionClosed`, not
@@ -25,14 +23,9 @@ use std::time::{Duration, Instant};
 use zccache::ipc::{connect, unique_test_endpoint, IpcError, IpcListener};
 use zccache::protocol::{Request, Response};
 
-/// Default-unbounded: no `set_recv_timeout` call → `recv` waits as long
-/// as needed. Listener delays 200ms before responding. With the new
-/// `Option<Duration> = None` default, the client should still complete
-/// successfully, matching today's behavior. This is the regression
-/// guard for server-side and download-client callers that share the
-/// IPC types and rely on unbounded reads.
+/// Ordinary responses still complete within the finite default budget.
 #[tokio::test]
-async fn recv_unbounded_by_default() {
+async fn recv_has_a_finite_default_budget() {
     let endpoint = unique_test_endpoint();
     let mut listener = IpcListener::bind(&endpoint).unwrap();
 
@@ -46,14 +39,31 @@ async fn recv_unbounded_by_default() {
 
     let mut client = connect(&endpoint).await.unwrap();
     assert!(
-        client.recv_timeout().is_none(),
-        "fresh connect must default to unbounded (None)"
+        client.recv_timeout() == zccache::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        "fresh connect must have a finite default budget"
     );
     client.send(&Request::Ping).await.unwrap();
 
     let resp: Option<Response> = client.recv().await.unwrap();
     assert_eq!(resp, Some(Response::Pong));
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn default_budget_expires_on_a_live_silent_connection() {
+    let endpoint = unique_test_endpoint();
+    let mut listener = IpcListener::bind(&endpoint).unwrap();
+    let accept = tokio::spawn(async move { listener.accept().await.unwrap() });
+    let mut client = connect(&endpoint).await.unwrap();
+    let server = accept.await.unwrap();
+    // Establish the real socket/pipe before switching to virtual time.
+    tokio::time::pause();
+    let bound = zccache::ipc::DEFAULT_CLIENT_RECV_TIMEOUT;
+    let result = tokio::time::timeout(bound + Duration::from_secs(1), client.recv::<Response>())
+        .await
+        .expect("default receive budget must expire before the test guard");
+    assert!(matches!(result, Err(IpcError::Timeout(actual)) if actual == bound));
+    drop(server);
 }
 
 /// `set_recv_timeout` opt-in: listener accepts but never responds.
@@ -73,7 +83,7 @@ async fn recv_honors_set_recv_timeout() {
 
     let mut client = connect(&endpoint).await.unwrap();
     client.set_recv_timeout(Duration::from_millis(200));
-    assert_eq!(client.recv_timeout(), Some(Duration::from_millis(200)));
+    assert_eq!(client.recv_timeout(), Duration::from_millis(200));
     client.send(&Request::Ping).await.unwrap();
 
     let start = Instant::now();
@@ -103,7 +113,7 @@ async fn recv_honors_set_recv_timeout() {
 /// was set via `set_recv_timeout`. Proves the override is independent
 /// of the stored field.
 #[tokio::test]
-async fn recv_with_timeout_works_without_default() {
+async fn recv_with_timeout_overrides_the_default() {
     let endpoint = unique_test_endpoint();
     let mut listener = IpcListener::bind(&endpoint).unwrap();
 
@@ -114,8 +124,8 @@ async fn recv_with_timeout_works_without_default() {
 
     let mut client = connect(&endpoint).await.unwrap();
     assert!(
-        client.recv_timeout().is_none(),
-        "must start without default"
+        client.recv_timeout() == zccache::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        "must start with the finite default"
     );
     client.send(&Request::Ping).await.unwrap();
 

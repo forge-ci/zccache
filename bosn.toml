@@ -134,6 +134,26 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core -p zccache-arti
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib kernal_wait_2038 --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib kernal_wait_2038 --locked -- --nocapture"
 
+[task.timeout-features-1967]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-download-protocol --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features download-client,cli,download-daemon --lib --locked"
+
+[task.download-protocol-1967]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-download-protocol --lib wait_frame_carries_its_protocol_version --locked -- --nocapture"
+
+[task.timeout-ipc-1967]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib connection_disconnect --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features zccache-bin,test-support --test wire ipc_timeout:: --locked"
+
+[task.timeout-review-1967]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features download-client,cli,download-daemon --lib late_wait_reply_cannot_satisfy --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib gate_capacity_1967 --locked -- --nocapture"
+
+[task.timeout-persist-1967]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib embedded_flush --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib detached_exec --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib perf_staged_rust_hit_uses_provisional --locked"
+
 [task.bounded-sync-contention-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib bounded_lock_tests --locked"

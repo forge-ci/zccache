@@ -75,3 +75,43 @@ def test_parse_handles_ci_forced_color() -> None:
         "   \x1b[1m\x1b[94m--> \x1b[0mcrates/a/src/x.rs:1:2\n"
     )
     assert lint.parse_feature_findings(output) == {("crates/a/src/x.rs", "raw wait"): 1}
+
+
+def test_product_wait_lint_is_not_capped(monkeypatch, tmp_path) -> None:
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("", encoding="utf-8")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr(lint, "DYLINT_FEATURE_BASELINE", baseline)
+    monkeypatch.setattr(lint.subprocess, "run", fake_run)
+    assert lint.dylint_product_pass({}, [None, "x86_64-pc-windows-msvc"]) == 0
+    strict = [entry for entry in commands if "dylints/ban_unbounded_sync" in entry[0]]
+    assert len(strict) == 2
+    for command, env in strict:
+        assert "--features" in command
+        assert "--cap-lints=warn" not in env.get("DYLINT_RUSTFLAGS", "")
+
+
+def test_clippy_only_entrypoint_runs_both_feature_selections(monkeypatch) -> None:
+    commands = []
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(lint, "cargo_command", lambda *args: ["soldr", "cargo", *args])
+
+    def capture(command):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(lint.sys, "argv", ["lint", "--clippy-only"])
+    monkeypatch.setattr(lint, "validate_release_metadata", lambda: None)
+    monkeypatch.setattr(lint.check_kernal_api_baseline, "check", lambda: [])
+    monkeypatch.setattr(lint, "lint_workspace", lambda: 99)
+    monkeypatch.setattr(lint, "run_cmd", capture)
+    assert lint.main() == 0
+    assert len(commands) == 2
+    assert all("clippy" in command and "--all-targets" in command for command in commands)
+    assert "--features" not in commands[0]
+    assert ",".join(lint.DYLINT_PRODUCT_FEATURES) in commands[1]

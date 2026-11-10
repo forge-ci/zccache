@@ -153,9 +153,25 @@ impl Default for Gate {
 impl Gate {
     /// Create a gate admitting one operation at a time.
     pub fn new() -> Self {
+        Self::with_capacity(1)
+    }
+
+    /// Create a bounded-admission gate retaining the caller's concurrency cap.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `permits` exceeds Tokio's semaphore capacity limit.
+    #[must_use]
+    pub fn with_capacity(permits: usize) -> Self {
         Self {
-            inner: Arc::new(tokio::sync::Semaphore::new(1)),
+            inner: Arc::new(tokio::sync::Semaphore::new(permits)),
         }
+    }
+
+    /// Report current free capacity without waiting for admission.
+    #[must_use]
+    pub fn available_permits(&self) -> usize {
+        self.inner.available_permits()
     }
 
     /// Attempt admission immediately without joining the wait queue.

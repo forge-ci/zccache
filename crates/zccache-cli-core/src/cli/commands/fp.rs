@@ -28,7 +28,13 @@ pub(crate) async fn cmd_fp_check(
         exclude: exclude.to_vec(),
     };
 
-    match crate::ipc::full_family_roundtrip(endpoint, &request, None).await {
+    match crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    {
         Ok(Some(crate::protocol::Response::FingerprintCheckResult {
             decision,
             reason,
@@ -81,7 +87,13 @@ pub(crate) async fn cmd_fp_mark(endpoint: &str, cache_file: &Path, success: bool
         }
     };
 
-    match crate::ipc::full_family_roundtrip(endpoint, &request, None).await {
+    match crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    {
         Ok(Some(crate::protocol::Response::FingerprintAck)) => {
             let label = if success {
                 "mark-success"
@@ -116,7 +128,13 @@ pub(crate) async fn cmd_fp_invalidate(endpoint: &str, cache_file: &Path) -> Exit
         cache_file: cache_file.into(),
     };
 
-    match crate::ipc::full_family_roundtrip(endpoint, &request, None).await {
+    match crate::ipc::full_family_roundtrip(
+        endpoint,
+        &request,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+    )
+    .await
+    {
         Ok(Some(crate::protocol::Response::FingerprintAck)) => {
             eprintln!("zccache fp: invalidated");
             ExitCode::SUCCESS

@@ -26,15 +26,16 @@ pub(super) fn acquire_fetch_lock(request: &ResolvedFetchRequest) -> Result<Fetch
         request.wait_mode,
         FETCH_LOCK_WAIT,
     )
+    .map_err(|error| error.to_string())
 }
 
 fn acquire_lock_at(
     lock_path: &Path,
     wait_mode: WaitMode,
     bound: Duration,
-) -> Result<FetchLock, String> {
+) -> std::io::Result<FetchLock> {
     if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent)?;
     }
     let open = || {
         OpenOptions::new()
@@ -48,20 +49,20 @@ fn acquire_lock_at(
         WaitMode::Block => {
             zccache_core::wait::lock_exclusive_owned_for(open, bound).map_err(|error| {
                 if error.kind() == ErrorKind::TimedOut {
-                    format!(
+                    std::io::Error::new(ErrorKind::TimedOut, format!(
                         "timed out after {}s waiting for fetch lock {}: another fetch still owns it",
                         bound.as_secs_f64(),
                         lock_path.display()
-                    )
+                    ))
                 } else {
-                    error.to_string()
+                    error
                 }
             })?
         }
         WaitMode::NoWait => {
-            let file = open().map_err(|e| e.to_string())?;
+            let file = open()?;
             kernal_api::platform::fs::try_lock_exclusive_owned(file)
-                .map_err(|_| "locked".to_string())?
+                .map_err(|error| std::io::Error::new(error.kind(), "locked"))?
         }
     };
     Ok(FetchLock { _lock: lock })
@@ -94,10 +95,15 @@ mod tests {
         let bound = Duration::from_millis(50);
         let owner = acquire_lock_at(&path, WaitMode::NoWait, bound).unwrap();
 
-        let message = match acquire_lock_at(&path, WaitMode::Block, bound) {
+        let started = std::time::Instant::now();
+        let error = match acquire_lock_at(&path, WaitMode::Block, bound) {
             Ok(_) => panic!("the waiter must not acquire a held lock"),
-            Err(message) => message,
+            Err(error) => error,
         };
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(started.elapsed() >= bound);
+        assert!(started.elapsed() < bound + Duration::from_secs(10));
+        let message = error.to_string();
         assert!(message.contains("timed out"), "{message}");
         assert!(message.contains("held.lock"), "{message}");
 

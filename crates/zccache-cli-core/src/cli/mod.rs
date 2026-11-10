@@ -61,17 +61,28 @@ pub(crate) fn status_probe_timeout() -> std::time::Duration {
 /// the wedge detection entirely and keep the historical 300 s behavior.
 const WEDGE_RECV_DEFAULT_SECS: u64 = 180;
 
-/// Returns the wedge-detection recv timeout for Compile/Link calls. `None`
-/// means "disabled" (the env var was set to `0`). See [`WEDGE_RECV_DEFAULT_SECS`].
-pub(crate) fn wedge_recv_timeout() -> Option<std::time::Duration> {
+/// A finite receive budget with an explicit timeout classification policy.
+#[derive(Clone, Copy)]
+pub(crate) enum CompileReceivePolicy {
+    DetectWedge(std::time::Duration),
+    TransportOnly(std::time::Duration),
+}
+
+pub(crate) enum WedgeProbePolicy {
+    Skip,
+    Within(std::time::Duration),
+}
+
+/// Zero disables wedge recovery, while retaining the ordinary finite IPC budget.
+pub(crate) fn wedge_recv_timeout() -> CompileReceivePolicy {
     let secs = std::env::var("ZCCACHE_WEDGE_RECV_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(WEDGE_RECV_DEFAULT_SECS);
     if secs == 0 {
-        None
+        CompileReceivePolicy::TransportOnly(crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT)
     } else {
-        Some(std::time::Duration::from_secs(secs))
+        CompileReceivePolicy::DetectWedge(std::time::Duration::from_secs(secs))
     }
 }
 

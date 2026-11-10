@@ -76,8 +76,11 @@ async fn wait_for_disconnect_pends_while_peer_alive_and_idle() {
 
         // A live but idle peer (blocked awaiting the compile response, as a
         // real client is) must NOT be mistaken for a disconnect.
-        let res =
-            tokio::time::timeout(Duration::from_millis(150), server.wait_for_disconnect()).await;
+        let res = tokio::time::timeout(
+            Duration::from_millis(150),
+            server.run_while_peer_connected(std::future::pending::<()>()),
+        )
+        .await;
         assert!(
             res.is_err(),
             "wait_for_disconnect resolved while the peer was still alive"

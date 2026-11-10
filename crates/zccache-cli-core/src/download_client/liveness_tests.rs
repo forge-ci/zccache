@@ -175,6 +175,7 @@ fn start_real_daemon(endpoint: &str) -> std::thread::JoinHandle<()> {
 #[test]
 fn a_custom_endpoint_never_touches_the_default_lock_or_endpoint() {
     let _root = IsolatedCacheRoot::set();
+    #[cfg(unix)]
     let default_endpoint = daemon_mgmt::default_endpoint();
     daemon_mgmt::write_lock_file(dead_pid()).unwrap();
     #[cfg(unix)]

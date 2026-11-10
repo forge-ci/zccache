@@ -38,12 +38,17 @@ async fn perf_staged_rust_hit_uses_provisional_payload_before_durable_publicatio
     let server = crate::daemon::server::tests::bind_isolated_server(temp.path());
     let state = Arc::clone(&server.state);
     let work = tempfile::tempdir().unwrap();
-    let permits = state.persist_semaphore.available_permits() as u32;
+    let permits = state.persist_semaphore.available_permits();
     assert!(permits > 0, "test server must expose a persist permit");
-    let blocked_publisher = Arc::clone(&state.persist_semaphore)
-        .acquire_many_owned(permits)
-        .await
-        .unwrap();
+    let mut blocked_publisher = Vec::with_capacity(permits);
+    for _ in 0..permits {
+        blocked_publisher.push(
+            state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let private_root: NormalizedPath = work.path().join("private-rust-output").into();
     std::fs::create_dir_all(&private_root).unwrap();
     let staged: NormalizedPath = private_root.join("libworkspace.a");

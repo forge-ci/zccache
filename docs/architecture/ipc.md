@@ -124,6 +124,13 @@ the binding never runs or stores a callback result after an uncertain replay.
 
 ## Connection Lifecycle
 
+Message receives start with a finite 300-second budget. Callers may replace it
+with a real `Duration`; there is no unset/clear operation. Control and full-family
+roundtrip APIs require a receive budget explicitly. Compile heartbeats retain
+their existing progress-based budget reset. The separate download protocol uses
+version-2 frames and mandatory wait milliseconds (#1967); its version tag is
+piggybacked on each frame, without an extra handshake.
+
 **CLI side (drop-in wrapper mode):**
 1. Compute socket address.
 2. Ensure daemon is running (auto-start if needed).

@@ -312,7 +312,7 @@ impl DownloadClient {
                         resolved.download_options.clone(),
                     )?;
                     let status = loop {
-                        let status = handle.wait(None)?;
+                        let status = handle.wait(crate::core::wait::PROBE)?;
                         if super::is_terminal(&status) {
                             break status;
                         }

@@ -41,7 +41,7 @@ pub fn client_exec_probe(
         input_extra: Arc::new(input_extra.to_vec()),
     };
     run_async(async move {
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(&endpoint, &request, crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT).await {
             Ok(Some(crate::protocol::Response::ExecProbeResult {
                 cache_key_hex,
                 cached_bytes,
@@ -82,7 +82,7 @@ pub fn client_exec_store(
         result_bytes: Arc::new(result_bytes.to_vec()),
     };
     run_async(async move {
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(&endpoint, &request, crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT).await {
             Ok(Some(crate::protocol::Response::ExecStoreAck {
                 stored: true,
                 persistent: true,
@@ -119,7 +119,7 @@ pub fn client_stop(endpoint: Option<&str>) -> Result<bool, String> {
         match crate::ipc::daemon_control_roundtrip(
             &endpoint,
             crate::ipc::DaemonControlRequest::Shutdown,
-            None,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
         )
         .await
         {
@@ -139,7 +139,7 @@ pub fn client_status(endpoint: Option<&str>) -> Result<crate::protocol::DaemonSt
         match crate::ipc::daemon_control_roundtrip(
             &endpoint,
             crate::ipc::DaemonControlRequest::Status,
-            None,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
         )
         .await
         {
@@ -178,7 +178,13 @@ pub fn client_session_start(
             profile: false,
             private_daemon: None,
         };
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(crate::protocol::Response::SessionStarted {
                 session_id,
                 journal_path,
@@ -295,7 +301,7 @@ pub fn session_end_idempotent(
             session_id: session_id.clone(),
         };
         let response = match crate::ipc::full_family_roundtrip_classified(
-            &endpoint, &request, None,
+            &endpoint, &request, crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
         )
         .await
         {
@@ -335,7 +341,13 @@ pub fn client_session_stats(
         let request = crate::protocol::Request::SessionStats {
             session_id: session_id.clone(),
         };
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(crate::protocol::Response::SessionStatsResult { stats })) => Ok(stats),
             Ok(Some(crate::protocol::Response::Error { message })) => Err(message),
             Ok(None) => Err("lost connection to daemon (no response received)".to_string()),
@@ -379,7 +391,13 @@ pub fn fingerprint_check(
             include_globs,
             exclude,
         };
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(crate::protocol::Response::FingerprintCheckResult {
                 decision,
                 reason,
@@ -423,7 +441,13 @@ fn fingerprint_mark(
                 cache_file: cache_file.into(),
             }
         };
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(crate::protocol::Response::FingerprintAck)) => Ok(()),
             Ok(Some(crate::protocol::Response::Error { message })) => Err(message),
             Ok(None) => Err("lost connection to daemon (no response received)".to_string()),
@@ -441,7 +465,13 @@ pub fn fingerprint_invalidate(endpoint: Option<&str>, cache_file: &Path) -> Resu
         let request = crate::protocol::Request::FingerprintInvalidate {
             cache_file: cache_file.into(),
         };
-        match crate::ipc::full_family_roundtrip(&endpoint, &request, None).await {
+        match crate::ipc::full_family_roundtrip(
+            &endpoint,
+            &request,
+            crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(crate::protocol::Response::FingerprintAck)) => Ok(()),
             Ok(Some(crate::protocol::Response::Error { message })) => Err(message),
             Ok(None) => Err("lost connection to daemon (no response received)".to_string()),

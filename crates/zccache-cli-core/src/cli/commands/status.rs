@@ -10,7 +10,7 @@ pub(crate) async fn cmd_status(endpoint: &str, json: bool) -> ExitCode {
     let recv_result = match crate::ipc::daemon_control_roundtrip(
         endpoint,
         crate::ipc::DaemonControlRequest::Status,
-        None,
+        crate::ipc::DEFAULT_CLIENT_RECV_TIMEOUT,
     )
     .await
     {
