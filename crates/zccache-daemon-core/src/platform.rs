@@ -96,7 +96,11 @@ pub(crate) mod fs {
         /// Sealing also upgrades legacy `READONLY` blobs on their next hit.
         pub(crate) fn seal_cache_blob(path: &std::path::Path) -> std::io::Result<()> {
             if kernal_api::platform::host::target_is_windows() {
-                return kernal_api::platform::fs::deny_in_place_writes(path);
+                // Staged digest generations can exceed MAX_PATH. Rust filesystem
+                // calls extend those paths internally; named ACL calls need the
+                // facade's native spelling explicitly (#1791).
+                let native = kernal_api::platform::fs::native_call_path(path)?;
+                return kernal_api::platform::fs::deny_in_place_writes(&native);
             }
             let current = mode(&std::fs::metadata(path)?);
             apply_mode(path, (current & !ANY_WRITE) | GROUP_WRITE)
@@ -119,7 +123,8 @@ pub(crate) mod fs {
         /// [`seal_cache_blob`], or read-only in the ordinary sense.
         pub(crate) fn is_sealed(path: &std::path::Path) -> std::io::Result<bool> {
             if kernal_api::platform::host::target_is_windows() {
-                return kernal_api::platform::fs::in_place_writes_denied(path);
+                let native = kernal_api::platform::fs::native_call_path(path)?;
+                return kernal_api::platform::fs::in_place_writes_denied(&native);
             }
             Ok(mode(&std::fs::metadata(path)?) & OWNER_WRITE == 0)
         }
@@ -142,7 +147,8 @@ pub(crate) mod fs {
                 }
             }
             let result = if kernal_api::platform::host::target_is_windows() {
-                kernal_api::platform::fs::allow_in_place_writes(path)
+                kernal_api::platform::fs::native_call_path(path)
+                    .and_then(|native| kernal_api::platform::fs::allow_in_place_writes(&native))
             } else {
                 set_readonly(path, false)
             };
