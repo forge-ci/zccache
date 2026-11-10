@@ -20,14 +20,20 @@ pub(super) fn call<'tcx>(
             if matches!(name, Some("call" | "call_once" | "call_mut"))
                 && matches!(cx.tcx.crate_name(definition.krate).as_str(), "core" | "std")
             {
-                return match arguments.types().next().map(|value| *value.kind()) {
-                    Some(ty::Closure(definition, args)) | Some(ty::FnDef(definition, args)) => {
-                        function(cx, definition, args, seen)
+                return match arguments
+                    .skip_binder()
+                    .types()
+                    .next()
+                    .map(|value| *value.kind())
+                {
+                    Some(ty::Closure(definition, args)) => function(cx, definition, args, seen),
+                    Some(ty::FnDef(definition, args)) => {
+                        function(cx, definition, args.skip_binder(), seen)
                     }
                     _ => UNKNOWN,
                 };
             }
-            function(cx, *definition, arguments, seen)
+            function(cx, *definition, arguments.skip_binder(), seen)
         }
         ty::FnPtr(..) => UNKNOWN,
         _ => UNKNOWN,
@@ -61,7 +67,17 @@ fn function<'tcx>(
         let path = cx.get_def_path(definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
         let krate = cx.tcx.crate_name(definition.krate);
-        if super::guard_escapes::leaks(cx, ty::Ty::new_fn_def(cx.tcx, definition, arguments)) {
+        if matches!(
+            super::canonical_path(cx, definition).as_str(),
+            "zccache_daemon_core::daemon::server::wal::PendingIndexClear::wait_for"
+                | "zccache_daemon_core::daemon::server::wal::reserve_index_clear_blocking"
+        ) {
+            return SWEEP;
+        }
+        if super::guard_escapes::leaks(
+            cx,
+            ty::Ty::new_fn_def(cx.tcx, definition, ty::Binder::dummy(arguments)),
+        ) {
             return ESCAPE;
         }
         if matches!(krate.as_str(), "core" | "std")
@@ -91,7 +107,7 @@ fn function<'tcx>(
         if matches!(krate.as_str(), "std" | "tokio")
             && cx.tcx.def_kind(definition) == rustc_hir::def::DefKind::Fn
             && path.iter().any(|part| part.as_str() == "fs")
-            && name == "remove_dir_all"
+            && matches!(name, "remove_dir_all" | "remove_file")
         {
             return SWEEP;
         }
@@ -149,8 +165,8 @@ fn function<'tcx>(
         };
         calls.into_iter().fold(0, |effects, target| {
             if let Target::Erase(source, destination) = target {
-                let source = ty::EarlyBinder::bind(source).instantiate(cx.tcx, arguments).skip_norm_wip();
-                let destination = ty::EarlyBinder::bind(destination).instantiate(cx.tcx, arguments).skip_norm_wip();
+                let source = ty::EarlyBinder::bind(cx.tcx, source).instantiate(cx.tcx, arguments).skip_norm_wip();
+                let destination = ty::EarlyBinder::bind(cx.tcx, destination).instantiate(cx.tcx, arguments).skip_norm_wip();
                 let owns = |value| super::guard_types::contains(cx, value, super::guard_types::Scope::Ownership, &mut Vec::new());
                 return effects | if owns(source) && !owns(destination) { ESCAPE } else { 0 };
             }
@@ -167,7 +183,7 @@ fn function<'tcx>(
                 Target::Drop(value) => (value, true),
                 Target::Erase(..) => unreachable!(),
             };
-            let value = ty::EarlyBinder::bind(value)
+            let value = ty::EarlyBinder::bind(cx.tcx, value)
                 .instantiate(cx.tcx, arguments)
                 .skip_norm_wip();
             effects | if dropping {
@@ -373,7 +389,7 @@ pub(super) fn drop_value<'tcx>(
                     .and_then(|value| value.coroutine_layout.as_ref())
                     .map_or(0, |layout| {
                         layout.field_tys.iter().fold(0, |effects, field| {
-                            let value = ty::EarlyBinder::bind(field.ty)
+                            let value = ty::EarlyBinder::bind(cx.tcx, field.ty)
                                 .instantiate(cx.tcx, arguments)
                                 .skip_norm_wip();
                             effects | drop_value(cx, value, summaries, active)
@@ -385,10 +401,13 @@ pub(super) fn drop_value<'tcx>(
             }
         }
         ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
-        ty::Alias(alias) if matches!(alias.kind, ty::Opaque { .. }) => {
+        ty::Alias(_, alias) if matches!(alias.kind, ty::Opaque { .. }) => {
+            let Some(def_id) = alias.kind.try_to_opaque() else {
+                return UNKNOWN;
+            };
             let hidden = cx
                 .tcx
-                .type_of(alias.kind.def_id())
+                .type_of(def_id)
                 .instantiate(cx.tcx, alias.args)
                 .skip_norm_wip();
             if hidden == value {

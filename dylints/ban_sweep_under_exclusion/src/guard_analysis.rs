@@ -66,6 +66,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     let mut declarations = mir::BasicBlockData::new(
         Some(mir::Terminator {
             source_info: mir::SourceInfo::outermost(owned.span),
+            attributes: Default::default(),
             kind: mir::TerminatorKind::Unreachable,
         }),
         false,

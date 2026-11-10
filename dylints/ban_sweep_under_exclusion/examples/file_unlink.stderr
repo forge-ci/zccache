@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/file_unlink.rs:6:13
+   |
+LL |     let _ = unlink("retired");
+   |             ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/file_unlink.rs:11:13
+   |
+LL |     let _ = delete("retired");
+   |             ^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

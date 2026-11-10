@@ -354,13 +354,19 @@ pub(crate) fn detach_orphaned_staged_paths_for(
     }
     let mut candidates = Vec::new();
     for entry in fs::read_dir(&root)? {
-        let entry = entry?;
+        let Some(entry) = entry_if_present(entry)? else {
+            continue;
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name == STORE_LOCK || name == super::trash::STAGED_TRASH {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)?;
+        #[cfg(test)]
+        super::hook::pause(&path, super::StagedHookPoint::ScanEntryListed);
+        let Some(metadata) = listed_entry(&path, |entry| fs::symlink_metadata(entry))? else {
+            continue;
+        };
         if is_staged_link_or_reparse(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -370,14 +376,23 @@ pub(crate) fn detach_orphaned_staged_paths_for(
         if metadata.is_file() && name.starts_with('.') {
             candidates.push((path, None));
         } else if metadata.is_dir() && staged_key_supported(&name) {
-            for child in fs::read_dir(&path)? {
-                let child = child?;
+            let Some(children) = listed_entry(&path, |entry| fs::read_dir(entry))? else {
+                continue;
+            };
+            for child in children {
+                let Some(child) = entry_if_present(child)? else {
+                    continue;
+                };
                 let child_name = child.file_name().to_string_lossy().into_owned();
                 if child_name == super::PUBLISH_LOCK {
                     continue;
                 }
                 let child_path = child.path();
-                let metadata = fs::symlink_metadata(&child_path)?;
+                let Some(metadata) =
+                    listed_entry(&child_path, |entry| fs::symlink_metadata(entry))?
+                else {
+                    continue;
+                };
                 if child_name.starts_with(".tmp-") || metadata.is_dir() {
                     candidates.push((child_path, Some((name.clone(), child_name))));
                 }

@@ -36,7 +36,7 @@ pub(super) fn moves<'tcx>(
     let actual = cx
         .tcx
         .fn_sig(definition)
-        .instantiate(cx.tcx, arguments)
+        .instantiate(cx.tcx, arguments.skip_binder())
         .skip_norm_wip()
         .skip_binder();
     // Returning guard ownership requires a separate proof at the destination.

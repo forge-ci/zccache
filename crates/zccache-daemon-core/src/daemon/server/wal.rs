@@ -9,7 +9,13 @@ pub(super) enum IndexWriterCommand {
     /// Refresh retention age without replacing newer artifact metadata.
     Touch(String, u64),
     Remove(Vec<String>),
-    ClearBlocking(std::sync::mpsc::SyncSender<bool>),
+    ClearBlocking {
+        ready: std::sync::mpsc::SyncSender<()>,
+        commit:
+            kernal_api::async_engine::OneshotReceiver<crate::core::sync::PublicationCommitPermit>,
+        ordered: std::sync::mpsc::SyncSender<()>,
+        flushed: std::sync::mpsc::SyncSender<bool>,
+    },
     Flush(kernal_api::async_engine::OneshotSender<()>),
     /// Blocking startup reconciliation needs proof that queued rows are committed.
     FlushForReconciliation(std::sync::mpsc::SyncSender<bool>),
@@ -324,8 +330,15 @@ pub(super) async fn run_index_writer(
             kernal_api::async_engine::FairRace3::First(msg) => {
                 match msg {
                     Ok(command) => {
-                        process_index_writer_command(command, &store, &mut wal, max_pending, &root)
-                            .await;
+                        process_index_writer_command(
+                            command,
+                            &store,
+                            &mut wal,
+                            max_pending,
+                            &root,
+                            &mut rx,
+                        )
+                        .await;
                         // Drain whatever else is already queued in this tick.
                         while let Ok(command) = rx.try_recv() {
                             process_index_writer_command(
@@ -334,6 +347,7 @@ pub(super) async fn run_index_writer(
                                 &mut wal,
                                 max_pending,
                                 &root,
+                                &mut rx,
                             )
                             .await;
                         }
@@ -355,8 +369,15 @@ pub(super) async fn run_index_writer(
                 // Daemon-initiated graceful shutdown. Drain anything still
                 // queued and flush before the runtime aborts us.
                 while let Ok(command) = rx.try_recv() {
-                    process_index_writer_command(command, &store, &mut wal, max_pending, &root)
-                        .await;
+                    process_index_writer_command(
+                        command,
+                        &store,
+                        &mut wal,
+                        max_pending,
+                        &root,
+                        &mut rx,
+                    )
+                    .await;
                 }
                 tracing::info!(
                     pending = wal.len(),
@@ -375,6 +396,7 @@ async fn process_index_writer_command(
     wal: &mut std::collections::HashMap<String, ArtifactIndex>,
     max_pending: usize,
     root: &Arc<CacheRootWriterLease>,
+    rx: &mut kernal_api::async_engine::UnboundedReceiver<IndexWriterCommand>,
 ) {
     match command {
         IndexWriterCommand::Insert(k, v) => {
@@ -410,16 +432,51 @@ async fn process_index_writer_command(
                 }
             }
         }
-        IndexWriterCommand::ClearBlocking(ack) => {
+        IndexWriterCommand::ClearBlocking {
+            ready,
+            commit,
+            ordered,
+            flushed,
+        } => {
+            // Reserve the actor before Clear acquires publication. In particular,
+            // any previous disk flush finishes before ready is acknowledged.
+            if ready.try_send(()).is_err() {
+                return;
+            }
+            let publication = match kernal_api::async_engine::timeout(
+                OPERATION_TIMEOUT.saturating_mul(2),
+                commit,
+            )
+            .await
+            {
+                Ok(Ok(publication)) => publication,
+                _ => return,
+            };
+            // Clear now owns publication. Everything already queued belongs to
+            // the old namespace; no publisher can enqueue a post-Clear command
+            // until the ordered acknowledgement below releases that exclusion.
+            let mut flush_acks = Vec::new();
+            while let Ok(command) = rx.try_recv() {
+                if let IndexWriterCommand::Flush(ack) = command {
+                    flush_acks.push(ack);
+                }
+            }
             wal.clear();
             store.clear();
+            // All older index commands have been retired. The publication
+            // commit may end now; disk completion has its own acknowledgement.
+            drop(publication);
+            let _ = ordered.try_send(());
             let result = launch_index_flush(store, root)
                 .await
                 .unwrap_or_else(|error| Err(io::Error::other(error)));
             if let Err(error) = &result {
                 tracing::warn!(%error, "cleared artifact index flush failed");
             }
-            let _ = ack.try_send(result.is_ok());
+            let _ = flushed.try_send(result.is_ok());
+            for ack in flush_acks {
+                let _ = ack.send(());
+            }
         }
         IndexWriterCommand::Flush(ack) => {
             flush_wal_to_disk(store, wal, root).await;
@@ -471,13 +528,80 @@ pub(super) async fn flush_index_writer(
     )
 }
 
-pub(super) fn clear_index_writer_blocking(
+pub(super) struct PendingIndexClear {
+    flushed: std::sync::mpsc::Receiver<bool>,
+}
+
+pub(super) struct ReservedIndexClear {
+    commit: kernal_api::async_engine::OneshotSender<crate::core::sync::PublicationCommitPermit>,
+    ordered: std::sync::mpsc::Receiver<()>,
+    flushed: std::sync::mpsc::Receiver<bool>,
+}
+
+impl ReservedIndexClear {
+    /// The reserved actor performs only memory work before acknowledging this
+    /// commit; no earlier or current disk operation is awaited under exclusion.
+    pub(super) fn commit_for(
+        self,
+        publication: crate::core::sync::PublicationCommitPermit,
+        timeout: Duration,
+    ) -> Option<PendingIndexClear> {
+        // The actor owns exclusion even if this waiter times out or unwinds;
+        // it can never apply a late Clear to a newer publication.
+        self.commit.send(publication).ok()?;
+        crate::core::wait::recv_for(&self.ordered, timeout).ok()?;
+        Some(PendingIndexClear {
+            flushed: self.flushed,
+        })
+    }
+}
+
+impl PendingIndexClear {
+    pub(super) fn wait_for(self, timeout: Duration) -> bool {
+        matches!(
+            crate::core::wait::recv_for(&self.flushed, timeout),
+            Ok(true)
+        )
+    }
+}
+
+pub(super) fn reserve_index_clear_blocking(
     tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
     timeout: std::time::Duration,
+) -> Option<ReservedIndexClear> {
+    let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (commit, commit_rx) = kernal_api::async_engine::oneshot_channel();
+    let (ordered_tx, ordered_rx) = std::sync::mpsc::sync_channel(1);
+    let (flushed, flushed_rx) = std::sync::mpsc::sync_channel(1);
+    tx.send(IndexWriterCommand::ClearBlocking {
+        ready,
+        commit: commit_rx,
+        ordered: ordered_tx,
+        flushed,
+    })
+    .ok()?;
+    crate::core::wait::recv_for(&ready_rx, timeout).ok()?;
+    Some(ReservedIndexClear {
+        commit,
+        ordered: ordered_rx,
+        flushed: flushed_rx,
+    })
+}
+
+#[cfg(test)]
+fn clear_index_writer_blocking(
+    tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
+    timeout: Duration,
 ) -> bool {
-    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-    tx.send(IndexWriterCommand::ClearBlocking(ack_tx)).is_ok()
-        && matches!(crate::core::wait::recv_for(&ack_rx, timeout), Ok(true))
+    reserve_index_clear_blocking(tx, crate::core::wait::PROBE)
+        .and_then(|reserved| {
+            reserved.commit_for(
+                crate::core::sync::PublicationBarrier::new()
+                    .blocking_write_for(crate::core::wait::PROBE),
+                crate::core::wait::PROBE,
+            )
+        })
+        .is_some_and(|pending| pending.wait_for(timeout))
 }
 
 pub(super) async fn flush_wal_to_disk(
@@ -622,6 +746,7 @@ mod tests {
         let root = Arc::new(controller.lease_for(STATE_TIMEOUT).unwrap());
         let store = Arc::new(ArtifactStore::open_empty(&temp.path().join("index.bin")));
         let mut wal = std::collections::HashMap::new();
+        let (_tx, mut rx) = kernal_api::async_engine::unbounded_channel();
         let key = "b".repeat(64);
         let mut stale = ArtifactIndex::new(
             vec!["output.rmeta".to_string()],
@@ -648,6 +773,7 @@ mod tests {
             &mut wal,
             usize::MAX,
             &root,
+            &mut rx,
         )
         .await;
         process_index_writer_command(
@@ -656,6 +782,7 @@ mod tests {
             &mut wal,
             usize::MAX,
             &root,
+            &mut rx,
         )
         .await;
 
@@ -674,6 +801,7 @@ mod tests {
         let index_path = temp.path().join("index.bin");
         let store = Arc::new(ArtifactStore::open_empty(&index_path));
         let mut wal = std::collections::HashMap::new();
+        let (_tx, mut rx) = kernal_api::async_engine::unbounded_channel();
         let key = "a".repeat(64);
         let meta = ArtifactIndex::new(
             vec!["output.o".to_string()],
@@ -689,6 +817,7 @@ mod tests {
             &mut wal,
             usize::MAX,
             &root,
+            &mut rx,
         )
         .await;
         assert!(wal.contains_key(&key));
@@ -699,6 +828,7 @@ mod tests {
             &mut wal,
             usize::MAX,
             &root,
+            &mut rx,
         )
         .await;
 

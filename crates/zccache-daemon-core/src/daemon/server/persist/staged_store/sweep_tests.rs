@@ -4,12 +4,12 @@ use super::*;
 use std::time::Duration;
 
 #[test]
-fn maintenance_sweep_allows_unrelated_publication_after_detach() {
+fn perf_maintenance_sweep_allows_unrelated_publication_after_detach() {
     publication_while_sweeping(false);
 }
 
 #[test]
-fn clear_sweep_allows_unrelated_publication_after_detach() {
+fn perf_clear_sweep_allows_unrelated_publication_after_detach() {
     publication_while_sweeping(true);
 }
 
@@ -215,11 +215,16 @@ fn publication_while_sweeping(clear: bool) {
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let publisher_dir = artifact_dir.clone();
     let publisher_key = new_key.clone();
+    // #1964: a paused recursive sweep must add no wait to publication. The
+    // hook makes the old lock-held implementation exceed this budget on any
+    // host, independently of how quickly the filesystem removes a tree.
+    let publication_start = std::time::Instant::now();
     let publisher = std::thread::spawn(move || {
         let result = persist_staged_artifact_paths(&publisher_dir, &publisher_key, &sources);
         crate::core::wait::send_for(&done_tx, result, Duration::from_secs(5)).unwrap();
     });
     let published = crate::core::wait::recv_for(&done_rx, Duration::from_secs(1));
+    let publication_elapsed = publication_start.elapsed();
     let published_before_resume = published.is_ok();
     let publication_started = staged_root(&artifact_dir).join(&new_key).exists();
     // Release and drain both workers even on the baseline failure path.
@@ -244,6 +249,10 @@ fn publication_while_sweeping(clear: bool) {
         "publication did not finish during paused cleanup: native_available={native_available}, publication_started={publication_started}"
     );
     assert!(
+        publication_elapsed < Duration::from_secs(1),
+        "publication exceeded its budget during paused cleanup: {publication_elapsed:?}"
+    );
+    assert!(
         detached_before_sweep,
         "evicted entries were reachable when recursive cleanup began"
     );
@@ -254,6 +263,10 @@ fn publication_while_sweeping(clear: bool) {
 }
 
 #[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "#2027: restart fixture self-execs the test binary, not a compiler"
+)]
 fn process_exit_after_retirement_is_recovered_without_erasing_a_replacement() {
     use super::super::{
         load_staged_artifact_paths, persist_staged_artifact_paths, sweep_staged_trash_for,

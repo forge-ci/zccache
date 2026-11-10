@@ -64,7 +64,7 @@ impl<'a, 'tcx> Analysis<'tcx> for GuardInitialization<'a, 'tcx> {
         state: &mut Self::Domain,
         terminator: &'mir mir::Terminator<'tcx>,
         location: mir::Location,
-    ) -> mir::TerminatorEdges<'mir, 'tcx> {
+    ) {
         self.inner
             .apply_primary_terminator_effect(state, terminator, location)
     }

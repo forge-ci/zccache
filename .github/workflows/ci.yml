@@ -330,15 +330,17 @@ jobs:
           export RUSTUP_TOOLCHAIN=nightly-2026-08-15
           soldr rustup run nightly-2026-08-15 cargo test
       - name: Check Dylint Library Formatting (ban_sweep_under_exclusion)
-        run: soldr cargo fmt --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --all -- --check
+        working-directory: dylints/ban_sweep_under_exclusion
+        run: soldr cargo fmt --all -- --check
       - name: Test Dylint Library (ban_sweep_under_exclusion)
+        working-directory: dylints/ban_sweep_under_exclusion
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
         run: |
           export PATH="${DYLINT_CARGO_SHIM}:${PATH}"
           export RUSTC="$(soldr rustup which --toolchain nightly-2026-08-15 rustc)"
           export RUSTUP_TOOLCHAIN=nightly-2026-08-15
-          soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml
+          soldr rustup run nightly-2026-08-15 cargo test
       - name: Check Dylint Library Formatting (ban_discarded_write_result)
         working-directory: dylints/ban_discarded_write_result
         run: soldr cargo fmt --all -- --check

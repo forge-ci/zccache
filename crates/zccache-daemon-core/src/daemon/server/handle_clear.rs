@@ -30,6 +30,11 @@ pub(super) async fn handle_clear(state: &Arc<SharedState>) -> Response {
 }
 
 fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Response {
+    let Some(index_clear) = wal::reserve_index_clear_blocking(&state.index_writer_tx, bound) else {
+        return Response::Error {
+            message: "index writer Clear reservation failed or timed out".into(),
+        };
+    };
     // Keep retired owners in the outer scope: even an error/panic releases
     // publication exclusion before a last private-plan owner can clean files.
     let mut retired_artifacts = Vec::new();
@@ -94,12 +99,12 @@ fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Re
         };
         // Preserve actor ordering: old queued inserts must be cleared before
         // allowing a new publication to enqueue its own index row.
-        let index_cleared = wal::clear_index_writer_blocking(&state.index_writer_tx, bound);
         state.stats.reset();
         state.profiler.reset();
         for profile in &state.session_staged_profiles {
             profile.value().reset();
         }
+        let index_cleared = index_clear.commit_for(_publication, bound);
         (
             artifacts_removed,
             metadata_cleared,
@@ -110,6 +115,8 @@ fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Re
         )
     };
     drop(retired_artifacts);
+    // Wait for disk durability only after releasing publication exclusion.
+    let index_cleared = index_cleared.is_some_and(|pending| pending.wait_for(bound));
     #[cfg(test)]
     persist::StagedHookGuard::pause_kv_sweep(state.cache_dir.as_path());
     let mut on_disk_bytes_freed = 0u64;

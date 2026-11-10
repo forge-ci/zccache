@@ -74,6 +74,22 @@ impl DetachedStagedTrash {
         self.rename_into_trash(path)
     }
 
+    /// Retire a flat legacy payload and its sidecar without changing file
+    /// permissions or unlinking either name while publication is excluded.
+    pub(crate) fn detach_legacy_blob_for(
+        &mut self,
+        path: &Path,
+        bound: Duration,
+    ) -> io::Result<()> {
+        // This also creates the canonical trash parent in a legacy-only store.
+        let _store = StagedCommitGuard::acquire_for(&self.artifact_dir, bound)?;
+        // The parent must remain available while self records renamed paths.
+        let parent = self.artifact_dir.clone();
+        self.detach_cache_child(parent.as_path(), path)?;
+        let digest = zccache_artifact::blob_digest::sidecar_path(path);
+        self.detach_cache_child(parent.as_path(), &digest)
+    }
+
     fn rename_into_trash(&mut self, path: &Path) -> io::Result<()> {
         let root = staged_root(&self.artifact_dir);
         if !validate_staged_artifact_root(&self.artifact_dir)? {
@@ -298,7 +314,7 @@ fn remove_tree(path: &Path, deadline: Instant, report: &mut StagedSweepReport) {
         let allocated = reclaimable_bytes(path, &metadata);
         // Registered removal also unlinks the digest sidecar. Account for it
         // once when it disappears here; later enumeration treats it as absent.
-        let digest = super::digest_path(path);
+        let digest = zccache_artifact::blob_digest::sidecar_path(path);
         let digest_bytes = fs::symlink_metadata(&digest)
             .ok()
             .map_or(0, |metadata| reclaimable_bytes(&digest, &metadata));

@@ -4,7 +4,6 @@ use super::*;
 pub(super) struct RemovalCommit {
     pub(super) keys: Vec<String>,
     pub(super) trash: DetachedStagedTrash,
-    pub(super) legacy_reclaimed_bytes: u64,
 }
 
 pub(super) struct RemovalSelection<'a> {
@@ -28,9 +27,8 @@ pub(super) fn remove_planned_artifacts(
         .filter(|artifact| artifact.staged && planned.contains(artifact.key.as_str()))
         .map(|artifact| (artifact.key.clone(), artifact.staged_generation.clone()))
         .collect();
-    let detached = evict_v2_artifact_keys_if_unchanged(artifact_dir, &staged_expected)?;
+    let mut detached = evict_v2_artifact_keys_if_unchanged(artifact_dir, &staged_expected)?;
     let staged_removed = &detached.removed;
-    let mut legacy_reclaimed_bytes = 0_u64;
     let selected: HashSet<&str> = scanned
         .iter()
         .filter(|artifact| {
@@ -44,20 +42,9 @@ pub(super) fn remove_planned_artifacts(
         .filter(|artifact| selected.contains(artifact.key.as_str()))
     {
         for file in &artifact.legacy_files {
-            let reclaimable = std::fs::symlink_metadata(file).ok().map_or(0, |metadata| {
-                if crate::core::config::file_may_free_space_on_removal(file) {
-                    crate::platform::fs::volume::allocated_bytes(file, &metadata)
-                } else {
-                    0
-                }
-            });
-            match remove_cow_blob(file) {
-                Ok(()) => {
-                    legacy_reclaimed_bytes = legacy_reclaimed_bytes.saturating_add(reclaimable)
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+            detached
+                .trash
+                .detach_legacy_blob_for(file, Duration::from_secs(2))?;
         }
     }
     let removed_keys: Vec<String> = plan
@@ -70,7 +57,6 @@ pub(super) fn remove_planned_artifacts(
         return Ok(RemovalCommit {
             keys: removed_keys,
             trash: detached.trash,
-            legacy_reclaimed_bytes,
         });
     }
 
@@ -93,6 +79,5 @@ pub(super) fn remove_planned_artifacts(
     Ok(RemovalCommit {
         keys: removed_keys,
         trash: detached.trash,
-        legacy_reclaimed_bytes,
     })
 }

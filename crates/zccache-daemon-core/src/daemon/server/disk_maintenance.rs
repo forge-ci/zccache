@@ -632,6 +632,11 @@ fn scan_artifact_usage(artifact_dir: &Path) -> io::Result<(Vec<DiskArtifact>, u6
                 staged_generation: None,
             });
         add_file_metadata(&path, &metadata, artifact, &mut seen);
+        add_file(
+            &crate::artifact::blob_digest::sidecar_path(&path),
+            artifact,
+            &mut seen,
+        )?;
         artifact.legacy_files.push(path.into());
     }
 
@@ -909,9 +914,7 @@ fn maintain_disk_artifacts_with_barrier(
         };
         drop(retired_artifacts);
         let sweep = commit.trash.sweep_for(crate::core::wait::PROBE)?;
-        artifact_bytes_reclaimed = artifact_bytes_reclaimed
-            .saturating_add(commit.legacy_reclaimed_bytes)
-            .saturating_add(sweep.reclaimed_bytes);
+        artifact_bytes_reclaimed = artifact_bytes_reclaimed.saturating_add(sweep.reclaimed_bytes);
         let removed_this_round = commit.keys;
         pressure = plan.pressure;
         if removed_this_round.is_empty() {

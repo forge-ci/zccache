@@ -16,11 +16,11 @@ pub(super) fn at_drop<'tcx>(
             .try_normalize_erasing_regions(cx.typing_env(), ty::Unnormalized::new_wip(value))
             .unwrap_or(value);
     }
-    if let ty::Alias(alias) = value.kind() {
-        if matches!(alias.kind, ty::Opaque { .. }) {
+    if let ty::Alias(_, alias) = value.kind() {
+        if let ty::Opaque { def_id } = alias.kind {
             value = cx
                 .tcx
-                .type_of(alias.kind.def_id())
+                .type_of(def_id)
                 .instantiate(cx.tcx, alias.args)
                 .skip_norm_wip();
         }

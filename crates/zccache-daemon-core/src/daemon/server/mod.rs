@@ -276,6 +276,7 @@ use out_dir::*;
 use pch::*;
 use persist::*;
 
+#[cfg(test)]
 pub(crate) fn remove_cow_blob(path: &Path) -> std::io::Result<()> {
     remove_registered_blob(path)
 }

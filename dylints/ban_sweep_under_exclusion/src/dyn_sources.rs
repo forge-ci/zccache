@@ -149,7 +149,7 @@ fn instantiate<'tcx>(
         if callee != root {
             continue;
         }
-        let value = ty::EarlyBinder::bind(value)
+        let value = ty::EarlyBinder::bind(cx.tcx, value)
             .instantiate(cx.tcx, arguments)
             .skip_norm_wip();
         if !instantiate(cx, sites, caller, value, depth - 1, concrete) {
@@ -170,7 +170,7 @@ fn used_function<'tcx>(
     let (definition, arguments) = match results.type_dependent_def(hir_id) {
         Some((_, definition)) => (definition, results.node_args(hir_id)),
         None => match results.node_type(hir_id).kind() {
-            ty::FnDef(definition, arguments) => (*definition, *arguments),
+            ty::FnDef(definition, arguments) => (*definition, arguments.skip_binder()),
             _ => return None,
         },
     };
@@ -356,7 +356,7 @@ fn generic_local_use<'tcx>(
             results.node_args(expr.hir_id),
         ),
         _ => match results.node_type(expr.hir_id).kind() {
-            ty::FnDef(definition, arguments) => (*definition, *arguments),
+            ty::FnDef(definition, arguments) => (*definition, arguments.skip_binder()),
             _ => return None,
         },
     };

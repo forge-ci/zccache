@@ -2,6 +2,74 @@
 use super::*;
 
 #[test]
+fn legacy_payload_sweep_releases_publication_and_accounts_sidecars() {
+    use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = root.path().join("artifacts");
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    let payload = artifact_dir.join(format!("{}_0", "a".repeat(64)));
+    std::fs::write(&payload, vec![3u8; 8192]).unwrap();
+    let digest = crate::artifact::blob_digest::sidecar_path(&payload);
+    std::fs::write(&digest, vec![7u8; 4096]).unwrap();
+    let allocated = [payload.as_path(), digest.as_path()]
+        .into_iter()
+        .map(|path| {
+            crate::platform::fs::volume::allocated_bytes(path, &std::fs::metadata(path).unwrap())
+        })
+        .sum::<u64>();
+    let barrier = Arc::new(crate::core::sync::PublicationBarrier::new());
+    let hook = StagedHookGuard::arm(&artifact_dir, StagedHookPoint::TreeSweep);
+    let worker_barrier = Arc::clone(&barrier);
+    let worker_dir = artifact_dir.clone();
+    let index_path = root.path().join("index.bin");
+    let worker = std::thread::spawn(move || {
+        let store = ArtifactStore::open_empty(&index_path);
+        maintain_disk_artifacts_with_barrier(
+            MaintenancePass {
+                artifact_dir: &worker_dir,
+                artifacts: &DashMap::new(),
+                artifact_store: &store,
+                index_writer_tx: None,
+                dep_graph: &DepGraph::new(),
+                pending_write_bytes: 0,
+                policy: bytes_policy(GIB),
+                kind: MaintenanceKind::Full,
+                environment: &FixedEnvironment {
+                    now: SystemTime::now() + EXPIRE_AGE + Duration::from_secs(1),
+                    space: FilesystemSpace {
+                        capacity_bytes: 1000 * GIB,
+                        free_bytes: 500 * GIB,
+                    },
+                },
+                retired_top_level: None,
+            },
+            Some(&worker_barrier),
+            None,
+        )
+    });
+    hook.wait_until_reached_for(Duration::from_secs(10));
+    let publication_permitted = barrier.try_read_owned().is_ok();
+    let detached = !payload.exists() && !digest.exists();
+    hook.resume();
+    let report = crate::core::wait::join_for(worker, Duration::from_secs(10))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        publication_permitted,
+        "legacy cleanup retained publication exclusion"
+    );
+    assert!(
+        detached,
+        "legacy payload or digest remained live during sweep"
+    );
+    assert_eq!(report.artifacts_removed, 1);
+    assert_eq!(report.usage_before_bytes, allocated);
+    assert_eq!(report.usage_after_bytes, 0);
+    assert!(report.bytes_reclaimed > 0);
+}
+
+#[test]
 fn deferred_trash_counts_against_usage_until_recovered() {
     let root = tempfile::tempdir().unwrap();
     let artifact_dir = root.path().join("artifacts");

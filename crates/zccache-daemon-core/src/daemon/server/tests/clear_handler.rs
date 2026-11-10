@@ -15,6 +15,142 @@ mod provisional;
 mod recovery;
 
 #[tokio::test]
+async fn handle_clear_keeps_publication_available_behind_an_earlier_index_flush() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = NormalizedPath::new(directory.path());
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let hook = StagedHookGuard::arm_index_flush(&server.state.artifact_store);
+        let writer = tokio::spawn(run_index_writer(
+            server.index_writer_rx.take().unwrap(),
+            Arc::clone(&server.state.artifact_store),
+            Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
+        ));
+        server
+            .state
+            .index_writer_tx
+            .send(IndexWriterCommand::Insert(
+                "d".repeat(64),
+                ArtifactIndex::new(vec![], vec![], vec![], vec![], 0),
+            ))
+            .unwrap_or_else(|_| panic!("index writer must accept the fixture insert"));
+        let (ack, flushed) = kernal_api::async_engine::oneshot_channel();
+        server
+            .state
+            .index_writer_tx
+            .send(IndexWriterCommand::Flush(ack))
+            .unwrap_or_else(|_| panic!("index writer must accept the fixture flush"));
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        let state = Arc::clone(&server.state);
+        let clear =
+            tokio::spawn(async move { super::super::handle_clear::handle_clear(&state).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while server.state.active_cache_requests() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let until = std::time::Instant::now() + Duration::from_millis(100);
+        let mut publication_permitted = true;
+        while std::time::Instant::now() < until {
+            publication_permitted &= server.state.artifact_publication.try_read_owned().is_ok();
+            tokio::task::yield_now().await;
+        }
+        hook.resume();
+        tokio::time::timeout(Duration::from_secs(10), flushed)
+            .await
+            .unwrap()
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(10), clear)
+            .await
+            .unwrap()
+            .unwrap();
+        server.state.index_writer_shutdown.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(response, Response::Cleared { .. }));
+        assert!(
+            publication_permitted,
+            "Clear held publication behind an earlier disk flush"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn handle_clear_releases_publication_before_index_flush() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = NormalizedPath::new(directory.path());
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let hook = StagedHookGuard::arm_index_flush(&server.state.artifact_store);
+        let writer = tokio::spawn(run_index_writer(
+            server.index_writer_rx.take().unwrap(),
+            Arc::clone(&server.state.artifact_store),
+            Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
+        ));
+        let state = Arc::clone(&server.state);
+        let clear =
+            tokio::spawn(async move { super::super::handle_clear::handle_clear(&state).await });
+        let hook = tokio::task::spawn_blocking(move || {
+            hook.wait_until_reached_for(std::time::Duration::from_secs(10));
+            hook
+        })
+        .await
+        .unwrap();
+        // Drain scheduling until the commit releases or the deadline expires:
+        // reaching the flush hook does not imply the Clear worker has resumed.
+        let publication_permitted =
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    if let Ok(permit) = server.state.artifact_publication.try_read_owned() {
+                        break permit;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok();
+        hook.resume();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), clear)
+            .await
+            .unwrap()
+            .unwrap();
+        server.state.index_writer_shutdown.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(response, Response::Cleared { .. }));
+        assert!(
+            publication_permitted,
+            "Clear held publication during index disk flush"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn handle_clear_releases_publication_before_kv_sweep() {
     crate::test_support::test_timeout(async {
         let directory = tempfile::tempdir().unwrap();

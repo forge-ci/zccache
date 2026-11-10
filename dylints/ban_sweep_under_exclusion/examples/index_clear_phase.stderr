@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/index_clear_phase.rs:17:5
+   |
+LL |     reserve();
+   |     ^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/index_clear_phase.rs:22:5
+   |
+LL |     wait(pending);
+   |     ^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

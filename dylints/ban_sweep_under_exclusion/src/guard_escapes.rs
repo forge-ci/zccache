@@ -58,7 +58,7 @@ pub(super) fn leaks<'tcx>(cx: &LateContext<'tcx>, source: ty::Ty<'tcx>) -> bool 
                     | "write" | "write_unaligned" | "write_volatile"
                     | "copy" | "copy_nonoverlapping")
             || name == "set_len" && path.iter().any(|part| part.as_str() == "Vec"))
-            && arguments.types().any(|value| owns(cx, value))
+            && arguments.skip_binder().types().any(|value| owns(cx, value))
     } else {
         false
     }

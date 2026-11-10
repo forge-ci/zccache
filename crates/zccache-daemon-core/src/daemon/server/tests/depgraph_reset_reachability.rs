@@ -263,13 +263,13 @@ async fn a_straggling_state_holder_does_not_block_the_next_session() {
     let fixture = Fixture::new("straggler");
     let _env_lock = CacheDirEnvGuard::lock();
 
-    let mut server = fixture.bind();
+    let mut server = fixture.bind().await;
     let writer = spawn_index_writer(&mut server);
     let straggler = server.test_state_arc();
     quiesce_and_persist(&server, writer, fixture.depgraph_path.as_path()).await;
     drop(server);
 
-    let next = fixture.bind();
+    let next = fixture.bind().await;
     drop(straggler);
     drop(next);
 }

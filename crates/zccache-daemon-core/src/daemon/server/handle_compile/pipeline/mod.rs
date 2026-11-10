@@ -46,5 +46,32 @@ use request_prep::{
 use store_outcome::{store_successful_compile, StoreOutcomeRequest};
 use system_includes::SystemIncludesOutcome;
 
+fn record_native_cpu_family(build_result: &BuildContextResult) {
+    let family = match build_result {
+        BuildContextResult::Cc { ctx, .. } => ctx
+            .flags
+            .iter()
+            .chain(&ctx.unknown_flags)
+            .any(|flag| crate::depgraph::native_cpu::is_cxx_native_cpu_flag(flag))
+            .then_some("cxx"),
+        BuildContextResult::Rustc { rustc_ctx, .. } => rustc_ctx
+            .codegen_flags
+            .iter()
+            .any(|flag| crate::depgraph::native_cpu::is_rustc_native_cpu_flag(flag))
+            .then_some("rustc"),
+    };
+    if let Some(compiler_family) = family {
+        tracing::info!(
+            event = "native_flag_host_salted",
+            compiler_family,
+            "native CPU selection makes this compile key host-specific"
+        );
+        crate::core::lifecycle::write_event(
+            crate::core::lifecycle::EVENT_NATIVE_FLAG_HOST_SALTED,
+            serde_json::json!({ "compiler_family": compiler_family }),
+        );
+    }
+}
+
 mod request;
 pub(super) use request::handle_compile_request;

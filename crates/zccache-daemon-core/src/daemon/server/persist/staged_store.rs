@@ -20,6 +20,7 @@ pub(in crate::daemon::server) use crate::core::scan_entry::{entry_if_present, li
 pub(in crate::daemon::server) use clear_detach::detach_clear_artifact_paths_for;
 mod publish;
 mod trash;
+#[cfg(test)]
 pub(in crate::daemon::server) use maintenance::clear_staged_artifacts;
 pub(in crate::daemon::server) use maintenance::detach_staged_artifacts_for_clear;
 #[cfg(test)]
