@@ -76,6 +76,24 @@ async fn cancelled_gate_wait_does_not_keep_its_queue_place() {
     assert!(gate.try_acquire_for(Duration::from_secs(1)).await.is_ok());
 }
 
+#[tokio::test]
+async fn gate_capacity_1967_retains_parallel_admission_and_typed_expiry() {
+    let gate = Arc::new(Gate::with_capacity(2));
+    let first = gate.acquire_for(STATE_TIMEOUT).await;
+    let second = gate.acquire_for(STATE_TIMEOUT).await;
+    assert_eq!(gate.available_permits(), 0);
+    let expired = gate
+        .try_acquire_for(Duration::from_millis(1))
+        .await
+        .unwrap_err();
+    assert_eq!(expired.0, Duration::from_millis(1));
+    drop(first);
+    assert_eq!(gate.available_permits(), 1);
+    let recovered = gate.try_acquire_for(STATE_TIMEOUT).await.unwrap();
+    drop((second, recovered));
+    assert_eq!(gate.available_permits(), 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn state_contention_returns_a_timeout_without_running_the_callback() {
     let state = Arc::new(State::new(0));

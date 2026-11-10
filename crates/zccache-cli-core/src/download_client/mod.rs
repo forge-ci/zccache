@@ -464,7 +464,7 @@ impl DownloadClient {
                 initiator,
                 status: _,
             })) => Ok(AsyncDownloadHandle {
-                conn,
+                conn: Some(conn),
                 initiator,
                 download_id,
             }),
@@ -477,7 +477,7 @@ impl DownloadClient {
 }
 
 pub struct AsyncDownloadHandle {
-    conn: ClientConn,
+    conn: Option<ClientConn>,
     initiator: bool,
     download_id: String,
 }
@@ -494,22 +494,36 @@ impl AsyncDownloadHandle {
     }
 
     pub async fn status(&mut self) -> Result<DownloadStatus, String> {
-        send_download_command(&mut self.conn, Request::DownloadStatus).await
+        self.command(Request::DownloadStatus, crate::core::wait::PROBE)
+            .await
     }
 
     pub async fn wait(&mut self, timeout: std::time::Duration) -> Result<DownloadStatus, String> {
         let timeout_ms = u64::try_from(timeout.as_millis())
             .map_err(|_| "download wait budget exceeds the protocol range".to_string())?;
-        tokio::time::timeout(
+        self.command(
+            Request::DownloadWait { timeout_ms },
             timeout.saturating_add(crate::core::wait::PROBE),
-            send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }),
         )
         .await
-        .map_err(|_| "download daemon did not respond within the wait budget".to_string())?
     }
 
     pub async fn cancel(&mut self) -> Result<DownloadStatus, String> {
-        send_download_command(&mut self.conn, Request::DownloadCancel).await
+        self.command(Request::DownloadCancel, crate::core::wait::PROBE)
+            .await
+    }
+
+    async fn command(
+        &mut self,
+        request: Request,
+        bound: std::time::Duration,
+    ) -> Result<DownloadStatus, String> {
+        // The in-flight exchange owns the connection. Cancellation or any
+        // uncertain failure drops it; an uncorrelated late reply cannot be reused.
+        let conn = self.conn.take().ok_or_else(closed_download_handle)?;
+        let (conn, status) = send_download_command_for(conn, request, bound).await?;
+        self.conn = Some(conn);
+        Ok(status)
     }
 
     pub fn close(self) -> Result<(), String> {
@@ -519,7 +533,7 @@ impl AsyncDownloadHandle {
 
 pub struct DownloadHandle {
     runtime: tokio::runtime::Runtime,
-    conn: ClientConn,
+    conn: Option<ClientConn>,
     initiator: bool,
     download_id: String,
 }
@@ -536,37 +550,56 @@ impl DownloadHandle {
     }
 
     pub fn status(&mut self) -> Result<DownloadStatus, String> {
-        crate::core::wait::block_on_for(
-            &self.runtime,
-            send_download_command(&mut self.conn, Request::DownloadStatus),
-            crate::core::wait::WHOLE_COMMAND,
-        )
-        .map_err(|error| error.to_string())?
+        self.command(Request::DownloadStatus, crate::core::wait::PROBE)
     }
 
     pub fn wait(&mut self, timeout: std::time::Duration) -> Result<DownloadStatus, String> {
         let timeout_ms = u64::try_from(timeout.as_millis())
             .map_err(|_| "download wait budget exceeds the protocol range".to_string())?;
-        crate::core::wait::block_on_for(
-            &self.runtime,
-            send_download_command(&mut self.conn, Request::DownloadWait { timeout_ms }),
+        self.command(
+            Request::DownloadWait { timeout_ms },
             timeout.saturating_add(crate::core::wait::PROBE),
         )
-        .map_err(|error| error.to_string())?
     }
 
     pub fn cancel(&mut self) -> Result<DownloadStatus, String> {
-        crate::core::wait::block_on_for(
+        self.command(Request::DownloadCancel, crate::core::wait::PROBE)
+    }
+
+    fn command(
+        &mut self,
+        request: Request,
+        bound: std::time::Duration,
+    ) -> Result<DownloadStatus, String> {
+        let conn = self.conn.take().ok_or_else(closed_download_handle)?;
+        let (conn, status) = crate::core::wait::block_on_for(
             &self.runtime,
-            send_download_command(&mut self.conn, Request::DownloadCancel),
-            crate::core::wait::WHOLE_COMMAND,
+            send_download_command_for(conn, request, bound),
+            bound,
         )
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+        self.conn = Some(conn);
+        Ok(status)
     }
 
     pub fn close(self) -> Result<(), String> {
         Ok(())
     }
+}
+
+fn closed_download_handle() -> String {
+    "download handle connection is closed after a failed or cancelled exchange".to_string()
+}
+
+async fn send_download_command_for(
+    mut conn: ClientConn,
+    request: Request,
+    bound: std::time::Duration,
+) -> Result<(ClientConn, DownloadStatus), String> {
+    let status = tokio::time::timeout(bound, send_download_command(&mut conn, request))
+        .await
+        .map_err(|_| "download daemon did not respond within the wait budget".to_string())??;
+    Ok((conn, status))
 }
 
 async fn send_download_command(

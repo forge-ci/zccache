@@ -235,7 +235,7 @@ pub(super) struct SharedState {
     pub(super) staged_materialization_init: Arc<Gate>,
     /// Limits concurrent disk persistence tasks to prevent memory pileup
     /// when disk I/O is slow and compilation requests are fast.
-    pub(super) persist_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(super) persist_semaphore: Arc<Gate>,
     /// Issue #813 / #816 — global compile-concurrency cap.
     /// `Some(sem)` enforces an upper bound on the number of compiler
     /// child processes the daemon will spawn at once across ALL

@@ -988,6 +988,11 @@ roundtrip caller passes its selected `Duration`. Download waits require a
 `Duration`, transmit mandatory milliseconds, and bound the request/response by
 that budget plus `wait::PROBE` for transport. Download framing version 2 carries
 its version in each frame; legacy frames fail before decoding the new wait field.
+An in-flight exchange owns its connection: timeout, cancellation or protocol
+failure closes the handle, preventing a late reply from satisfying another command.
+Persistence admission preserves its configured parallel capacity through
+`sync::Gate::with_capacity`; all five persistence waits use `OPERATION_TIMEOUT`
+and the existing essential-admission expiry diagnostics.
 
 The remaining optional durations have distinct, bounded roles:
 

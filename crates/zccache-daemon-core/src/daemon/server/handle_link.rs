@@ -863,14 +863,7 @@ pub(super) async fn handle_link_ephemeral(
                         .take()
                         .expect("link publication acquired an owned guard");
                     kernal_api::async_engine::launch(async move {
-                        #[expect(
-                            clippy::expect_used,
-                            reason = "persist_semaphore is owned by ServerState for the daemon's lifetime; AcquireError here would be a logic bug (semaphore explicitly closed), not a runtime condition"
-                        )]
-                        let _permit = sem
-                            .acquire()
-                            .await
-                            .expect("persist_semaphore is owned by ServerState and never closed");
+                        let _permit = sem.acquire_for(OPERATION_TIMEOUT).await;
                         let written = kernal_api::async_engine::launch_blocking(move || {
                             let _guard = guard;
                             let _publication_guard = publication_guard_for_task;
@@ -883,7 +876,8 @@ pub(super) async fn handle_link_ephemeral(
                         if let Err(error) = written {
                             tracing::warn!(%error, "link artifact persistence task failed to join");
                         }
-                    }).detach();
+                    })
+                    .detach();
                     true
                 }
             };

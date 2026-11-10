@@ -94,3 +94,22 @@ def test_product_wait_lint_is_not_capped(monkeypatch, tmp_path) -> None:
     for command, env in strict:
         assert "--features" in command
         assert "--cap-lints=warn" not in env.get("DYLINT_RUSTFLAGS", "")
+
+
+def test_clippy_only_entrypoint_runs_both_feature_selections(monkeypatch) -> None:
+    commands = []
+
+    def capture(command):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(lint.sys, "argv", ["lint", "--clippy-only"])
+    monkeypatch.setattr(lint, "validate_release_metadata", lambda: None)
+    monkeypatch.setattr(lint.check_kernal_api_baseline, "check", lambda: [])
+    monkeypatch.setattr(lint, "lint_workspace", lambda: 99)
+    monkeypatch.setattr(lint, "run_cmd", capture)
+    assert lint.main() == 0
+    assert len(commands) == 2
+    assert all("clippy" in command and "--all-targets" in command for command in commands)
+    assert "--features" not in commands[0]
+    assert ",".join(lint.DYLINT_PRODUCT_FEATURES) in commands[1]

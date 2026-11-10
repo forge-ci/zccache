@@ -5,12 +5,17 @@ use super::super::*;
 async fn schedule_blocked_exec_publisher(
     state: &Arc<SharedState>,
     key: &str,
-) -> tokio::sync::OwnedSemaphorePermit {
-    let permit_count = state.persist_semaphore.available_permits() as u32;
-    let blocked = Arc::clone(&state.persist_semaphore)
-        .acquire_many_owned(permit_count)
-        .await
-        .unwrap();
+) -> Vec<crate::core::sync::GatePermit> {
+    let permit_count = state.persist_semaphore.available_permits();
+    let mut blocked = Vec::with_capacity(permit_count);
+    for _ in 0..permit_count {
+        blocked.push(
+            state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let artifact = ArtifactData {
         outputs: vec![ArtifactOutput {
             name: "result.bin".to_string(),

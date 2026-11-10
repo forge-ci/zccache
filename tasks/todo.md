@@ -1584,7 +1584,7 @@ next child, then sync/rebase against origin/main and leave a clean tree.
 - [ ] #1965 durable-entry payload demotion.
 - [ ] #1966 default eligible native/link/exec staging.
 - [ ] #1967 complete timeout/feature enforcement.
-  - [ ] Capture RED for typed fetch-lock expiry and mandatory API budgets.
+  - [x] Capture RED for typed fetch-lock expiry, late replies and real clippy-lane wiring.
   - [ ] Migrate optional download/IPC budgets; classify owned lifecycle waits.
   - [ ] Enforce signatures and resolved raw waits with Dylint UI fixtures.
   - [ ] Cover shipped feature combinations in clippy and OS Dylint passes.

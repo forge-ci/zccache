@@ -225,11 +225,17 @@ async fn detached_exec_publisher_cannot_resurrect_artifact_after_clear() {
         Arc::clone(&server.state.index_writer_shutdown),
     ));
 
-    let permit_count = server.state.persist_semaphore.available_permits() as u32;
-    let blocked_persist = Arc::clone(&server.state.persist_semaphore)
-        .acquire_many_owned(permit_count)
-        .await
-        .unwrap();
+    let permit_count = server.state.persist_semaphore.available_permits();
+    let mut blocked_persist = Vec::with_capacity(permit_count);
+    for _ in 0..permit_count {
+        blocked_persist.push(
+            server
+                .state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let key = "9".repeat(64);
     let artifact = ArtifactData {
         outputs: vec![ArtifactOutput {
@@ -279,11 +285,17 @@ async fn detached_exec_handoff_does_not_reacquire_behind_queued_clear() {
         Arc::clone(&server.state.artifact_store),
         Arc::clone(&server.state.index_writer_shutdown),
     ));
-    let permit_count = server.state.persist_semaphore.available_permits() as u32;
-    let blocked_persist = Arc::clone(&server.state.persist_semaphore)
-        .acquire_many_owned(permit_count)
-        .await
-        .unwrap();
+    let permit_count = server.state.persist_semaphore.available_permits();
+    let mut blocked_persist = Vec::with_capacity(permit_count);
+    for _ in 0..permit_count {
+        blocked_persist.push(
+            server
+                .state
+                .persist_semaphore
+                .acquire_for(crate::core::wait::PROBE)
+                .await,
+        );
+    }
     let key = "a".repeat(64);
     let artifact = ArtifactData {
         outputs: vec![ArtifactOutput {

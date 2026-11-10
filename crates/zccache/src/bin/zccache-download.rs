@@ -130,10 +130,7 @@ fn main() -> std::process::ExitCode {
                     return std::process::ExitCode::SUCCESS;
                 }
                 loop {
-                    match handle
-                        .wait(std::time::Duration::from_millis(250))
-                        .or_else(|_| handle.status())
-                    {
+                    match handle.wait(std::time::Duration::from_millis(250)) {
                         Ok(status) => {
                             print_status(&status, cli.json);
                             if is_terminal(&status) {

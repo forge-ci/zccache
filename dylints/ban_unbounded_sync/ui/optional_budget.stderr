@@ -18,5 +18,23 @@ error: optional wait budget permits unbounded liveness; require Duration or an o
 LL | trait Waiting { fn receive(&self, budget: MaybeBudget); }
    |                                           ^^^^^^^^^^^
 
-error: aborting due to 3 previous errors
+error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+  --> $DIR/optional_budget.rs:8:49
+   |
+LL | trait Milliseconds { fn wait(&self, timeout_ms: Option<u64>); }
+   |                                                 ^^^^^^^^^^^
+
+error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+  --> $DIR/optional_budget.rs:10:52
+   |
+LL | impl Milliseconds for Renamed { fn wait(&self, ms: Option<u64>) { let _ = ms; } }
+   |                                                    ^^^^^^^^^^^
+
+error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+  --> $DIR/optional_budget.rs:11:51
+   |
+LL | trait Milliseconds32 { fn wait(&self, timeout_ms: Option<u32>); }
+   |                                                   ^^^^^^^^^^^
+
+error: aborting due to 6 previous errors
 

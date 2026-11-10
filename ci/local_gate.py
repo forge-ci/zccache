@@ -91,6 +91,12 @@ def checks() -> list[Check]:
             "lint",
             RUST_ENV,
         ),
+        Check(
+            "Clippy (default and shipped product features)",
+            ("uv", "run", "--no-project", "python", "-m", "ci.lint", "--clippy-only"),
+            "lint",
+            RUST_ENV,
+        ),
         # A workspace build unifies features, which hides a module gated on the
         # wrong feature; only a build of this feature alone can catch it (#2107).
         Check(

@@ -65,6 +65,11 @@ def test_lint_lane_builds_cli_core_with_only_download_client() -> None:
     ) in argvs
 
 
+def test_product_clippy_1967_is_in_the_real_lint_lane() -> None:
+    argvs = [c.argv for c in local_gate.checks() if c.lane == "lint"]
+    assert ("uv", "run", "--no-project", "python", "-m", "ci.lint", "--clippy-only") in argvs
+
+
 def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
     for workflow, job in (
         ("ci.yml", "fmt"),
