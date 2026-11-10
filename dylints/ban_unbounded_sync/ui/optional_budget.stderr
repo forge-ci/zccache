@@ -1,4 +1,4 @@
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:5:21
    |
 LL | fn receive(timeout: MaybeBudget) { let _ = timeout; }
@@ -6,31 +6,31 @@ LL | fn receive(timeout: MaybeBudget) { let _ = timeout; }
    |
    = note: `#[deny(ban_unbounded_sync)]` on by default
 
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:6:30
    |
 LL | fn download_wait(timeout_ms: Option<u64>) { let _ = timeout_ms; }
    |                              ^^^^^^^^^^^
 
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:7:43
    |
 LL | trait Waiting { fn receive(&self, budget: MaybeBudget); }
    |                                           ^^^^^^^^^^^
 
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:8:49
    |
 LL | trait Milliseconds { fn wait(&self, timeout_ms: Option<u64>); }
    |                                                 ^^^^^^^^^^^
 
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:10:52
    |
 LL | impl Milliseconds for Renamed { fn wait(&self, ms: Option<u64>) { let _ = ms; } }
    |                                                    ^^^^^^^^^^^
 
-error: optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy
+error: optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy
   --> $DIR/optional_budget.rs:11:51
    |
 LL | trait Milliseconds32 { fn wait(&self, timeout_ms: Option<u32>); }

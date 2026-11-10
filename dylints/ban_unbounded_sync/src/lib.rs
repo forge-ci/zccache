@@ -251,7 +251,7 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
                 || (budget_scalar && is_budget_name(name))
             {
                 emit(cx, input.span, BAN_UNBOUNDED_SYNC,
-                    "optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy".into());
+                    "optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy".into());
             }
         }
     }
@@ -293,7 +293,7 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
                 || ((duration || inner.is_integral()) && named)
             {
                 emit(cx, input.span, BAN_UNBOUNDED_SYNC,
-                    "optional wait budget permits unbounded liveness; require Duration or an owned cancellation policy".into());
+                    "optional wait budget permits unbounded liveness; pass Duration or an owned cancellation policy".into());
             }
         }
     }
@@ -350,7 +350,7 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
             && has_optional_budget(cx, def_id)
         {
             emit(cx, expr.span, BAN_UNBOUNDED_SYNC,
-                "optional-timeout entry point bypasses mandatory budgets; use a product facade requiring Duration".into());
+                "optional-timeout entry point bypasses mandatory budgets; use a bounded product facade with Duration".into());
             return;
         }
         let blocking_facade = path.first() == Some(&Symbol::intern("zccache_core"))
@@ -464,7 +464,7 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
 }
 
 fn is_duration(cx: &LateContext<'_>, ty: rustc_middle::ty::Ty<'_>) -> bool {
-    matches!(ty.kind(), rustc_middle::ty::Adt(inner, _) if cx.tcx.def_path_str(inner.did()) == "core::time::Duration")
+    matches!(ty.kind(), rustc_middle::ty::Adt(inner, _) if cx.tcx.is_diagnostic_item(Symbol::intern("Duration"), inner.did()))
 }
 
 fn has_optional_budget(cx: &LateContext<'_>, id: DefId) -> bool {
