@@ -27,6 +27,68 @@ fn empty_extra() -> Arc<Vec<u8>> {
     Arc::new(Vec::new())
 }
 
+/// #1965: disk publication must release the live map's payload ownership.
+#[tokio::test]
+async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
+    let temp = tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let cache_dir: NormalizedPath = temp.path().join("cache").into();
+    let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    let bytes = Arc::new(b"durable exec payload".to_vec());
+    let weak = Arc::downgrade(&bytes);
+    let artifact = ArtifactData {
+        outputs: vec![ArtifactOutput {
+            name: "result.bin".to_string(),
+            payload: ArtifactPayload::Bytes(bytes),
+        }],
+        stdout: Arc::new(Vec::new()),
+        stderr: Arc::new(Vec::new()),
+        exit_code: 0,
+    };
+    let key = "c".repeat(64);
+    let gate = PublicationHandoffGate::new();
+    let publisher_state = Arc::clone(&server.state);
+    let publisher_gate = Arc::clone(&gate);
+    let publisher_key = key.clone();
+    let publisher = tokio::spawn(async move {
+        store_exec_artifact_with_handoff_gate(
+            &publisher_state,
+            publisher_key,
+            artifact,
+            publisher_gate,
+        )
+        .await
+    });
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_acquired())
+        .await
+        .unwrap();
+    gate.resume();
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, publisher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_persisted())
+        .await
+        .unwrap();
+    assert!(
+        weak.upgrade().is_none(),
+        "published payload bytes remain resident"
+    );
+    let cached = server.state.artifacts.get(&key).unwrap().clone();
+    let payloads =
+        ensure_payloads_for_materialization(&cached, &server.state.artifact_dir, &key).unwrap();
+    assert!(matches!(payloads[0], CachedPayload::File(_)));
+    let destination: NormalizedPath = temp.path().join("restored.bin").into();
+    write_payloads_par_observed(
+        std::slice::from_ref(&destination),
+        &payloads,
+        MaterializationMode::Auto,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), b"durable exec payload");
+}
+
 #[tokio::test]
 async fn detached_exec_publisher_cannot_resurrect_artifact_after_clear() {
     let temp = tempdir().unwrap();
