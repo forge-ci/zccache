@@ -98,6 +98,8 @@ def test_product_wait_lint_is_not_capped(monkeypatch, tmp_path) -> None:
 
 def test_clippy_only_entrypoint_runs_both_feature_selections(monkeypatch) -> None:
     commands = []
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(lint, "cargo_command", lambda *args: ["soldr", "cargo", *args])
 
     def capture(command):
         commands.append(command)
