@@ -32,6 +32,20 @@ pub(super) fn dependency_flags(bound: Duration) -> Vec<String> {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     let mut flags = vec!["--edition=2021".into()];
+    // Newer Cargo keeps intermediate outputs in per-package directories.
+    // Supplying only each facade's directory hides its transitive crates from
+    // rustc. Discover every search directory from the same Cargo JSON build.
+    let directories: std::collections::BTreeSet<_> = messages
+        .iter()
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter_map(|message| message["filenames"].as_array())
+        .flatten()
+        .filter_map(|filename| filename.as_str())
+        .filter_map(|filename| std::path::Path::new(filename).parent())
+        .collect();
+    for directory in directories {
+        flags.push(format!("-Ldependency={}", directory.display()));
+    }
     for name in [
         "zccache_core",
         "zccache_artifact",
@@ -52,10 +66,6 @@ pub(super) fn dependency_flags(bound: Duration) -> Vec<String> {
             })
             .expect("Cargo JSON must identify the real facade artifact");
         let artifact = std::path::Path::new(artifact);
-        flags.push(format!(
-            "-Ldependency={}",
-            artifact.parent().unwrap().display()
-        ));
         flags.push(format!("--extern={name}={}", artifact.display()));
     }
     flags
