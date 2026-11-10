@@ -106,7 +106,7 @@ cmd = "bash ci/docker/gate/run_gate_tests.sh"
 
 [task.durable-payload-test]
 stack = "gate"
-cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib persisted_exec_releases_resident_bytes_and_serves_disk_hit --locked -- --nocapture"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cached_artifact --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec::tests --locked -- --nocapture"
 
 [task.sysroot-search-test]
 stack = "gate"

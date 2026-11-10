@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "cached_artifact_provisional_tests.rs"]
+mod tests;
+
 /// The only production boundary for constructing and publishing resident entries.
 /// Keeping the cached entry private prevents callers from inserting its bytes as
 /// an already-durable row. An in-progress hit may retain its own owned clone.
@@ -36,6 +40,18 @@ impl ProvisionalArtifact {
         let durable = CachedArtifact::from_index(self.cached.meta.clone());
         *durable.access() = self.cached.access().clone();
         durable
+    }
+
+    pub(in crate::daemon::server) fn persist_bytes(
+        &self,
+        state: &SharedState,
+        key: &str,
+        payloads: &[Arc<Vec<u8>>],
+    ) -> std::io::Result<()> {
+        persist_artifact_payloads(&state.artifact_dir, key, payloads)?;
+        enqueue_index_insert(state, key.to_string(), self.meta().clone());
+        self.demote_to_durable(&state.artifacts, key);
+        Ok(())
     }
 
     /// A stale completion must not replace a newer same-key publication. The

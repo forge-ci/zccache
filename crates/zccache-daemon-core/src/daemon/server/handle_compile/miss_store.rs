@@ -815,7 +815,11 @@ fn store_single_output(
         }
         stats.persist_enqueue_ns = t_persist_enqueue.elapsed().as_nanos() as u64;
         if written {
-            state.artifacts.insert(artifact_key_hex.to_string(), cached.durable());
+            state
+                .artifacts
+                .insert(artifact_key_hex.to_string(), cached.durable());
+        } else {
+            cached.publish(&state.artifacts, artifact_key_hex.to_string());
         }
         let latency_ns = compile_start.elapsed().as_nanos() as u64;
         state.stats.record_miss(latency_ns, artifact_bytes);

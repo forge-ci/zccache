@@ -2,10 +2,10 @@
 
 use super::link_hash::*;
 use super::link_process::*;
+use super::*;
 #[path = "link_cache_hit.rs"]
 mod cache_hit;
 use cache_hit::{materialize_link_cache_hit, LinkCacheHitOutcome};
-
 
 /// Handle a single-roundtrip ephemeral link/archive request.
 ///
@@ -809,7 +809,6 @@ pub(super) async fn handle_link_ephemeral(
             };
             let mut publication_guard = Some(guard);
             let cacheable = {
-                let artifact_dir = state.artifact_dir.clone();
                 let kh = key_hex.clone();
                 let persist_meta = cached.meta().clone();
                 let source_paths: Vec<NormalizedPath> = read_targets
@@ -863,7 +862,6 @@ pub(super) async fn handle_link_ephemeral(
                     let publication_guard_for_task = publication_guard
                         .take()
                         .expect("link publication acquired an owned guard");
-                    let index_writer_tx = state.index_writer_tx.clone();
                     kernal_api::async_engine::launch(async move {
                         #[expect(
                             clippy::expect_used,
@@ -876,10 +874,8 @@ pub(super) async fn handle_link_ephemeral(
                         let written = kernal_api::async_engine::launch_blocking(move || {
                             let _guard = guard;
                             let _publication_guard = publication_guard_for_task;
-                            if persist_artifact_payloads(&artifact_dir, &kh, &payloads).is_ok() {
-                                let _ = index_writer_tx
-                                    .send(IndexWriterCommand::Insert(kh.clone(), persist_meta));
-                                published.demote_to_durable(&persist_state.artifacts, &kh);
+                            if let Err(error) = published.persist_bytes(&persist_state, &kh, &payloads) {
+                                tracing::warn!(%error, "link artifact persistence failed; retaining resident payloads");
                             }
                         })
                         .detach_on_drop()

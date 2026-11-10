@@ -2,8 +2,6 @@
 
 use super::*;
 
-use super::*;
-
 pub(super) enum LinkCacheHitOutcome {
     Hit(Box<Response>),
     Fallback,
