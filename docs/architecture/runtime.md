@@ -740,6 +740,16 @@ cache-root writer lock and every subsequent start fails (issue #1903).
 
 ### Crash Dumper (shared with CLI)
 
+Fatal synchronization watchdog reports also persist as `crash-*-watchdog.txt`
+before the diagnostic worker writes stderr (#2064). They retain holder/waiter
+sites and budgets when that stderr write blocks. Persistence is best-effort:
+an earlier report may already have blocked the worker. The independent watchdog
+still waits at most 250 ms for diagnostics before aborting; a blocked disk can
+prevent a report, but cannot prevent termination. Panic/native capture remains
+separate. Wrapper no-verdict errors point to `zccache crashes` and `zccache status`.
+SIGKILL/OOM cannot run an in-process crash handler; retain host/cgroup evidence
+when no dump exists. The OBS/CEF shared disconnect cause is still unconfirmed.
+
 Both `zccache-cli` and `zccache-daemon` call `zccache_core::crash::install(<bin-stem>)` at the top of `main`. That call wires up:
 
 1. A Rust panic hook that writes `<cache>/crashes/crash-<ts>-<bin>-panic.txt` (full backtrace; runs in normal context so `Backtrace::force_capture()` is safe).

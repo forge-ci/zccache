@@ -244,6 +244,7 @@ fn daemon_response_failures_emit_one_actionable_diagnostic_with_cause_and_contex
         assert!(diagnostic.contains(context));
         assert!(diagnostic.contains("requested tool returned no status"));
         assert!(diagnostic.contains("zccache status"));
+        assert!(diagnostic.contains("zccache crashes"));
     }
 }
 
@@ -265,7 +266,7 @@ fn link_daemon_error_uses_the_same_response_failure_diagnostic() {
     assert_eq!(
         String::from_utf8(stderr).unwrap(),
         "zccache[err][R]: daemon response failure (daemon-error): archive staging failed. \
-         The requested tool returned no status; run 'zccache status' then retry.\n"
+         The requested tool returned no status; inspect 'zccache crashes' and 'zccache status' before retrying.\n"
     );
 }
 
@@ -666,11 +667,12 @@ async fn a_connection_the_daemon_closes_mid_response_is_a_lost_request() {
 fn only_a_closed_or_reset_connection_after_dispatch_is_a_lost_request() {
     use std::io::{Error, ErrorKind};
     let lost = |error: crate::ipc::IpcError| {
-        TransportFailure {
+        let failure = TransportFailure {
             message: error.to_string(),
             phase: recv_failure_phase(&error),
-        }
-        .lost_request()
+        };
+        assert!(format!("{failure}").contains("zccache crashes"));
+        failure.lost_request()
     };
     assert_eq!(
         lost(crate::ipc::IpcError::ConnectionClosed),

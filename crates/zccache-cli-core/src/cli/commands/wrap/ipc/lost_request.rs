@@ -32,6 +32,16 @@ impl TransportFailure {
     }
 }
 
+impl std::fmt::Display for TransportFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}; inspect 'zccache crashes' and 'zccache status' before retrying.",
+            self.message
+        )
+    }
+}
+
 impl RelayOutcome {
     /// Whether the daemon lost this request with no tool left running for it.
     pub(super) fn lost_request(&self) -> Option<LostRequest> {

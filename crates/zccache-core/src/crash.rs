@@ -406,6 +406,30 @@ fn install_signal_handler() -> Option<kernal_api::crash::CrashGuard> {
     }
 }
 
+/// Preserve a fatal synchronization report outside stderr (#2064).
+///
+/// Only the diagnostic worker calls this, in normal thread context. The
+/// watchdog independently bounds its wait for that worker, so a stuck disk
+/// cannot defer termination. Like panic dumps, persistence is best-effort.
+pub(crate) fn write_watchdog_dump(detail: &str) -> Option<NormalizedPath> {
+    use std::io::Write;
+
+    let crash_dir = super::config::crash_dump_dir();
+    super::config::create_dir_all_private(&crash_dir).ok()?;
+    let path = unique_dump_path(&crash_dir, "watchdog", "txt");
+    let mut file = std::fs::File::create(&path).ok()?;
+    writeln!(
+        file,
+        "zccache {} crash report (watchdog)\nVersion: {}\nPID: {}\nReason: {detail}",
+        bin_stem(),
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+    )
+    .ok()?;
+    file.sync_all().ok()?;
+    Some(NormalizedPath::from(path))
+}
+
 /// Map the platform-specific crash context to its stable filename label.
 /// Render host-native crash details for the signal-level report body.
 /// Write a Rust-panic dump. Caller is the panic hook (not signal

@@ -8,6 +8,25 @@
 - [ ] Complete final committed-tree local gate.
 - [ ] Push, merge PR, and post board outcome.
 
+# #2064 — concurrent PCH disconnect diagnostics
+
+- [x] Audit daemon exits and compare 1.15.5 with main; retain a constrained-memory PCH probe.
+- [x] RED: three holder cases fail because no report exists on disk (Bosn job 177).
+- [x] GREEN: 12 watchdog tests pass, including durable reports with blocked stderr.
+- [x] Workspace Clippy with warnings denied and one-agent pre-push review pass.
+- [x] Isolated wrapper IPC: 35 passed. Lifecycle with tokio-console: 17 passed, 17 ignored.
+- [ ] Validate full lint, Dylint extra steps, and the clean committed local gate.
+- [ ] Push a diagnosability PR with the remaining OBS root-cause gap explicit; enable auto-merge.
+
+Evidence: digest-verified 1.15.5, five concurrent `c++ -O2 -g -std=c++20
+-x c++-header` standard-library PCH requests in Docker (`--memory 1g
+--memory-swap 1g --cpus 3`). Two cc1plus OOM kills returned compiler exit 1;
+three requests succeeded. Cgroup `oom_kill=2`; status reported five sessions,
+two errors, three artifacts, then graceful stop succeeded. Raw evidence is in
+`.perf-local/2064/`. This is not the OBS/CEF fixture and does not establish its
+failure cause. No shared disconnect reproduced; #2064 stays open. The holder
+watchdog landed after 1.15.5 and cannot explain that release's incident.
+
 # #2117 ignored-test audit
 
 - [x] Inventory ignored tests and actual CI selection.

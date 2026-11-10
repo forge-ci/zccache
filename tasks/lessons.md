@@ -4,6 +4,13 @@
 - #2174 cold follow-up: parallel metadata probes still pay one compiler startup per extern. Large host-target links can conservatively inventory bounded candidate directories instead. Memoize membership, never content or symlink target kind; refuse racy/identity-free membership memo hits and bind regular-archive verdicts to digest-verified private snapshots. Keep exact discovery for explicit targets and oversized inventories.
 - #2174 scope review: keep conservative inventories limited to pure staticlib links without metadata/candidate-shaped outputs. Applying them to normal rlib/bin requests includes unselected siblings or prior outputs in Cargo's shared deps directory and destroys reuse. A real 50-extern rlib test must stay a hit after an unrelated sibling appears; ordinary staticlib `.a`/`.lib` outputs must not be inventoried.
 
+## #2064 — preserve the abort reason before stderr
+
+A native SIGABRT dump does not explain a synchronization watchdog's decision.
+Persist the holder/waiter report before stderr on the diagnostic worker, while
+keeping the abort timer independent of both disk and stderr. Persistence remains
+best-effort if an earlier report already blocked that worker. Compiler-child OOM
+survival does not establish the cause of an unreproduced daemon disconnect.
 
 ## Response-file parsing must preserve execution semantics (2026-11-02)
 

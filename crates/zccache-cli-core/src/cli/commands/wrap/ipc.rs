@@ -153,7 +153,7 @@ pub(super) async fn cmd_compile(
                 &msg.message,
             );
             record_lost_request(endpoint, msg.lost_request());
-            eprintln!("zccache[err][R]: {}", msg.message);
+            eprintln!("zccache[err][R]: {msg}");
             ExitCode::FAILURE
         }
     }
@@ -257,7 +257,7 @@ impl RelayFailureDiagnostic {
         }
         writeln!(
             stderr,
-            ". The requested tool returned no status; run 'zccache status' then retry."
+            ". The requested tool returned no status; inspect 'zccache crashes' and 'zccache status' before retrying."
         )
     }
 }
@@ -627,7 +627,7 @@ async fn cmd_compile_ephemeral_with_stdin(
             }
             FailurePhase::DeliveryUnknown | FailurePhase::ClosedAfterDispatch => {
                 record_lost_request(endpoint, msg.lost_request());
-                eprintln!("zccache[err][R]: {}", msg.message);
+                eprintln!("zccache[err][R]: {msg}");
                 ExitCode::FAILURE
             }
         },
@@ -704,7 +704,7 @@ pub(super) async fn cmd_link_ephemeral(
             }
             FailurePhase::DeliveryUnknown | FailurePhase::ClosedAfterDispatch => {
                 record_lost_request(endpoint, msg.lost_request());
-                eprintln!("zccache[err][R]: {}", msg.message);
+                eprintln!("zccache[err][R]: {msg}");
                 ExitCode::FAILURE
             }
         },
