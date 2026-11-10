@@ -198,8 +198,8 @@ fn print_status(args: &Args) {
         .build()
         .expect("failed to create async runtime");
 
-    match rt.run(query_daemon_status(&endpoint)) {
-        Ok(status) => {
+    match rt.run_within(query_daemon_status(&endpoint), crate::core::wait::PROBE) {
+        Ok(Ok(status)) => {
             println!("  status:     running");
             println!("  daemon ns:  {}", status.daemon_namespace);
             println!("  daemon ep:  {}", status.endpoint);
@@ -220,10 +220,14 @@ fn print_status(args: &Args) {
                 status.cache_hits, status.cache_misses
             );
         }
-        Err(_) => {
+        Ok(Err(_)) => {
             println!("  status:     not running");
             println!();
             println!("Start with: zccache-daemon --foreground");
+        }
+        Err(error) => {
+            eprintln!("daemon status query timed out: {error}");
+            std::process::exit(1);
         }
     }
 }
@@ -293,10 +297,16 @@ fn run_server(args: Args) {
             .enable_all()
             .build()
             .expect("failed to create async probe runtime");
-        let existing_daemon = probe_rt.run(crate::ipc::probe_existing_daemon(
-            &endpoint,
-            std::time::Duration::from_millis(500),
-        ));
+        let existing_daemon = match probe_rt.run_within(
+            crate::ipc::probe_existing_daemon(&endpoint, std::time::Duration::from_millis(500)),
+            crate::core::wait::PROBE,
+        ) {
+            Ok(existing) => existing,
+            Err(error) => {
+                tracing::error!(%error, "existing-daemon probe exceeded its budget");
+                std::process::exit(1);
+            }
+        };
         if existing_daemon {
             tracing::info!(
                 %endpoint,
@@ -335,7 +345,7 @@ fn run_server(args: Args) {
     // Cache root for the v1 CacheManifest published after a successful bind
     // (zackees/running-process#435); cloned so it survives the async move.
     let manifest_cache_root = cache_root.clone();
-    rt.run(async move {
+    let service = async move {
         // ── Issue #640: bind FIRST, then load depgraph in background ─────
         //
         // The prior flow loaded the depgraph (3+ s on a populated cache)
@@ -666,7 +676,17 @@ fn run_server(args: Args) {
         // The load may still be running if shutdown came in <3 s after
         // start; abort is safe (nothing for the swap to corrupt).
         load_handle.cancel();
-    });
+    };
+    // The entrypoint owns this future until server.run observes shutdown.
+    // As in download_daemon_entry, retain it across bounded runtime polls;
+    // a poll deadline must never drop/restart the service or its cleanup.
+    let mut service = std::pin::pin!(service);
+    loop {
+        match rt.run_within(service.as_mut(), crate::core::wait::LIFECYCLE_POLL) {
+            Ok(()) => break,
+            Err(kernal_api::async_engine::DeadlineElapsed) => continue,
+        }
+    }
 }
 
 /// Shorter than the client's 10 s no-daemon grace, so a retry that wins still

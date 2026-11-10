@@ -126,6 +126,10 @@ cmd = "soldr toolchain ensure --json && soldr rustup component add clippy && ZCC
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core -p zccache-artifact -p zccache-fingerprint -p zccache-fscache -p zccache-depgraph -p zccache-watcher --lib --locked -- --test-threads=1 && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --doc --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib probe_ --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib private_daemon --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib watch_registration --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib pending_writes --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib embedded_flush --locked"
 
+[task.kernal-waits-2038]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib kernal_wait_2038 --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib kernal_wait_2038 --locked -- --nocapture"
+
 [task.bounded-sync-contention-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib bounded_lock_tests --locked"

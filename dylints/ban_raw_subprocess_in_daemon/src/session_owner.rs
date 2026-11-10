@@ -29,9 +29,11 @@ pub(super) fn check(cx: &LateContext<'_>, span: Span, def_id: DefId) -> bool {
             }) && matches!(
                 name,
                 "wait"
+                    | "wait_within"
                     | "try_wait"
                     | "next_output"
                     | "wait_with_output_bounded"
+                    | "wait_with_output_bounded_within"
                     | "kill"
                     | "poll"
                     | "write_stdin"

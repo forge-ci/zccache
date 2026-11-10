@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 pub const PROBE: Duration = Duration::from_secs(30);
 /// A helper whose own work is bounded.
 pub const HELPER_JOIN: Duration = Duration::from_secs(60);
+/// Idle lifecycle listeners recheck their owner/shutdown state at this cadence.
+pub const LIFECYCLE_POLL: Duration = Duration::from_secs(1);
 /// An entire user-requested build/download, rather than a brief state access.
 pub const WHOLE_COMMAND: Duration = Duration::from_secs(24 * 60 * 60);
 

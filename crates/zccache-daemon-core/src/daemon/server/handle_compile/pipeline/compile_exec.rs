@@ -338,12 +338,20 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             }
         };
     let (compiler_admission, available_before) =
-        crate::daemon::server::compile_resource_gate::acquire_compiler_admission(
+        match crate::daemon::server::compile_resource_gate::acquire_compiler_admission(
             state,
             exclusive,
             host_admission,
         )
-        .await;
+        .await
+        {
+            Ok(admission) => admission,
+            Err(error) => {
+                return CompileExecResult::Error(Response::Error {
+                    message: format!("compiler admission timed out: {error}"),
+                })
+            }
+        };
     if exclusive {
         tracing::info!(
             event = "compile_exclusive",

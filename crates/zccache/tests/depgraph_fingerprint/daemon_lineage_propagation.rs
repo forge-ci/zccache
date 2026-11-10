@@ -46,7 +46,7 @@ fn capture_child_env(
                 spec.spawn()
                     .await
                     .expect("spawn")
-                    .wait_with_output_bounded(64 * 1024)
+                    .wait_with_output_bounded_within(64 * 1024, std::time::Duration::from_secs(10))
                     .await
             })
             .await

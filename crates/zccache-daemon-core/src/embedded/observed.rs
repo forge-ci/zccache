@@ -135,14 +135,20 @@ impl ZccacheService {
         let mut compile = std::pin::pin!(compile);
 
         let observed = loop {
-            let chunk = receiver.recv();
+            // Compilation owns this listener's lifetime; periodically return to
+            // the race so cancellation and completion remain observable.
+            let chunk = receiver.recv_within(zccache_core::wait::LIFECYCLE_POLL);
             let mut chunk = std::pin::pin!(chunk);
             match kernal_api::biased_race!((chunk.as_mut()), (compile.as_mut())).await {
-                kernal_api::async_engine::BiasedRace2::First(chunk) => {
-                    if let Some(chunk) = chunk {
-                        emit_output_chunk(&mut on_chunk, chunk);
+                kernal_api::async_engine::BiasedRace2::First(chunk) => match chunk {
+                    Ok(chunk) => emit_output_chunk(&mut on_chunk, chunk),
+                    Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => continue,
+                    Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => {
+                        return Err(super::EmbeddedError::Compile(
+                            "compile output channel disconnected".into(),
+                        ));
                     }
-                }
+                },
                 kernal_api::async_engine::BiasedRace2::Second(result) => break result?,
             }
         };

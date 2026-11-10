@@ -79,9 +79,10 @@ impl SettleBuffer {
 
         loop {
             // Wait for the first event (or channel close).
-            let event = match rx.recv().await {
-                Some(e) => e,
-                None => {
+            let event = match rx.recv_within(zccache_core::wait::LIFECYCLE_POLL).await {
+                Ok(e) => e,
+                Err(mpsc::RecvTimeoutError::TimedOut) if !tx.is_closed() => continue,
+                Err(_) => {
                     // Channel closed — flush any remaining events.
                     if !pending.is_empty() {
                         let _ = tx.send(Self::drain(&mut pending));
@@ -119,23 +120,23 @@ impl SettleBuffer {
                     }
                     break;
                 }
-                match kernal_api::async_engine::timeout(wait, rx.recv()).await {
-                    Ok(Some(WatchEvent::Overflow | WatchEvent::Error(_))) => {
+                match rx.recv_within(wait).await {
+                    Ok(WatchEvent::Overflow | WatchEvent::Error(_)) => {
                         pending.clear();
                         let _ = tx.send(SettledEvent::Overflow);
                         break;
                     }
-                    Ok(Some(event)) => {
+                    Ok(event) => {
                         Self::apply_event(&mut pending, event);
                     }
-                    Ok(None) => {
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
                         // Channel closed — flush remaining.
                         if !pending.is_empty() {
                             let _ = tx.send(Self::drain(&mut pending));
                         }
                         return;
                     }
-                    Err(_timeout) => {
+                    Err(mpsc::RecvTimeoutError::TimedOut) => {
                         // Settle window elapsed — emit batch.
                         if !pending.is_empty() {
                             let _ = tx.send(Self::drain(&mut pending));
@@ -195,7 +196,10 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("a.c".into())).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -224,7 +228,10 @@ mod tests {
         }
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 5);
@@ -252,7 +259,10 @@ mod tests {
         raw_tx.send(WatchEvent::Modified(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -279,7 +289,10 @@ mod tests {
         raw_tx.send(WatchEvent::Removed(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert!(changed.is_empty());
@@ -306,7 +319,10 @@ mod tests {
         raw_tx.send(WatchEvent::Created(path)).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -337,7 +353,10 @@ mod tests {
             .unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 assert_eq!(changed.len(), 1);
@@ -366,7 +385,10 @@ mod tests {
         raw_tx.send(WatchEvent::Overflow).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
 
         handle.await.unwrap();
@@ -392,7 +414,10 @@ mod tests {
         drop(raw_tx);
 
         // Error should trigger overflow, discarding the pending Modified event.
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
 
         handle.await.unwrap();
@@ -412,7 +437,10 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("x.c".into())).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         assert!(matches!(event, SettledEvent::Batch { .. }));
         handle.await.unwrap();
     }
@@ -434,7 +462,14 @@ mod tests {
 
         // Should get at least one overflow event.
         let mut overflow_count = 0;
-        while let Some(event) = settled_rx.recv().await {
+        loop {
+            let event = match settled_rx.recv_within(Duration::from_secs(10)).await {
+                Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::TimedOut) => {
+                    panic!("settle task did not close its output")
+                }
+            };
             if matches!(event, SettledEvent::Overflow) {
                 overflow_count += 1;
             }
@@ -459,7 +494,14 @@ mod tests {
 
         let mut saw_overflow = false;
         let mut saw_batch = false;
-        while let Some(event) = settled_rx.recv().await {
+        loop {
+            let event = match settled_rx.recv_within(Duration::from_secs(10)).await {
+                Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::TimedOut) => {
+                    panic!("settle task did not close its output")
+                }
+            };
             match event {
                 SettledEvent::Overflow => saw_overflow = true,
                 SettledEvent::Batch { changed, .. } => {
@@ -492,7 +534,14 @@ mod tests {
 
         // Collect all batches — total changed files should be 200.
         let mut total_changed = 0;
-        while let Some(event) = settled_rx.recv().await {
+        loop {
+            let event = match settled_rx.recv_within(Duration::from_secs(10)).await {
+                Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::TimedOut) => {
+                    panic!("settle task did not close its output")
+                }
+            };
             if let SettledEvent::Batch { changed, .. } = event {
                 total_changed += changed.len();
             }
@@ -522,7 +571,10 @@ mod tests {
             .unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, removed } => {
                 // new.c (Created), edit.c (Modified), renamed.c (from Renamed.to)
@@ -550,7 +602,10 @@ mod tests {
         raw_tx.send(WatchEvent::Modified("b.c".into())).unwrap();
         drop(raw_tx); // Close before 500ms window
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         match event {
             SettledEvent::Batch { changed, .. } => {
                 assert_eq!(changed.len(), 2);
@@ -574,7 +629,10 @@ mod tests {
         raw_tx.send(WatchEvent::Overflow).unwrap();
         drop(raw_tx);
 
-        let event = settled_rx.recv().await.unwrap();
+        let event = settled_rx
+            .recv_within(Duration::from_secs(10))
+            .await
+            .unwrap();
         assert!(matches!(event, SettledEvent::Overflow));
         handle.await.unwrap();
     }
@@ -592,8 +650,8 @@ mod tests {
         drop(raw_tx);
 
         // Should get None (channel closed, no events).
-        let event = settled_rx.recv().await;
-        assert!(event.is_none());
+        let event = settled_rx.recv_within(Duration::from_secs(10)).await;
+        assert!(matches!(event, Err(mpsc::RecvTimeoutError::Disconnected)));
 
         handle.await.unwrap();
     }

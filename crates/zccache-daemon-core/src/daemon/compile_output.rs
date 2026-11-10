@@ -174,7 +174,23 @@ pub(crate) async fn consume(
         }
     }
 
-    while let Some(chunk) = receiver.recv().await {
+    loop {
+        let chunk = match receiver
+            .recv_within(zccache_core::wait::LIFECYCLE_POLL)
+            .await
+        {
+            Ok(chunk) => chunk,
+            Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+            Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => {
+                if context.sender.is_closed() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "compile output consumer disconnected",
+                    ));
+                }
+                continue;
+            }
+        };
         match chunk {
             RawOutputChunk::Stdout(bytes) => {
                 let bytes = if parser_reads_stdout {
@@ -250,12 +266,19 @@ pub(crate) async fn consume(
 }
 
 async fn send(sender: &Sender<OutputChunk>, chunk: OutputChunk) -> io::Result<()> {
-    sender.send(chunk).await.map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "embedded compile output receiver disconnected",
-        )
-    })
+    sender
+        .send_within(chunk, zccache_core::wait::PROBE)
+        .await
+        .map_err(|error| match error {
+            kernal_api::async_engine::SendTimeoutError::Closed(_) => io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "embedded compile output receiver disconnected",
+            ),
+            kernal_api::async_engine::SendTimeoutError::TimedOut(_) => io::Error::new(
+                io::ErrorKind::TimedOut,
+                "embedded compile output send timed out",
+            ),
+        })
 }
 
 /// Retains a live-emitted head and a ring-buffered tail so truncation keeps
@@ -378,7 +401,10 @@ mod tests {
         };
         let (raw_sender, raw_receiver) = async_engine::channel(8);
         raw_sender
-            .send(RawOutputChunk::Stderr(vec![b'x'; 2 * 1024 * 1024]))
+            .send_within(
+                RawOutputChunk::Stderr(vec![b'x'; 2 * 1024 * 1024]),
+                std::time::Duration::from_secs(10),
+            )
             .await
             .expect("raw output receiver");
         drop(raw_sender);
@@ -412,7 +438,10 @@ mod tests {
         let (raw_sender, raw_receiver) = async_engine::channel(128);
         for bytes in trace.as_bytes().chunks(5) {
             raw_sender
-                .send(RawOutputChunk::Stderr(bytes.to_vec()))
+                .send_within(
+                    RawOutputChunk::Stderr(bytes.to_vec()),
+                    std::time::Duration::from_secs(10),
+                )
                 .await
                 .expect("raw receiver");
         }
@@ -470,7 +499,10 @@ mod tests {
             } else {
                 RawOutputChunk::Stderr(bytes.to_vec())
             };
-            raw_sender.send(chunk).await.expect("raw receiver");
+            raw_sender
+                .send_within(chunk, std::time::Duration::from_secs(10))
+                .await
+                .expect("raw receiver");
         }
         drop(raw_sender);
         let captured = super::consume(
@@ -548,9 +580,10 @@ mod tests {
         let context = OutputContext::new(sender);
         let (raw_sender, raw_receiver) = async_engine::channel(64);
         raw_sender
-            .send(RawOutputChunk::Stderr(
-                b"main.c(1): warning C4101: unreferenced\r\n".to_vec(),
-            ))
+            .send_within(
+                RawOutputChunk::Stderr(b"main.c(1): warning C4101: unreferenced\r\n".to_vec()),
+                std::time::Duration::from_secs(10),
+            )
             .await
             .expect("raw receiver");
         drop(raw_sender);
@@ -604,7 +637,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let first = tokio::select! {
-            chunk = chunks.recv() => chunk.expect("first output chunk"),
+            chunk = chunks.recv_within(std::time::Duration::from_secs(10)) => chunk.expect("first output chunk"),
             _ = &mut operation => panic!("child exited before first output callback"),
         };
         assert!(started.elapsed() < std::time::Duration::from_millis(800));
@@ -646,7 +679,7 @@ mod tests {
         let mut operation = Box::pin(operation);
 
         let first = tokio::select! {
-            chunk = chunks.recv() => chunk.expect("startup output"),
+            chunk = chunks.recv_within(std::time::Duration::from_secs(10)) => chunk.expect("startup output"),
             _ = &mut operation => panic!("child exited before cancellation"),
         };
         assert!(matches!(first, OutputChunk::Stderr(bytes) if bytes == b"started\n"));

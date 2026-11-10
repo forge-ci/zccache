@@ -1,6 +1,61 @@
 use super::*;
 
 #[tokio::test]
+async fn kernal_wait_2038_live_receivers_return_typed_expiry_and_keep_the_channel() {
+    use kernal_api::async_engine::{self, RecvTimeoutError};
+    let bound = Duration::from_millis(20);
+    let (sender, mut receiver) = async_engine::channel(1);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        receiver.recv_within(bound).await,
+        Err(RecvTimeoutError::TimedOut)
+    );
+    assert!(started.elapsed() <= bound + Duration::from_secs(2));
+    sender.try_send(7).unwrap();
+    assert_eq!(receiver.recv_within(bound).await, Ok(7));
+    drop(sender);
+    assert_eq!(
+        receiver.recv_within(bound).await,
+        Err(RecvTimeoutError::Disconnected)
+    );
+
+    let (sender, mut receiver) = async_engine::unbounded_channel();
+    let started = std::time::Instant::now();
+    assert_eq!(
+        receiver.recv_within(bound).await,
+        Err(RecvTimeoutError::TimedOut)
+    );
+    assert!(started.elapsed() <= bound + Duration::from_secs(2));
+    sender.send(9).unwrap();
+    assert_eq!(receiver.recv_within(bound).await, Ok(9));
+    drop(sender);
+    assert_eq!(
+        receiver.recv_within(bound).await,
+        Err(RecvTimeoutError::Disconnected)
+    );
+}
+
+#[test]
+fn kernal_wait_2038_contended_file_lock_returns_typed_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lock");
+    let holder = std::fs::File::create(&path).unwrap();
+    let contender = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let bound = Duration::from_millis(20);
+    let guard = crate::wait::lock_exclusive_for(&holder, bound).unwrap();
+    let started = std::time::Instant::now();
+    let error = crate::wait::lock_exclusive_for(&contender, bound).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(started.elapsed() <= bound + Duration::from_secs(2));
+    drop(guard);
+    assert!(crate::wait::lock_exclusive_for(&contender, bound).is_ok());
+}
+
+#[tokio::test]
 async fn state_access_finishes_before_the_next_await() {
     let state = State::new(Vec::new());
     state.with_for(STATE_TIMEOUT, |values| values.push(1)).await;

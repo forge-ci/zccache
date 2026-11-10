@@ -42,42 +42,52 @@ fn print_status(args: &Args) {
         "  lock file:  {}",
         daemon_mgmt::lock_file_path_for(&endpoint).display()
     );
-    match query_daemon_status(&endpoint) {
-        Ok(status) => {
+    let rt = match kernal_api::async_engine::RuntimeBuilder::current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("failed to create status runtime: {error}");
+            std::process::exit(1);
+        }
+    };
+    match rt.run_within(query_daemon_status(&endpoint), crate::core::wait::PROBE) {
+        Ok(Ok(status)) => {
             println!("  status:     running");
             println!("  uptime:     {}s", status.uptime_secs);
             println!("  downloads:  {}", status.active_downloads);
             println!("  clients:    {}", status.connected_clients);
         }
-        Err(_) => println!("  status:     not running"),
+        Ok(Err(_)) => println!("  status:     not running"),
+        Err(error) => {
+            eprintln!("download daemon status query timed out: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
-fn query_daemon_status(endpoint: &str) -> Result<crate::download::DownloadDaemonStatus, String> {
-    let rt = kernal_api::async_engine::RuntimeBuilder::current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("failed to create runtime: {e}"))?;
-    rt.run(async {
-        let mut conn = crate::ipc::connect(endpoint)
-            .await
-            .map_err(|e| format!("download daemon not running at {endpoint}: {e}"))?;
-        let frame = crate::download_protocol::encode_message(&Request::Status)
-            .map_err(|error| format!("failed to encode download status request: {error}"))?;
-        conn.send_opaque_bytes(&frame)
-            .await
-            .map_err(|e| format!("failed to query download daemon: {e}"))?;
-        match conn
-            .recv_opaque_with(crate::download_protocol::decode_message::<Response>)
-            .await
-        {
-            Ok(Some(Response::Status(status))) => Ok(status),
-            Ok(Some(Response::Error { message })) => Err(message),
-            Ok(Some(other)) => Err(format!("unexpected response: {other:?}")),
-            Ok(None) => Err("download daemon closed connection unexpectedly".to_string()),
-            Err(e) => Err(format!("broken connection to download daemon: {e}")),
-        }
-    })
+async fn query_daemon_status(
+    endpoint: &str,
+) -> Result<crate::download::DownloadDaemonStatus, String> {
+    let mut conn = crate::ipc::connect(endpoint)
+        .await
+        .map_err(|e| format!("download daemon not running at {endpoint}: {e}"))?;
+    let frame = crate::download_protocol::encode_message(&Request::Status)
+        .map_err(|error| format!("failed to encode download status request: {error}"))?;
+    conn.send_opaque_bytes(&frame)
+        .await
+        .map_err(|e| format!("failed to query download daemon: {e}"))?;
+    match conn
+        .recv_opaque_with(crate::download_protocol::decode_message::<Response>)
+        .await
+    {
+        Ok(Some(Response::Status(status))) => Ok(status),
+        Ok(Some(Response::Error { message })) => Err(message),
+        Ok(Some(other)) => Err(format!("unexpected response: {other:?}")),
+        Ok(None) => Err("download daemon closed connection unexpectedly".to_string()),
+        Err(e) => Err(format!("broken connection to download daemon: {e}")),
+    }
 }
 
 fn run_server(args: Args) {
@@ -90,7 +100,7 @@ fn run_server(args: Args) {
         .enable_all()
         .build()
         .expect("failed to create runtime");
-    rt.run(async move {
+    let service = async move {
         let bind_endpoint = endpoint.clone();
         let bind_result = kernal_api::async_engine::launch_blocking(move || {
             let server = crate::download_daemon::DownloadDaemon::bind(&bind_endpoint)?;
@@ -131,7 +141,16 @@ fn run_server(args: Args) {
             std::process::exit(1);
         }
         remove_instance_records(&endpoint);
-    });
+    };
+    // This process owns the service and its shutdown listener. Keep the same
+    // future alive across polls, matching the compile daemon entrypoint.
+    let mut service = std::pin::pin!(service);
+    loop {
+        match rt.run_within(service.as_mut(), crate::core::wait::LIFECYCLE_POLL) {
+            Ok(()) => break,
+            Err(kernal_api::async_engine::DeadlineElapsed) => continue,
+        }
+    }
 }
 
 /// Record this instance for `endpoint` (#2090). Written after the bind, identity

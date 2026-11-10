@@ -113,7 +113,14 @@ async fn streaming_sink_preserves_output_and_orphan_watchdog() {
         );
         let collect = async {
             let mut stdout = Vec::new();
-            while let Some(chunk) = receiver.recv().await {
+            loop {
+                let chunk = match receiver.recv_within(Duration::from_secs(10)).await {
+                    Ok(chunk) => chunk,
+                    Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+                    Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => {
+                        panic!("output producer did not close")
+                    }
+                };
                 if let RawOutputChunk::Stdout(bytes) = chunk {
                     stdout.extend(bytes);
                 }
@@ -317,7 +324,17 @@ async fn streaming_sink_preserves_alive_hung_watchdog() {
             Duration::from_millis(50),
             Some(sender),
         );
-        let drain = async { while receiver.recv().await.is_some() {} };
+        let drain = async {
+            loop {
+                match receiver.recv_within(Duration::from_secs(10)).await {
+                    Ok(_) => {}
+                    Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+                    Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => {
+                        panic!("output producer did not close")
+                    }
+                }
+            }
+        };
         let (output, ()) = tokio::join!(wait, drain);
         assert!(!output.expect("watchdog wait").status.success());
     })

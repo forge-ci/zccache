@@ -180,12 +180,10 @@ impl CacheSystem {
         since_clock: Clock,
     ) -> Result<ClockLookup> {
         let cache = self.clone();
-        // The facade's semaphore cannot be closed, so `acquire` yields a
-        // permit rather than a `Result` and the "semaphore closed" arm has
-        // no state left to describe. Borrowed rather than owned for the same
-        // reason the original cloned the `Arc`: the permit only has to
-        // outlive this call, and the semaphore itself is `'static`.
-        let _permit = hash_semaphore().acquire().await;
+        let _permit = hash_semaphore()
+            .acquire_within(zccache_core::sync::OPERATION_TIMEOUT)
+            .await
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::TimedOut, error))?;
         kernal_api::async_engine::launch_blocking(move || cache.lookup_since(&path, since_clock))
             .await
             .map_err(|err| zccache_core::Error::Cache {

@@ -669,14 +669,20 @@ pub(super) fn start_watcher_tasks(
                 // task neither sends nor drops its sender the consumer parks
                 // forever and ignores shutdown — a shutdown-cleanliness gap.
                 let winner = {
-                    let event = settled_rx.recv();
+                    let event = settled_rx.recv_within(zccache_core::wait::LIFECYCLE_POLL);
                     let shutdown = state.shutdown.notified();
                     let mut event = std::pin::pin!(event);
                     let mut shutdown = std::pin::pin!(shutdown);
                     kernal_api::fair_race!((event.as_mut()), (shutdown.as_mut())).await
                 };
                 let event = match winner {
-                    kernal_api::async_engine::FairRace2::First(event) => event,
+                    kernal_api::async_engine::FairRace2::First(Ok(event)) => Some(event),
+                    kernal_api::async_engine::FairRace2::First(Err(
+                        kernal_api::async_engine::RecvTimeoutError::TimedOut,
+                    )) => continue,
+                    kernal_api::async_engine::FairRace2::First(Err(
+                        kernal_api::async_engine::RecvTimeoutError::Disconnected,
+                    )) => None,
                     kernal_api::async_engine::FairRace2::Second(()) => {
                         state.shutdown_requested.store(true, Ordering::Release);
                         // See the accept-loop shutdown branch: consuming a
