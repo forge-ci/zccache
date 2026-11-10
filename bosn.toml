@@ -134,7 +134,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run -p zccache-daemon-core -
 
 [task.incremental-warm-test]
 stack = "gate"
-cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features test-support --lib warm_restores_incremental --locked -- --nocapture"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --lib warm_restores_incremental --locked -- --nocapture"
 
 [task.durable-payload-test]
 stack = "gate"

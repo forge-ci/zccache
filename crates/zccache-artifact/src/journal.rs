@@ -201,12 +201,7 @@ impl<'a> Journal<'a> {
     }
 
     pub fn has_checkpoint(&self) -> io::Result<bool> {
-        Ok(self
-            .kv()?
-            .list_namespace(&self.checkpoints)
-            .map_err(kv_error)?
-            .iter()
-            .any(|(key, _)| key.0 == [0; 32]))
+        Ok(self.checkpoint_record(&self.kv()?)?.is_some())
     }
 
     /// Ordinary batches require one atomic publication/fsync, not one per row.
@@ -274,12 +269,7 @@ impl<'a> Journal<'a> {
         let kv = self.kv()?;
         for _ in 0..3 {
             let before = self.checkpoint_record(&kv)?;
-            let covered: Vec<_> = kv
-                .list_namespace(&self.records)
-                .map_err(kv_error)?
-                .into_iter()
-                .map(|(key, _)| key)
-                .collect();
+            let covered = kv.namespace_keys(&self.records).map_err(kv_error)?;
             let contents = self.read_contents(&kv, before.as_ref(), &covered);
             let after = self.checkpoint_record(&kv)?;
             if before.as_ref().map(|value| value.revision)
@@ -340,7 +330,7 @@ impl<'a> Journal<'a> {
                     tracing::warn!(%error, "journal batch reclamation deferred");
                 }
             }
-            for (key, _) in kv.list_namespace(&self.chunks).map_err(kv_error)? {
+            for key in kv.namespace_keys(&self.chunks).map_err(kv_error)? {
                 if !retained.contains(&key.0) {
                     if let Err(error) = kv.remove(&self.chunks, &key) {
                         tracing::warn!(%error, "journal chunk reclamation deferred");
@@ -354,13 +344,7 @@ impl<'a> Journal<'a> {
 
     /// A clear captures IDs without reading old batch payloads.
     pub fn record_ids(&self) -> io::Result<Vec<Key>> {
-        Ok(self
-            .kv()?
-            .list_namespace(&self.records)
-            .map_err(kv_error)?
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect())
+        self.kv()?.namespace_keys(&self.records).map_err(kv_error)
     }
 
     pub fn stored_bytes(&self) -> io::Result<u64> {
@@ -378,6 +362,35 @@ impl<'a> Journal<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn incremental_journal_corrupt_headers_are_errors_instead_of_missing_commits() {
+        for corrupt_base in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let state = JournalState::default();
+            let journal = Journal::new(temp.path(), "journal-test", &state);
+            journal.initialize(b"base").unwrap();
+            journal.append(b"committed batch").unwrap();
+            let (namespace, key) = if corrupt_base {
+                (&journal.checkpoints, Key([0; 32]))
+            } else {
+                (&journal.records, journal.record_ids().unwrap()[0])
+            };
+            let path = temp
+                .path()
+                .join("kv")
+                .join(namespace)
+                .join(format!("{}.bin", key.to_hex()));
+            std::fs::write(path, b"broken header").unwrap();
+            assert!(
+                journal.read().is_err(),
+                "committed files cannot silently disappear"
+            );
+            if corrupt_base {
+                assert!(journal.initialize(b"stale legacy").is_err());
+            }
+        }
+    }
+
     #[test]
     fn incremental_journal_replay_and_compaction_do_not_resurrect_consumed_batches() {
         let temp = tempfile::tempdir().unwrap();

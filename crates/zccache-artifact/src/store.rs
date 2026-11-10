@@ -204,6 +204,7 @@ pub struct ArtifactStore {
     /// on this crate, never the reverse, so the store only *reports* that it
     /// started corrupt and the daemon owns the recovery policy.
     started_corrupt: std::sync::atomic::AtomicBool,
+    legacy_unusable: std::sync::atomic::AtomicBool,
     /// Set by every mutation (`insert`, `insert_many`, `remove`,
     /// `remove_batch`, `clear`); cleared by [`Self::take_dirty`]. Lets a
     /// shutdown drain skip a redundant final `flush()` when the WAL flush
@@ -213,7 +214,7 @@ pub struct ArtifactStore {
     /// `load_from_disk` deliberately does not set this — its inserts mirror
     /// content already on disk.
     dirty: std::sync::atomic::AtomicBool,
-    pending: DashMap<String, Option<ArtifactIndex>>,
+    pending: DashMap<String, ()>,
     clear_requested: std::sync::atomic::AtomicBool,
     journal_state: crate::journal::JournalState,
     migration_requested: std::sync::atomic::AtomicBool,
@@ -263,6 +264,7 @@ impl ArtifactStore {
             entries: DashMap::new(),
             flush_lock: Arc::new(zccache_core::sync::Gate::new()),
             started_corrupt: std::sync::atomic::AtomicBool::new(false),
+            legacy_unusable: std::sync::atomic::AtomicBool::new(false),
             dirty: std::sync::atomic::AtomicBool::new(false),
             pending: DashMap::new(),
             clear_requested: std::sync::atomic::AtomicBool::new(false),
@@ -333,6 +335,8 @@ impl ArtifactStore {
                     }
                 }
                 Err(e) => {
+                    self.legacy_unusable
+                        .store(true, std::sync::atomic::Ordering::Release);
                     self.started_corrupt
                         .store(true, std::sync::atomic::Ordering::Release);
                     tracing::warn!(
@@ -383,7 +387,7 @@ impl ArtifactStore {
     /// Insert or update an artifact entry. In-memory only.
     pub fn insert(&self, key: &str, meta: &ArtifactIndex) {
         self.entries.insert(key.to_string(), meta.clone());
-        self.pending.insert(key.to_string(), Some(meta.clone()));
+        self.pending.insert(key.to_string(), ());
         self.mark_dirty();
     }
 
@@ -395,8 +399,8 @@ impl ArtifactStore {
     {
         let mut count = 0usize;
         for (k, v) in entries {
-            self.pending.insert(k.as_ref().to_string(), Some(v.clone()));
             self.entries.insert(k.as_ref().to_string(), v);
+            self.pending.insert(k.as_ref().to_string(), ());
             count += 1;
         }
         if count > 0 {
@@ -431,7 +435,7 @@ impl ArtifactStore {
     pub fn remove(&self, key: &str) -> bool {
         let removed = self.entries.remove(key).is_some();
         if removed {
-            self.pending.insert(key.to_string(), None);
+            self.pending.insert(key.to_string(), ());
             self.mark_dirty();
         }
         removed
@@ -442,7 +446,7 @@ impl ArtifactStore {
         let mut removed = 0usize;
         for key in keys {
             if self.entries.remove(*key).is_some() {
-                self.pending.insert((*key).to_string(), None);
+                self.pending.insert((*key).to_string(), ());
                 removed += 1;
             }
         }

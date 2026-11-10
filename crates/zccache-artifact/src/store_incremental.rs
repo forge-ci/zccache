@@ -65,7 +65,7 @@ impl ArtifactStore {
         match std::fs::read(self.path.as_path()) {
             Ok(bytes) => match super::decode_index_rows(&bytes) {
                 Ok(rows) => Ok(rows),
-                Err(_) if self.started_corrupt.load(Ordering::Acquire) => Ok(Vec::new()),
+                Err(_) if self.legacy_unusable.load(Ordering::Acquire) => Ok(Vec::new()),
                 Err(error) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -100,11 +100,15 @@ impl ArtifactStore {
         let rows: Vec<Row> = keys
             .into_iter()
             .filter_map(|key| self.pending.remove(&key))
+            .map(|(key, ())| {
+                let value = self.entries.get(&key).map(|entry| entry.value().clone());
+                (key, value)
+            })
             .collect();
         if !rows.is_empty() {
             if let Err(error) = encode_record(&rows).and_then(|bytes| journal.append(&bytes)) {
-                for (key, value) in rows {
-                    self.pending.entry(key).or_insert(value);
+                for (key, _) in rows {
+                    self.pending.entry(key).or_insert(());
                 }
                 return Err(error);
             }
@@ -170,6 +174,43 @@ mod tests {
 
     fn meta() -> ArtifactIndex {
         ArtifactIndex::new(vec!["result.o".into()], vec![4], vec![], vec![], 0)
+    }
+
+    #[test]
+    fn incremental_delayed_same_key_publication_persists_the_current_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("index.bin");
+        let store = ArtifactStore::open_empty(&path);
+        let old = meta();
+        let mut current = meta();
+        current.total_size = 17;
+        store.insert("same", &old);
+        store.insert("same", &current);
+        // Model the older caller enqueueing after the newer caller returns.
+        store.pending.insert("same".into(), ());
+        store.flush_incremental().unwrap();
+        assert_eq!(
+            ArtifactStore::open(&path)
+                .unwrap()
+                .get("same")
+                .unwrap()
+                .total_size,
+            17
+        );
+    }
+    #[test]
+    fn incremental_corrupt_legacy_recovery_survives_claiming_the_reconciliation_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("index.bin");
+        std::fs::write(&path, b"broken legacy index").unwrap();
+        let store = ArtifactStore::open(&path).unwrap();
+        assert!(store.take_started_corrupt());
+        store.insert("recovered", &meta());
+        store.flush_incremental().unwrap();
+        assert!(ArtifactStore::open(&path)
+            .unwrap()
+            .get("recovered")
+            .is_some());
     }
 
     #[test]

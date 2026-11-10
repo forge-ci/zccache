@@ -617,11 +617,20 @@ impl KvStore {
         Ok(out)
     }
 
+    /// Journal enumeration must not turn a damaged value header into absence.
+    /// Only foreign/temp names are ignored; callers validate each returned value.
+    pub(crate) fn namespace_keys(&self, namespace: &str) -> KvResult<Vec<Key>> {
+        self.namespace_value_paths(namespace)
+            .map(|paths| paths.into_iter().map(|(key, _)| key).collect())
+    }
+
     /// Enumerate value lengths for statistics, skipping malformed value headers.
     pub fn list_namespace(&self, namespace: &str) -> KvResult<Vec<(Key, u64)>> {
         let mut out = Vec::new();
         for (key, path) in self.namespace_value_paths(namespace)? {
-            if let Some(len) = read_declared_len(&path)? { out.push((key, len)); }
+            if let Some(len) = read_declared_len(&path)? {
+                out.push((key, len));
+            }
         }
         out.sort_by_key(|(key, _len)| key.to_hex());
         Ok(out)
