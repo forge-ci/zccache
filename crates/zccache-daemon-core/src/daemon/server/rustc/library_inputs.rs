@@ -1,7 +1,10 @@
 //! Resolve rustc metadata's named transitive inputs before every cache lookup.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+
+use rayon::prelude::*;
 
 use crate::core::NormalizedPath;
 use crate::depgraph::{ExternCrate, NATIVE_INPUT_PREFIX};
@@ -13,6 +16,7 @@ use super::library_metadata::{self, Dependency};
 use super::BuildContextResult;
 
 const INPUT_PREFIX: &str = "__zccache_rust_library__:";
+const INVENTORY_MIN_EXTERNS: usize = 8;
 
 fn candidates(stem: &str, dirs: &[NormalizedPath]) -> Result<Vec<NormalizedPath>, &'static str> {
     let mut selected = Vec::new();
@@ -100,18 +104,68 @@ fn inputs(
     files: &MetadataCache,
     probe_dir: &Path,
 ) -> Result<Vec<ExternCrate>, &'static str> {
+    // Amortize the default sysroot inventory only across a large fanout. Small
+    // graphs and explicit targets retain exact discovery and relocation reuse.
+    if externs.len() >= INVENTORY_MIN_EXTERNS {
+        for external in externs {
+            if external.path.extension().is_some_and(|extension| {
+                extension
+                    .to_str()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("rlib"))
+            }) {
+                let hash = files
+                    .lookup_normalized(&external.path)
+                    .map_err(|_| "unreadable Rust library")?;
+                library_metadata::regular_archive(&external.path, hash, probe_dir)?;
+            }
+        }
+        if let Some(inputs) =
+            super::library_inventory::inputs(dirs, compiler, compiler_hash, files, probe_dir)?
+        {
+            return Ok(inputs);
+        }
+    }
+    named_inputs(externs, dirs, compiler, compiler_hash, files, probe_dir)
+}
+
+fn named_inputs(
+    externs: &[ExternCrate],
+    dirs: &[NormalizedPath],
+    compiler: &NormalizedPath,
+    compiler_hash: ContentHash,
+    files: &MetadataCache,
+    probe_dir: &Path,
+) -> Result<Vec<ExternCrate>, &'static str> {
     let mut resolved = Vec::new();
     let roots = externs
-        .iter()
+        .par_iter()
         .map(|external| {
             library_metadata::inspect(compiler, compiler_hash, &external.path, files, probe_dir)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut inspected = HashSet::new();
     for metadata in &roots {
+        // Each root carries the complete closure. Workspace links often repeat
+        // the same sysroot crates in dozens of roots: verify each identity once
+        // per request, while still rechecking directory membership on every hit.
+        let dependencies = metadata
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                inspected.insert((
+                    metadata.triple.as_str(),
+                    dependency.stem.as_str(),
+                    dependency.hash,
+                ))
+            })
+            .collect::<Vec<_>>();
+        if dependencies.is_empty() {
+            continue;
+        }
         let sysroot = library_metadata::target_directory(
             compiler,
             compiler_hash,
-            &metadata.triple,
+            Some(&metadata.triple),
             probe_dir,
         )?;
         let mut search = dirs.to_vec();
@@ -120,17 +174,22 @@ fn inputs(
         }
         // rustc's crate-number table includes the complete external crate
         // closure, not only the producer's direct --extern declarations.
-        for dependency in &metadata.dependencies {
-            // An unused explicit alias need not participate in rustc's crate
-            // lookup. Resolve each named dependency through its search paths.
-            let paths = resolve(
-                dependency,
-                &search,
-                compiler,
-                compiler_hash,
-                files,
-                probe_dir,
-            )?;
+        let groups = dependencies
+            .par_iter()
+            .map(|dependency| {
+                // An unused explicit alias need not participate in rustc's crate
+                // lookup. Resolve each named dependency through its search paths.
+                resolve(
+                    dependency,
+                    &search,
+                    compiler,
+                    compiler_hash,
+                    files,
+                    probe_dir,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for paths in groups {
             for path in paths {
                 if path
                     .extension()
@@ -199,16 +258,19 @@ pub(in crate::daemon::server) async fn complete_context(
         .collect::<Vec<_>>();
     let compiler = super::rustc_identity_path(compilation, cwd);
     let compiler_hash = rustc_ctx.compiler_hash;
+    let inventory_link = rustc_args.crate_types == ["staticlib"]
+        && rustc_args.target.is_none()
+        && !rustc_args.emit_types.iter().any(|kind| kind == "metadata")
+        && !super::library_inventory::candidate(compilation.output_file.as_path());
     let state = Arc::clone(state);
     let resolved = kernal_api::async_engine::launch_blocking(move || {
-        inputs(
-            &externs,
-            &dirs,
-            &compiler,
-            compiler_hash,
-            state.cache_system.metadata(),
-            state.depfile_tmpdir.as_path(),
-        )
+        let files = state.cache_system.metadata();
+        let probe_dir = state.depfile_tmpdir.as_path();
+        if inventory_link {
+            inputs(&externs, &dirs, &compiler, compiler_hash, files, probe_dir)
+        } else {
+            named_inputs(&externs, &dirs, &compiler, compiler_hash, files, probe_dir)
+        }
     })
     .await;
     match resolved {

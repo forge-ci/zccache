@@ -5,6 +5,58 @@ use super::*;
 const ROOT: &str = "Crate info:\nname umbrella-123\nhash 123 stable_crate_id StableCrateId(7)\nproc_macro false\ntriple x86_64-unknown-linux-gnu\n=External Dependencies=\n1 choice-456 hash abc host_hash None kind Explicit public\n\n";
 
 #[test]
+fn perf_large_extern_inventory_avoids_per_library_rustc_probes() {
+    let compiler = crate::test_support::find_rustc().expect("real rustc required");
+    let fixture = tempfile::tempdir().unwrap();
+    let dir: NormalizedPath = fixture.path().join("deps").into();
+    std::fs::create_dir(&dir).unwrap();
+    let mut externs = Vec::new();
+    for index in 0..50 {
+        let path = dir.join(format!("libunit_{index}.rlib"));
+        // Own-byte archives deliberately have no compiler metadata. The cold
+        // inventory must not launch -Zls. The compiler validates on a miss.
+        std::fs::write(&path, format!("!<arch>\n{index}")).unwrap();
+        externs.push(ExternCrate {
+            name: format!("unit_{index}"),
+            path,
+        });
+    }
+    let before = library_metadata::probe_count();
+    let files = MetadataCache::new();
+    let compiler_hash = crate::hash::hash_bytes(b"2174 cold inventory spawn count");
+    let resolved = inputs(
+        &externs,
+        std::slice::from_ref(&dir),
+        &compiler,
+        compiler_hash,
+        &files,
+        fixture.path(),
+    )
+    .unwrap();
+    for external in &externs {
+        assert!(resolved.iter().any(|input| input.path == external.path));
+    }
+    assert_eq!(
+        library_metadata::probe_count(),
+        before + 1,
+        "cold links need only the default target-directory probe, independent of extern count"
+    );
+    std::fs::write(&externs[0].path, b"!<thin>\n0").unwrap();
+    assert!(
+        inputs(
+            &externs,
+            &[dir],
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+        )
+        .is_err(),
+        "a changed digest must not reuse the regular-archive verdict"
+    );
+}
+
+#[test]
 fn metadata_preserves_exact_crate_identities_and_fails_closed() {
     let metadata = library_metadata::parse(ROOT).unwrap();
     assert_eq!(metadata.stem, "umbrella-123");
@@ -48,7 +100,7 @@ fn named_candidates_include_metadata_and_codegen_but_not_unrelated_files() {
 }
 
 #[test]
-fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
+fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     let compiler = crate::test_support::find_rustc().expect("real rustc required");
     let fixture = tempfile::tempdir().unwrap();
     let source = fixture.path().join("probe.rs");
@@ -76,9 +128,13 @@ fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
     let first =
         library_metadata::inspect(&compiler, compiler_hash, &library, &files, fixture.path())
             .unwrap();
-    let directory =
-        library_metadata::target_directory(&compiler, compiler_hash, &first.triple, fixture.path())
-            .unwrap();
+    let directory = library_metadata::target_directory(
+        &compiler,
+        compiler_hash,
+        Some(&first.triple),
+        fixture.path(),
+    )
+    .unwrap();
     for _ in 0..20 {
         let again =
             library_metadata::inspect(&compiler, compiler_hash, &library, &files, fixture.path())
@@ -88,7 +144,7 @@ fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
             library_metadata::target_directory(
                 &compiler,
                 compiler_hash,
-                &first.triple,
+                Some(&first.triple),
                 fixture.path()
             )
             .unwrap(),
@@ -99,5 +155,37 @@ fn perf_library_metadata_warm_lookup_does_not_spawn_rustc() {
         library_metadata::probe_count(),
         before + 2,
         "warm hits must reuse decoded metadata"
+    );
+
+    // #2174: the link fixture supplies 50 externs with the same std closure.
+    // Memoizing metadata alone must not leave 50 repetitions of its resolution.
+    let externs = (0..50)
+        .map(|index| ExternCrate {
+            name: format!("alias_{index}"),
+            path: library.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut best_ns = u128::MAX;
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        let resolved = inputs(
+            &externs,
+            &[],
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+        )
+        .unwrap();
+        best_ns = best_ns.min(start.elapsed().as_nanos());
+        assert!(
+            !resolved.is_empty(),
+            "the real std closure must be verified"
+        );
+    }
+    eprintln!("50-extern shared Rust closure best_ns={best_ns}");
+    assert!(
+        best_ns < std::time::Duration::from_millis(30).as_nanos(),
+        "shared Rust library closure took {best_ns}ns; resolve it once per request"
     );
 }

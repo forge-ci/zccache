@@ -72,13 +72,15 @@ pub(in crate::daemon) fn rustc_library_metadata_probe_spawn(
 /// Resolve the compiler-owned library directory for a metadata target triple.
 pub(in crate::daemon) fn rustc_target_library_probe_spawn(
     compiler: &Path,
-    triple: &str,
+    triple: Option<&str>,
     probe_dir: &Path,
 ) -> kernal_api::SpawnSpec {
-    compiler_identity_probe_spawn(compiler, "--print=target-libdir")
-        .arg("--target")
-        .arg(triple)
-        .current_dir(probe_dir)
+    let spec =
+        compiler_identity_probe_spawn(compiler, "--print=target-libdir").current_dir(probe_dir);
+    match triple {
+        Some(triple) => spec.arg("--target").arg(triple),
+        None => spec,
+    }
 }
 
 /// The argv an internal scan runs: `scan_args` plus the family's

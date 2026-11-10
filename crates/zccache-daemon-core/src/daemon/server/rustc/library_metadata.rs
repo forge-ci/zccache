@@ -1,6 +1,6 @@
 //! Bounded, cached inspection of rustc's own metadata; never changes compile argv.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -28,9 +28,10 @@ pub(super) struct Metadata {
 }
 
 type ParsedCache = HashMap<(ContentHash, ContentHash), Arc<Metadata>>;
-type DirectoryCache = HashMap<(NormalizedPath, ContentHash, String), NormalizedPath>;
+type DirectoryCache = HashMap<(NormalizedPath, ContentHash, Option<String>), NormalizedPath>;
 static PARSED: OnceLock<State<ParsedCache>> = OnceLock::new();
 static DIRECTORIES: OnceLock<State<DirectoryCache>> = OnceLock::new();
+static REGULAR_ARCHIVES: OnceLock<State<HashSet<ContentHash>>> = OnceLock::new();
 
 #[cfg(test)]
 std::thread_local! { static PROBE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
@@ -127,6 +128,52 @@ fn probe(spec: kernal_api::SpawnSpec, compiler: &Path) -> Result<String, &'stati
     String::from_utf8(output.stdout).map_err(|_| "non-UTF8 rustc library inspection")
 }
 
+fn snapshot(
+    library: &NormalizedPath,
+    digest: ContentHash,
+    probe_dir: &Path,
+) -> Result<(tempfile::TempDir, NormalizedPath), &'static str> {
+    let snapshot_dir =
+        tempfile::tempdir_in(probe_dir).map_err(|_| "metadata snapshot directory failed")?;
+    let snapshot = snapshot_dir
+        .path()
+        .join(library.file_name().ok_or("invalid library filename")?);
+    {
+        let mut source =
+            std::fs::File::open(library).map_err(|_| "metadata snapshot source failed")?;
+        let mut target =
+            std::fs::File::create(&snapshot).map_err(|_| "metadata snapshot file failed")?;
+        std::io::copy(&mut source, &mut target).map_err(|_| "metadata snapshot copy failed")?;
+    }
+    if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
+        return Err("Rust library changed while snapshotting metadata");
+    }
+    Ok((snapshot_dir, snapshot.into()))
+}
+
+/// The format verdict belongs to the verified bytes, never a path/mtime alone.
+pub(super) fn regular_archive(
+    library: &NormalizedPath,
+    digest: ContentHash,
+    probe_dir: &Path,
+) -> Result<(), &'static str> {
+    let cache = REGULAR_ARCHIVES.get_or_init(|| State::new(HashSet::new()));
+    if cache.with_blocking_for(STATE_WAIT, |cache| cache.contains(&digest)) {
+        return Ok(());
+    }
+    let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
+    super::native_inputs::require_regular_archive(&snapshot)?;
+    cache.with_blocking_for(STATE_WAIT, |cache| {
+        if cache.len() >= MAX_ENTRIES {
+            if let Some(old) = cache.iter().next().copied() {
+                cache.remove(&old);
+            }
+        }
+        cache.insert(digest);
+    });
+    Ok(())
+}
+
 pub(super) fn inspect(
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
@@ -147,21 +194,7 @@ pub(super) fn inspect(
     // Inspect an immutable private copy whose digest is the memo key. Merely
     // hashing the original before/after a child would allow an ABA replacement
     // to memoize another file's metadata under the original digest.
-    let snapshot_dir =
-        tempfile::tempdir_in(probe_dir).map_err(|_| "metadata snapshot directory failed")?;
-    let snapshot = snapshot_dir
-        .path()
-        .join(library.file_name().ok_or("invalid library filename")?);
-    {
-        let mut source =
-            std::fs::File::open(library).map_err(|_| "metadata snapshot source failed")?;
-        let mut target =
-            std::fs::File::create(&snapshot).map_err(|_| "metadata snapshot file failed")?;
-        std::io::copy(&mut source, &mut target).map_err(|_| "metadata snapshot copy failed")?;
-    }
-    if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
-        return Err("Rust library changed while snapshotting metadata");
-    }
+    let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
     if library
         .extension()
         .is_some_and(|extension| extension == "rlib")
@@ -197,11 +230,11 @@ pub(super) fn inspect(
 pub(super) fn target_directory(
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
-    triple: &str,
+    triple: Option<&str>,
     probe_dir: &Path,
 ) -> Result<NormalizedPath, &'static str> {
     let cache = DIRECTORIES.get_or_init(|| State::new(HashMap::new()));
-    let key = (compiler.clone(), compiler_hash, triple.to_string());
+    let key = (compiler.clone(), compiler_hash, triple.map(str::to_owned));
     if let Some(path) = cache.with_blocking_for(STATE_WAIT, |cache| cache.get(&key).cloned()) {
         return Ok(path);
     }
