@@ -2,12 +2,14 @@
 
 - [x] Read handoffs, issue, repository rules, and soldr reference design.
 - [x] Audit compile, link, exec, directory link, and legacy migration.
-- [ ] Capture ownership-based RED in isolated Bosn exec publication test.
-- [ ] Add durable/provisional publication owner and identity-checked demotion.
-- [ ] Cover release, stale completion, failure, provisional hits, and disk hits.
-- [ ] Add deny-level Dylint and positive/negative alias/UFCS/function-item fixtures.
-- [ ] Document residency and add warm file-backed delivery regression budget.
-- [ ] Run isolated Dylint job, lint/clippy, review, and final committed-tree gate.
+- [x] Capture ownership-based RED in isolated Bosn exec publication test.
+- [x] Add durable/provisional publication owner and identity-checked demotion.
+- [x] Cover release, stale completion, failure, provisional hits, and disk hits.
+- [x] Add deny-level Dylint and positive/negative alias/UFCS/function-item fixtures.
+- [x] Document residency and add warm file-backed delivery regression budget.
+- [x] Pre-push review: one primary reviewer, no actionable findings.
+- [x] Workspace clippy with all targets and warnings denied.
+- [ ] Finish standalone Dylint and early lint, then final committed-tree gate.
 - [ ] Push, create PR with closing reference, enable auto-merge, post outcome.
 
 # #2038 — bounded kernal-api waits
