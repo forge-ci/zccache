@@ -19,6 +19,7 @@ default = []
 [dependencies]
 kernal-api = { workspace = true, features = ["fs", "fs-watch"] }
 zccache-core = { workspace = true }
+zccache-hash = { workspace = true }
 zccache-fscache = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }

@@ -1,3 +1,61 @@
+# #2169 polling same-tick rewrites
+
+## #2169-fixup2
+
+- [x] Compared exact Python lifecycle test and equivalent Rust public API under
+  identical two-CPU/six-burner contention: main 438838d0 and head be87b110 each
+  returned 0/300 Python failures and 0/300 empty/missing Rust first batches.
+  Head's one-CPU control also returned 0/300 for both APIs. Natural sampling
+  did not reproduce the hosted race; it does not prove behavioral equivalence.
+- [x] Deterministic RED: edit between scan and hash fails be87b110 with
+  `changed while hashing` (`/tmp/2169-red.log`). That new error becomes an empty
+  overflow batch; main has no hash-verification error path.
+- [x] Report this known changed path, discard the unstable digest, and retain
+  verification state. Keep genuine I/O failures on overflow/retry. Restore the
+  strict Rust first-batch assertion and keep Python strict; add Rust public
+  lifecycle coverage. No timing threshold changed; known gate flakes: #2177.
+- [x] Focused Rust GREEN: 71 unit tests and 2 integration tests passed
+  (`local-test-TonIRd.log`), including the deterministic race, strict
+  restored-mtime assertion and public lifecycle counterpart.
+- [x] Fixed native Python suite: all 14 tests passed (`local-test-7JwgVj.log`).
+- [x] Pre-push clud-review: one primary reviewer, clean.
+- [x] Requested `env -u SOLDR_PORCELAIN SOLDR_VERDICTS=off ./lint` completed
+  with exit 0, including clippy, native/cross-target Dylint, product-feature
+  baseline checks and rustdoc (`local-test-BcafZD.log`). Existing product
+  baseline warnings are unchanged; no new lint finding.
+- [ ] Final committed-tree pinned gate; preserve #2177 budgets and re-gate on
+  a known timing flake, then push the attested head and comment on PR #2176.
+- [x] First refreshed-base gate passed all six lanes on the cc8d8772-based
+  tree; Integration passed 3,953/3,953 selected tests (303 skipped), including
+  all three strict watcher regressions. An earlier attempt lost the act engine
+  during setup (exit 137), before tests; retry passed without source changes.
+- [x] Main advanced via #2180 while that gate ran. Rebased cleanly onto
+  `b2dc49ac`; watcher/core/fscache source is identical to the tested/reviewed
+  version. Run the pinned gate on this final rebased tree before pushing.
+- [x] Second refreshed-base gate passed all six lanes on the b2dc49ac-based
+  tree (stamped 2f3e4b89), including 3,962/3,962 selected workspace tests.
+  Main advanced via #2181 during validation. Rebased onto `bc9843ee`, keeping
+  both upstream and watcher lesson sections; watcher/core/fscache source is
+  unchanged. Run the final pinned gate on this refreshed committed tree.
+- [ ] Push the attested rebased head with force-with-lease and comment on PR #2176.
+
+- Historical first fixup (superseded by fixup2 above): 6/600 Rust runs under CPU contention returned an overflow-only first batch (`/tmp/zccache-2176-red.log`); draining across batches masked the product regression.
+- [x] Fixup GREEN: the same 600-run contention campaign passed (`/tmp/zccache-2176-green.log`); focused watcher suite passed (70 unit tests, saturated-pool integration test, and doctests).
+- [ ] Run focused watcher tests, lint, review, and the pinned gate on the final committed head; push the same branch and comment on the PR.
+- [x] Reproduce same-size, restored-mtime rewrite (RED: local-test-YfBoDk.log).
+- [x] Share the existing timestamp granularity in a separate refactor commit.
+- [x] Verify racy baselines with bounded hashing and retain deferred work fairly.
+- [x] Cover old-file fast path, Windows granularity, cap, and poll budget (7 watcher tests GREEN: local-test-Bqwl3L.log).
+- [x] Run isolated tests and pre-push review: 441 watcher/fscache/core tests plus 3 doctests passed; reviewer clean after persistent-racy starvation fix.
+- [x] Run extra argfile (3 passed) and fetch-lock (1 passed) regressions before gating.
+- [ ] Complete lint, Docker perf matrix and committed-tree gate; retained logs and lane outcomes are posted to the clud board.
+- Validation checkpoint: lint and final workspace clippy passed. All eight perf
+  cells hit the authorized #2170 infrastructure waiver. First gate passed five
+  lanes; integration passed 3930/3931 tests and failed the existing 1 ms
+  pending-write assertion at 4.627 ms under heavy host load. Keep its threshold
+  intact. Rebased onto main after #2174 merged; rerun the committed-tree gate.
+- [ ] Rebase if needed, push PR with auto-merge, post PUSHED to board.
+
 # #2093 item 2 — lint config consistency
 
 - [x] Isolate worktree and confirm config drift.

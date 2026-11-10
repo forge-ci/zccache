@@ -8,14 +8,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 use zccache_core::NormalizedPath;
 
-// No filesystem-type probe on the hot path. Windows includes FAT's two-second
-// ticks; Linux/macOS use 10 ms conservatively for ext4/APFS. Hash-start time,
-// rather than completion time, keeps a long read from aging out a racy entry.
-pub(crate) const HASH_TIMESTAMP_GRANULARITY: Duration = if zccache_core::host::is_windows() {
-    Duration::from_secs(2)
-} else {
-    Duration::from_millis(10)
-};
+use zccache_core::file_timestamp::HASH_TIMESTAMP_GRANULARITY;
 
 fn hash_timestamp_is_racy(mtime: SystemTime, hashed_at: Option<SystemTime>) -> bool {
     hashed_at

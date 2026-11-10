@@ -9,6 +9,7 @@ pub mod config;
 pub mod crash;
 pub mod defender;
 pub mod error;
+pub mod file_timestamp;
 /// zccache-owned host policy shared by product crates.
 pub mod host;
 pub mod key_env;
