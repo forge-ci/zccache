@@ -4,7 +4,8 @@ extern crate rustc_errors;
 extern crate rustc_hir;
 
 use rustc_errors::DiagDecorator;
-use rustc_hir::def::Res;
+use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def_id::DefId;
 use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 
@@ -15,15 +16,28 @@ dylint_linting::declare_late_lint! {
     "confine resident artifact construction to the provisional publication owner"
 }
 
-fn is_resident_constructor(path: &str) -> bool {
-    [
-        "::CachedArtifact::from_artifact_data",
-        "::CachedArtifact::from_artifact_data_with_modes",
-        "::CachedArtifact::with_payloads",
-        "::CachedArtifact::with_payloads_and_owner",
-    ]
-    .iter()
-    .any(|suffix| path.ends_with(suffix))
+fn is_cached_artifact_method(cx: &LateContext<'_>, id: DefId) -> bool {
+    if cx.tcx.def_kind(id) != DefKind::AssocFn {
+        return false;
+    }
+    cx.tcx.impl_of_assoc(id).is_some_and(|implementation| {
+        cx.tcx
+            .type_of(implementation)
+            .instantiate_identity()
+            .ty_adt_def()
+            .is_some_and(|adt| cx.tcx.item_name(adt.did()).as_str() == "CachedArtifact")
+    })
+}
+
+fn is_resident_constructor(cx: &LateContext<'_>, id: DefId) -> bool {
+    is_cached_artifact_method(cx, id)
+        && matches!(
+            cx.tcx.item_name(id).as_str(),
+            "from_artifact_data"
+                | "from_artifact_data_with_modes"
+                | "with_payloads"
+                | "with_payloads_and_owner"
+        )
 }
 
 impl<'tcx> LateLintPass<'tcx> for BanResidentArtifactPublication {
@@ -40,14 +54,17 @@ impl<'tcx> LateLintPass<'tcx> for BanResidentArtifactPublication {
             _ => None,
         };
         let Some(id) = id else { return };
-        if !is_resident_constructor(&cx.tcx.def_path_str(id)) {
+        if !is_resident_constructor(cx, id) {
             return;
         }
-        let owner = cx.tcx.hir_enclosing_body_owner(expr.hir_id);
-        let owner = cx.tcx.def_path_str(owner.to_def_id());
-        if owner.contains("::cached_artifact::provisional::")
-            || is_resident_constructor(&owner)
-            || owner.ends_with("::CachedArtifact::from_provisional_staged")
+        let owner = cx.tcx.hir_enclosing_body_owner(expr.hir_id).to_def_id();
+        if cx
+            .tcx
+            .def_path_str(owner)
+            .contains("::cached_artifact::provisional::")
+            || is_resident_constructor(cx, owner)
+            || (is_cached_artifact_method(cx, owner)
+                && cx.tcx.item_name(owner).as_str() == "from_provisional_staged")
         {
             return;
         }
