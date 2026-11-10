@@ -553,7 +553,7 @@ fn add_tree(
     Ok(())
 }
 
-fn legacy_key(name: &str) -> Option<(&str, Option<usize>)> {
+pub(super) fn legacy_key(name: &str) -> Option<(&str, Option<usize>)> {
     if name.starts_with('.') {
         return None;
     }
