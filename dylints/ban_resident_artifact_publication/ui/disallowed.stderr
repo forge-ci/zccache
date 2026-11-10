@@ -1,0 +1,28 @@
+error: resident artifact construction must go through ProvisionalArtifact (#1965)
+  --> $DIR/disallowed.rs:9:13
+   |
+LL |     let _ = CachedArtifact::from_artifact_data(&());
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_resident_artifact_publication)]` on by default
+
+error: resident artifact construction must go through ProvisionalArtifact (#1965)
+  --> $DIR/disallowed.rs:10:13
+   |
+LL |     let _ = Alias::from_artifact_data(&());
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: resident artifact construction must go through ProvisionalArtifact (#1965)
+  --> $DIR/disallowed.rs:11:13
+   |
+LL |     let _ = <Alias>::from_artifact_data_with_modes(&(), Vec::new());
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: resident artifact construction must go through ProvisionalArtifact (#1965)
+  --> $DIR/disallowed.rs:12:23
+   |
+LL |     let constructor = CachedArtifact::from_artifact_data;
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

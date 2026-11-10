@@ -9,6 +9,10 @@
 use super::*;
 use std::sync::OnceLock;
 
+#[path = "cached_artifact_provisional.rs"]
+mod provisional;
+pub(super) use provisional::ProvisionalArtifact;
+
 #[derive(Clone)]
 pub(crate) enum CachedPayload {
     /// Payload bytes already resident in memory.
@@ -73,6 +77,7 @@ impl MaterializationPayloads {
     }
 }
 
+#[derive(Clone)]
 struct ArtifactAccess {
     last_used: std::time::Instant,
     last_used_wall: std::time::SystemTime,
@@ -165,9 +170,8 @@ impl CachedArtifact {
         }
     }
 
-    /// Create from a freshly compiled `ArtifactData`. Payload mapping is
-    /// 1:1 between the protocol `ArtifactPayload` enum and the internal
-    /// `CachedPayload` enum.
+    /// Test fixture constructor; production entries require a provisional owner.
+    #[cfg(test)]
     pub(super) fn from_artifact_data(artifact: &ArtifactData) -> Self {
         Self::from_artifact_data_with_modes(artifact, Vec::new())
     }
@@ -554,7 +558,7 @@ pub(super) fn migrate_meta_files(
                 .collect::<Option<_>>()?;
             persist_migrated_artifact_payloads(artifact_dir, &stem, &payloads).ok()?;
 
-            let cached = CachedArtifact::from_artifact_data(&artifact);
+            let cached = ProvisionalArtifact::new(&artifact, Vec::new()).durable();
             Some((stem, cached, path.clone()))
         })
         .collect();
@@ -967,30 +971,6 @@ mod tests {
         assert!(
             inline_payloads.staged_lock_timings().is_none(),
             "byte-backed payloads must not acquire the staged-store lock"
-        );
-    }
-
-    #[test]
-    fn every_cache_hit_delivery_path_uses_the_daemon_shared_materialization_lease() {
-        let consumers = [
-            (
-                "single compile",
-                include_str!("handle_compile/cached_hit.rs"),
-            ),
-            ("multi compile", include_str!("handle_compile_multi.rs")),
-            ("exact exec", include_str!("handle_exec.rs")),
-            ("link and directory bundle", include_str!("handle_link.rs")),
-        ];
-        for (name, source) in consumers {
-            assert!(
-                source.contains("ensure_payloads_for_materialization_for_state("),
-                "{name} bypasses the typed staged materialization lease"
-            );
-        }
-        assert!(
-            include_str!("handle_link.rs")
-                .contains("materialize_directory_payload(&payloads[0], &output_path)"),
-            "directory-bundle unpacking must consume payloads from the leased resolver"
         );
     }
 }

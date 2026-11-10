@@ -351,6 +351,25 @@ pub struct ArtifactIndex {
 
 It holds everything needed to serve a hit *except* the output bytes, which are resolved lazily through the staged/pack/flat layout resolver.
 
+### Resident payload lifetime (#1965)
+
+`ProvisionalArtifact` owns freshly captured payloads while publication is in
+progress. Its provisional publication API permits immediate in-process hits.
+After successful payload persistence, the durable publication API retains index
+metadata, stdout/stderr, output modes and access state, and resolves output
+payloads through the existing disk-backed materialization path. Compile, link,
+exec, directory-link and legacy migration use this owner. No new hit-path
+metadata probe or mtime write is introduced.
+
+Detached completion demotes an entry only when the live map still contains the
+exact published instance. Identity comparison and replacement share one map
+guard, so an old completion cannot overwrite a newer same-key entry or resurrect
+a removed entry. Existing hits retain their own payload ownership through
+delivery. Failed persistence retains provisional bytes for correct process-local
+hits and does not publish a durable index row. The deny-level
+`ban_resident_artifact_publication` Dylint confines resident constructors to the
+provisional boundary; runtime ownership and race tests verify the lifecycle.
+
 All mutation methods (`insert`, `insert_many`, `remove`, `remove_batch`, `clear`) are **infallible** — they only touch the in-memory map. Disk I/O happens exclusively in `flush()`, called by the daemon's background WAL writer. See `run_index_writer` in `zccache-daemon-core`.
 
 ### Why not redb

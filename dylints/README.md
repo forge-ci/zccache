@@ -18,6 +18,7 @@ Custom Rust lints used by this workspace.
 - `ban_raw_env_flag`: bans hand-rolled environment boolean parsing outside `env_policy.rs` (#1969).
 - `ban_swallowed_child_stdio`: bans null sinks for child stdout and stderr; stdin closure stays valid (#1970).
 - `ban_raw_network_access`: confines `reqwest`, `hyper` and `ureq` to the budgeted `zccache_download::http` boundary (#1968).
+- `ban_resident_artifact_publication`: confines resident entries to the provisional owner (#1965).
 
 All fifteen libraries use Dylint 6.2.0 and the pinned `nightly-2026-08-15`
 toolchain. Soldr downloads the published tools and driver. Each crate uses

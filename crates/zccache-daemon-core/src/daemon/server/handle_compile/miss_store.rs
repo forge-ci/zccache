@@ -186,118 +186,9 @@ pub(super) fn store_miss_artifact(request: MissArtifactStoreRequest<'_>) -> Miss
     stats
 }
 
-const MAX_STAGED_PUBLICATION_ERROR_CHARS: usize = 512;
-
-/// Result of the detached single-output persist operation.
-///
-/// The background task is deliberately required to hand this back to its
-/// async parent: an index row is only valid after the artifact files have
-/// been published.  Keeping this as a named, must-use outcome prevents a
-/// future logging-only error branch from silently turning a failed persist
-/// into a durable dangling index entry.
-#[derive(Debug)]
-#[must_use = "a persist outcome must gate index publication"]
-struct PersistOutcome {
-    published: bool,
-    meta: Option<ArtifactIndex>,
-}
-
-impl PersistOutcome {
-    const fn published(meta: ArtifactIndex) -> Self {
-        Self {
-            published: true,
-            meta: Some(meta),
-        }
-    }
-
-    const fn failed() -> Self {
-        Self {
-            published: false,
-            meta: None,
-        }
-    }
-}
-
-/// The only async single-output index-publication gate.
-///
-/// Keep the outcome consumption next to the channel send: a failed persist
-/// must remain a clean miss rather than becoming an index row whose payload
-/// never existed.
-fn enqueue_persisted_index(
-    outcome: PersistOutcome,
-    index_writer_tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
-    key_hex: String,
-) -> bool {
-    if !outcome.published {
-        return false;
-    }
-    let Some(meta) = outcome.meta else {
-        return false;
-    };
-    // #1177: this send only fails when the index writer is gone, which means
-    // the daemon has silently stopped recording what it caches. `enqueue`
-    // needs the state to bound the report, so the one call site that has only
-    // the sender keeps the raw send and its own report.
-    if index_writer_tx
-        .send(IndexWriterCommand::Insert(key_hex.clone(), meta))
-        .is_err()
-    {
-        tracing::error!(
-            artifact_key = %key_hex,
-            "index writer is gone; persisted artifact will not survive a daemon restart"
-        );
-    }
-    true
-}
-
-/// Record the full persistence failure at the stage where publication is
-/// abandoned. The profiler retains the compact reason ID; the lifecycle and
-/// session logs retain a bounded OS error so an operator can identify the
-/// failed operation and path after the compiler output has been salvaged.
-fn report_staged_publication_failure(
-    state: &SharedState,
-    sid: &SessionId,
-    artifact_key_hex: &str,
-    reason: StagedPublishFailure,
-    error: impl std::fmt::Display,
-) {
-    let error = truncate_staged_publication_error(&error.to_string());
-    let reason_id = reason.id();
-    tracing::warn!(
-        key = %artifact_key_hex,
-        reason = reason_id,
-        error = %error,
-        "staged artifact publication failed"
-    );
-    crate::core::lifecycle::write_event(
-        crate::core::lifecycle::EVENT_STAGED_PUBLICATION_FAILED,
-        serde_json::json!({
-            "reason": reason_id,
-            "error": error,
-            "artifact_key": artifact_key_hex,
-        }),
-    );
-    write_session_log(
-        &state.sessions,
-        sid,
-        &format!(
-            "[DIAG] staged_publication_failed: reason={reason_id} key={artifact_key_hex} error={error}"
-        ),
-    );
-}
-
-fn truncate_staged_publication_error(error: &str) -> String {
-    let mut chars = error.chars();
-    let truncated: String = chars
-        .by_ref()
-        .take(MAX_STAGED_PUBLICATION_ERROR_CHARS)
-        .collect();
-    if chars.next().is_some() {
-        format!("{truncated}…")
-    } else {
-        truncated
-    }
-}
+#[path = "miss_store_outcome.rs"]
+mod outcome;
+use outcome::*;
 
 fn record_pch_source_mapping(
     state: &SharedState,
@@ -830,7 +721,7 @@ fn store_single_output(
         .iter()
         .map(|o| o.payload.size_bytes())
         .sum();
-    let cached = CachedArtifact::from_artifact_data(&artifact);
+    let cached = ProvisionalArtifact::new(&artifact, Vec::new());
     let persist_payloads: Vec<Arc<Vec<u8>>> = artifact
         .outputs
         .iter()
@@ -841,7 +732,7 @@ fn store_single_output(
 
     let artifact_dir = state.artifact_dir.clone();
     let key_hex = artifact_key_hex.to_string();
-    let persist_meta = cached.meta.clone();
+    let persist_meta = cached.meta().clone();
     let mut source_paths: Vec<NormalizedPath> = vec![output_path.clone()];
     if let Some(dep_path) = depfile_source_path {
         source_paths.push(dep_path);
@@ -924,7 +815,11 @@ fn store_single_output(
         }
         stats.persist_enqueue_ns = t_persist_enqueue.elapsed().as_nanos() as u64;
         if written {
-            state.artifacts.insert(artifact_key_hex.to_string(), cached);
+            state
+                .artifacts
+                .insert(artifact_key_hex.to_string(), cached.durable());
+        } else {
+            cached.publish(&state.artifacts, artifact_key_hex.to_string());
         }
         let latency_ns = compile_start.elapsed().as_nanos() as u64;
         state.stats.record_miss(latency_ns, artifact_bytes);
@@ -945,9 +840,9 @@ fn store_single_output(
     // both success and failure paths (failure wakes waiters → re-lookup
     // misses → recompile; the DD-025 failure-mode-is-miss invariant).
     // Publish the in-process payload before handing persistence to the
-    // detached task. A failed persist removes this provisional entry, while
-    // the typed outcome below prevents the durable index publication.
-    state.artifacts.insert(artifact_key_hex.to_string(), cached);
+    // detached task. A failed persist retains its owned bytes for correct
+    // in-process hits, while the typed outcome prevents durable index publication.
+    cached.publish(&state.artifacts, artifact_key_hex.to_string());
     let _pending = pending_writes::register(&state.pending_cache_writes, artifact_key_hex);
     let sem = Arc::clone(&state.persist_semaphore);
     let state_ref = Arc::clone(state_arc);
@@ -1032,16 +927,12 @@ fn store_single_output(
                             .count(StagedCounter::PublicationSuccess);
                     }
                 }
-                if !published {
-                    // This entry was only provisional while the filesystem
-                    // publish ran. Do not retain a lookup row for a failed
-                    // persist, or a later hit could point at missing payloads.
-                    state_ref.artifacts.remove(&completion_key);
+                if published {
+                    cached.demote_to_durable(&state_ref.artifacts, &completion_key);
                 }
             }
             Err(error) => {
                 tracing::warn!(%error, "artifact persistence task failed to join");
-                state_ref.artifacts.remove(&completion_key);
             }
         }
         // Always complete the pending entry, even on JoinError, so
