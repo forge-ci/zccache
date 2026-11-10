@@ -20,6 +20,7 @@ mod guard_analysis;
 mod guard_escapes;
 mod guard_initialization;
 mod guard_types;
+mod index_clear_policy;
 mod ordered_drop;
 mod runtime_mir;
 extern crate rustc_span;
@@ -50,6 +51,12 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         }
     }
 
+    fn check_pat(&mut self, cx: &LateContext<'tcx>, pat: &'tcx rustc_hir::Pat<'tcx>) {
+        if checks_guards(cx, pat.span) {
+            index_clear_policy::check_pat(cx, pat);
+        }
+    }
+
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         let filename = filename(cx, expr.span);
         let ui = cx.sess().opts.unstable_opts.ui_testing;
@@ -63,6 +70,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         {
             return;
         }
+        index_clear_policy::check_expr(cx, expr);
         guard_escapes::check(cx, expr);
         let definition = match expr.kind {
             ExprKind::Path(path) => match cx.qpath_res(&path, expr.hir_id) {

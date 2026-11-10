@@ -219,6 +219,25 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib sweep_tests --locked"
 
+# Reuse the gate's owned volumes for the compiler-fixture feedback loop. The
+# Cargo shim mirrors CI: even the Dylint driver's nested builds go through soldr.
+[task.staged-clear-transfer-ui]
+stack = "gate"
+cmd = '''
+set -eu
+task_prepare=$(env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1)
+printf '%s\n' "$task_prepare"
+task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: tool bin dir //p' | paste -sd: -)
+mkdir -p /target/dylint-ui-shim
+printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
+chmod +x /target/dylint-ui-shim/cargo
+export PATH="/target/dylint-ui-shim:$task_tools:$PATH"
+export RUSTUP_TOOLCHAIN=nightly-2026-08-15
+export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
+export CARGO_TARGET_DIR=/target/dylint-ui
+soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --lib
+'''
+
 [task.clear-index-detach-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_clear_releases_publication_before_index_flush --locked"

@@ -5,6 +5,7 @@ use rustc_lint::LateContext;
 use rustc_middle::{mir, ty};
 
 pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
+    let receive_owner = super::index_clear_policy::receive_owner(cx, owner.to_def_id());
     use rustc_mir_dataflow::{move_paths::MoveData, Analysis};
     let (stored, _) = cx.tcx.mir_promoted(owner);
     let (mut owned, frame, aliases, suspensions) = if stored.is_stolen() {
@@ -223,7 +224,10 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             terminator,
             [Scope::Critical, Scope::Any, Scope::Ownership][index],
         );
-        if borrowed[index]
+        if (receive_owner
+            && effects & (super::effects::BULK | super::effects::SWEEP | super::effects::UNKNOWN)
+                != 0)
+            || borrowed[index]
             || sets[index].iter().any(|guard| {
                 let held = data.move_paths[*guard].place;
                 cursor.get().contains(*guard)

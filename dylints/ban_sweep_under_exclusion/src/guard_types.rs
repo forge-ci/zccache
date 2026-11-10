@@ -12,6 +12,9 @@ pub(super) enum Scope {
 }
 
 pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> Option<Scope> {
+    if super::index_clear_policy::token(cx, definition) {
+        return Some(Scope::Critical);
+    }
     let name = cx.tcx.item_name(definition);
     let krate = cx.tcx.crate_name(definition.krate);
     if super::canonical_path(cx, definition) == "zccache_daemon_core::daemon::server::persist::staged_store::read_guard::StagedMaterializationGuard" {
@@ -73,6 +76,12 @@ pub(super) fn contains<'tcx>(
         return false;
     }
     seen.push(value);
+    // The sealed receiver does no I/O between readiness and unsealing. A
+    // dequeued token is still Critical, and queued ownership still participates
+    // in leak/erasure checks. No other channel element gets this phase model.
+    if scope != Scope::Ownership && super::index_clear_policy::queued(cx, value) {
+        return false;
+    }
     match value.kind() {
         ty::Ref(_, value, _) => contains(cx, *value, scope, seen),
         ty::Tuple(values) => values.iter().any(|value| contains(cx, value, scope, seen)),

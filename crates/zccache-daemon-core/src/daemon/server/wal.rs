@@ -9,13 +9,7 @@ pub(super) enum IndexWriterCommand {
     /// Refresh retention age without replacing newer artifact metadata.
     Touch(String, u64),
     Remove(Vec<String>),
-    ClearBlocking {
-        ready: std::sync::mpsc::SyncSender<()>,
-        commit:
-            kernal_api::async_engine::OneshotReceiver<crate::core::sync::PublicationCommitPermit>,
-        ordered: std::sync::mpsc::SyncSender<()>,
-        flushed: std::sync::mpsc::SyncSender<bool>,
-    },
+    ClearBlocking(IndexClearReceiver),
     Flush(kernal_api::async_engine::OneshotSender<()>),
     /// Blocking startup reconciliation needs proof that queued rows are committed.
     FlushForReconciliation(std::sync::mpsc::SyncSender<bool>),
@@ -432,25 +426,14 @@ async fn process_index_writer_command(
                 }
             }
         }
-        IndexWriterCommand::ClearBlocking {
-            ready,
-            commit,
-            ordered,
-            flushed,
-        } => {
+        IndexWriterCommand::ClearBlocking(receiver) => {
             // Reserve the actor before Clear acquires publication. In particular,
             // any previous disk flush finishes before ready is acknowledged.
-            if ready.try_send(()).is_err() {
+            let Some((publication, ordered, flushed)) = receiver
+                .receive_for(OPERATION_TIMEOUT.saturating_mul(2))
+                .await
+            else {
                 return;
-            }
-            let publication = match kernal_api::async_engine::timeout(
-                OPERATION_TIMEOUT.saturating_mul(2),
-                commit,
-            )
-            .await
-            {
-                Ok(Ok(publication)) => publication,
-                _ => return,
             };
             // Clear now owns publication. Everything already queued belongs to
             // the old namespace; no publisher can enqueue a post-Clear command
@@ -532,8 +515,59 @@ pub(super) struct PendingIndexClear {
     flushed: std::sync::mpsc::Receiver<bool>,
 }
 
+/// Sealed transfer state; only the reserved sender constructs this value.
+/// Dylint checks construction, unsealing and the receive owner's lack of I/O.
+pub(super) struct IndexClearCommit {
+    publication: crate::core::sync::PublicationCommitPermit,
+}
+
+impl IndexClearCommit {
+    fn new(publication: crate::core::sync::PublicationCommitPermit) -> Self {
+        Self { publication }
+    }
+
+    fn into_publication(self) -> crate::core::sync::PublicationCommitPermit {
+        self.publication
+    }
+}
+
+pub(super) struct IndexClearReceiver {
+    ready: std::sync::mpsc::SyncSender<()>,
+    commit: kernal_api::async_engine::OneshotReceiver<IndexClearCommit>,
+    ordered: std::sync::mpsc::SyncSender<()>,
+    flushed: std::sync::mpsc::SyncSender<bool>,
+    #[cfg(test)]
+    receive_gate: Option<Arc<Notify>>,
+}
+
+impl IndexClearReceiver {
+    async fn receive_for(
+        self,
+        bound: Duration,
+    ) -> Option<(
+        crate::core::sync::PublicationCommitPermit,
+        std::sync::mpsc::SyncSender<()>,
+        std::sync::mpsc::SyncSender<bool>,
+    )> {
+        // Before ready, no sender can possess a reserved commit capability.
+        // After ready, this sealed owner only waits and immediately unseals.
+        self.ready.try_send(()).ok()?;
+        #[cfg(test)]
+        if let Some(gate) = &self.receive_gate {
+            kernal_api::async_engine::timeout(bound, gate.notified())
+                .await
+                .ok()?;
+        }
+        let token = kernal_api::async_engine::timeout(bound, self.commit)
+            .await
+            .ok()?
+            .ok()?;
+        Some((token.into_publication(), self.ordered, self.flushed))
+    }
+}
+
 pub(super) struct ReservedIndexClear {
-    commit: kernal_api::async_engine::OneshotSender<crate::core::sync::PublicationCommitPermit>,
+    commit: kernal_api::async_engine::OneshotSender<IndexClearCommit>,
     ordered: std::sync::mpsc::Receiver<()>,
     flushed: std::sync::mpsc::Receiver<bool>,
 }
@@ -548,7 +582,7 @@ impl ReservedIndexClear {
     ) -> Option<PendingIndexClear> {
         // The actor owns exclusion even if this waiter times out or unwinds;
         // it can never apply a late Clear to a newer publication.
-        self.commit.send(publication).ok()?;
+        self.commit.send(IndexClearCommit::new(publication)).ok()?;
         crate::core::wait::recv_for(&self.ordered, timeout).ok()?;
         Some(PendingIndexClear {
             flushed: self.flushed,
@@ -573,12 +607,14 @@ pub(super) fn reserve_index_clear_blocking(
     let (commit, commit_rx) = kernal_api::async_engine::oneshot_channel();
     let (ordered_tx, ordered_rx) = std::sync::mpsc::sync_channel(1);
     let (flushed, flushed_rx) = std::sync::mpsc::sync_channel(1);
-    tx.send(IndexWriterCommand::ClearBlocking {
+    tx.send(IndexWriterCommand::ClearBlocking(IndexClearReceiver {
         ready,
         commit: commit_rx,
         ordered: ordered_tx,
         flushed,
-    })
+        #[cfg(test)]
+        receive_gate: None,
+    }))
     .ok()?;
     crate::core::wait::recv_for(&ready_rx, timeout).ok()?;
     Some(ReservedIndexClear {
@@ -630,6 +666,54 @@ pub(super) async fn flush_wal_to_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_receive_releases_a_queued_clear_permit_without_acknowledging_reset() {
+        crate::test_support::test_timeout(async {
+            let barrier = crate::core::sync::PublicationBarrier::new();
+            let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let (commit, commit_rx) = kernal_api::async_engine::oneshot_channel();
+            let (ordered, ordered_rx) = std::sync::mpsc::sync_channel(1);
+            let (flushed, flushed_rx) = std::sync::mpsc::sync_channel(1);
+            let receiver = IndexClearReceiver {
+                ready,
+                commit: commit_rx,
+                ordered,
+                flushed,
+                receive_gate: Some(Arc::new(Notify::new())),
+            };
+            let receiving = tokio::spawn(receiver.receive_for(Duration::from_secs(5)));
+            tokio::task::spawn_blocking(move || {
+                crate::core::wait::recv_for(&ready_rx, Duration::from_secs(5)).unwrap();
+            })
+            .await
+            .unwrap();
+            let publication = barrier.blocking_write_for(Duration::from_secs(5));
+            assert!(commit.send(IndexClearCommit::new(publication)).is_ok());
+            assert!(
+                barrier.try_read_owned().is_err(),
+                "queued commit lost exclusion"
+            );
+            receiving.abort();
+            let cancelled = tokio::time::timeout(Duration::from_secs(5), receiving)
+                .await
+                .unwrap();
+            assert!(matches!(cancelled, Err(error) if error.is_cancelled()));
+            assert!(
+                barrier.try_read_owned().is_ok(),
+                "cancelled receive leaked exclusion"
+            );
+            assert!(matches!(
+                ordered_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ));
+            assert!(matches!(
+                flushed_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ));
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn cancelled_index_writer_keeps_root_until_timed_out_clear_write_finishes() {
