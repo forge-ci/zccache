@@ -899,7 +899,7 @@ fn retry_transient_scan_window<T>(
 /// contract is testable without a Windows scanner.
 pub(in crate::daemon::server) fn retry_while<T>(
     attempt: &mut impl FnMut() -> MaterializationResult<T>,
-    retryable: &dyn Fn(&MaterializationFailure) -> bool,
+    retryable: &impl Fn(&MaterializationFailure) -> bool,
 ) -> MaterializationResult<T> {
     const DELAYS: [std::time::Duration; 4] = [
         std::time::Duration::from_millis(50),

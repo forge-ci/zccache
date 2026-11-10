@@ -363,3 +363,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.private-output-namespace-regression]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib private_namespace_normalizes_before_claiming_a_new_directory --locked"
+
+[task.delivery-retry-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib delivery_retry_ladder --locked"
