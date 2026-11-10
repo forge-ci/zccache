@@ -60,8 +60,8 @@ pub(super) async fn store_exec_artifact_inner(
             // Release publication before the root lease on cancellation.
             let _ = &publication_guard_for_task;
             let _ = &persistence_root;
-            match kernal_api::async_engine::timeout(admission_bound, sem.acquire()).await {
-                Ok(Ok(_permit)) => {
+            match sem.try_acquire_for(admission_bound).await {
+                Ok(_permit) => {
                     let written = kernal_api::async_engine::launch_blocking(move || {
                         let _ = &publication_guard_for_task;
                         let _cache_lifetime = persistence_root;
@@ -76,8 +76,7 @@ pub(super) async fn store_exec_artifact_inner(
                         tracing::warn!(%error, "exec artifact persistence task failed to join");
                     }
                 }
-                Ok(Err(error)) => tracing::warn!(%error, "exec persistence admission closed"),
-                Err(_) => tracing::warn!(?admission_bound, "exec persistence admission expired"),
+                Err(error) => tracing::warn!(%error, ?admission_bound, "exec persistence admission expired"),
             }
             if let Some(gate) = completion_gate {
                 gate.persisted.notify_one();

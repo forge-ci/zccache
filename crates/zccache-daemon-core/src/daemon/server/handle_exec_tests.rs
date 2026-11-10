@@ -828,9 +828,11 @@ async fn direct_exec_persistence_admission_deadline_releases_publication() {
     crate::test_support::test_timeout(async {
         let directory = tempfile::tempdir().unwrap();
         let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
-        let permits = Arc::clone(&server.state.persist_semaphore)
-            .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
-            .await.unwrap();
+        let permit_count = server.state.persist_semaphore.available_permits();
+        let mut permits = Vec::with_capacity(permit_count);
+        for _ in 0..permit_count {
+            permits.push(server.state.persist_semaphore.acquire_for(crate::core::wait::PROBE).await);
+        }
         let gate = PublicationHandoffGate::new();
         let publisher_state = Arc::clone(&server.state);
         let publisher_gate = Arc::clone(&gate);
