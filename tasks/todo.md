@@ -1,3 +1,10 @@
+# #2038 — bounded kernal-api waits
+
+- [x] Inspect 0.1.34–0.1.40 compatibility and inventory compiler deprecations.
+- [x] Migrate all waits with deliberate budgets and typed expiry handling.
+- [x] Prove channel, semaphore, and file-lock elapsed paths; validate Windows.
+- [ ] Run Dylint, review, and clean-tree local gate; push PR with ci-full.
+
 # #2169 polling same-tick rewrites
 
 ## #2169-fixup2

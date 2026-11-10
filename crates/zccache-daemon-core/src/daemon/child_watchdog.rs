@@ -414,13 +414,24 @@ async fn watchdog_inner_impl(
                     stdout_bytes += n;
                     if let Some(sender) = stream.as_ref() {
                         sender
-                            .send(RawOutputChunk::Stdout(sbuf[..n].to_vec()))
+                            .send_within(
+                                RawOutputChunk::Stdout(sbuf[..n].to_vec()),
+                                zccache_core::wait::PROBE,
+                            )
                             .await
-                            .map_err(|_| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::BrokenPipe,
-                                    "compiler output consumer disconnected",
-                                )
+                            .map_err(|error| match error {
+                                kernal_api::async_engine::SendTimeoutError::Closed(_) => {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::BrokenPipe,
+                                        "compiler output consumer disconnected",
+                                    )
+                                }
+                                kernal_api::async_engine::SendTimeoutError::TimedOut(_) => {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::TimedOut,
+                                        "compiler output consumer send timed out",
+                                    )
+                                }
                             })?;
                     } else {
                         out.extend_from_slice(&sbuf[..n]);
@@ -438,13 +449,24 @@ async fn watchdog_inner_impl(
                     stderr_bytes += n;
                     if let Some(sender) = stream.as_ref() {
                         sender
-                            .send(RawOutputChunk::Stderr(ebuf[..n].to_vec()))
+                            .send_within(
+                                RawOutputChunk::Stderr(ebuf[..n].to_vec()),
+                                zccache_core::wait::PROBE,
+                            )
                             .await
-                            .map_err(|_| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::BrokenPipe,
-                                    "compiler output consumer disconnected",
-                                )
+                            .map_err(|error| match error {
+                                kernal_api::async_engine::SendTimeoutError::Closed(_) => {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::BrokenPipe,
+                                        "compiler output consumer disconnected",
+                                    )
+                                }
+                                kernal_api::async_engine::SendTimeoutError::TimedOut(_) => {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::TimedOut,
+                                        "compiler output consumer send timed out",
+                                    )
+                                }
                             })?;
                     } else {
                         err.extend_from_slice(&ebuf[..n]);
@@ -581,7 +603,12 @@ pub(crate) async fn deliver_fault_note(
         // Streaming path: the buffered `err` is discarded downstream, so the
         // note has to travel as a chunk or it never reaches the caller.
         Some(sender) => {
-            let _ = sender.send(RawOutputChunk::Stderr(note)).await;
+            if let Err(error) = sender
+                .send_within(RawOutputChunk::Stderr(note), zccache_core::wait::PROBE)
+                .await
+            {
+                tracing::warn!(%error, "could not deliver compiler fault note");
+            }
         }
         None => err.extend_from_slice(&note),
     }

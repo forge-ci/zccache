@@ -182,7 +182,7 @@ pub(crate) fn allocate_object_id(artifact_dir: &Path) -> io::Result<ArtifactObje
         .create(true)
         .truncate(false)
         .open(lock_path)?;
-    let _lock_guard = kernal_api::platform::fs::lock_exclusive(&lock)?;
+    let _lock_guard = zccache_core::wait::lock_exclusive_for(&lock, zccache_core::wait::PROBE)?;
 
     let counter_path = artifact_dir.join(COUNTER_FILE);
     let last = match read_counter(&counter_path) {

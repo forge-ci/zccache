@@ -902,12 +902,20 @@ pub(super) async fn handle_compile_multi(
             }
         };
     let (compiler_admission, _) =
-        crate::daemon::server::compile_resource_gate::acquire_compiler_admission(
+        match crate::daemon::server::compile_resource_gate::acquire_compiler_admission(
             &state,
             exclusive,
             host_admission,
         )
-        .await;
+        .await
+        {
+            Ok(admission) => admission,
+            Err(error) => {
+                return Response::Error {
+                    message: format!("compiler admission timed out: {error}"),
+                }
+            }
+        };
     let (result, _priority_decision) =
         super::super::process::async_builder_output_with_priority_decision(
             builder,

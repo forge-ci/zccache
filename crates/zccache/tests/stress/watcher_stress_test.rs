@@ -255,7 +255,14 @@ fn stress_settle_buffer_high_throughput() {
         // Collect all settled batches.
         let mut total_changed = 0;
         let mut batch_count = 0;
-        while let Some(event) = settled_rx.recv().await {
+        loop {
+            let event = match settled_rx.recv_within(Duration::from_secs(10)).await {
+                Ok(event) => event,
+                Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => break,
+                Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => {
+                    panic!("settle task did not close")
+                }
+            };
             if let SettledEvent::Batch { changed, .. } = event {
                 total_changed += changed.len();
                 batch_count += 1;
@@ -580,10 +587,27 @@ fn integration_full_pipeline() {
         fs::write(&path_a, "file a modified").unwrap();
 
         // Wait for settled event (with timeout).
-        let settled = tokio::time::timeout(Duration::from_secs(5), settled_rx.recv()).await;
+        let deadline = kernal_api::async_engine::Deadline::after(Duration::from_secs(5));
+        let settled = loop {
+            if deadline.is_elapsed() {
+                break Err(kernal_api::async_engine::RecvTimeoutError::TimedOut);
+            }
+            let event = settled_rx.recv_within(deadline.remaining()).await;
+            match &event {
+                Ok(SettledEvent::Batch { changed, .. })
+                    if !changed.iter().any(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name == "a.c" || name == "src")
+                    }) =>
+                {
+                    continue
+                }
+                _ => break event,
+            }
+        };
 
         match settled {
-            Ok(Some(SettledEvent::Batch { changed, removed })) => {
+            Ok(SettledEvent::Batch { changed, removed }) => {
                 // The batch should contain our modified file.
                 let changed_names: Vec<String> = changed
                     .iter()
@@ -608,13 +632,15 @@ fn integration_full_pipeline() {
                 let result_b = cache.lookup_since(&path_b, c).unwrap();
                 assert_eq!(result_b.hash, zccache::hash::hash_bytes(b"file b"));
             }
-            Ok(Some(SettledEvent::Overflow)) => {
+            Ok(SettledEvent::Overflow) => {
                 // Overflow is acceptable — just verify cache still works.
                 cache.apply_overflow();
                 let result = cache.lookup_since(&path_a, Clock::ZERO).unwrap();
                 assert_eq!(result.hash, zccache::hash::hash_bytes(b"file a modified"));
             }
-            Ok(None) => panic!("settle channel closed unexpectedly"),
+            Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => {
+                panic!("settle channel closed unexpectedly")
+            }
             Err(_) => {
                 // Timeout — watcher may not have picked up the change.
                 // This can happen on some CI environments. Mark as soft failure.

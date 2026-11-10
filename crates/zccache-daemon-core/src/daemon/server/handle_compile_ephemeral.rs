@@ -207,9 +207,20 @@ pub(super) async fn run_compiler_direct_with_family(
             };
         }
     };
-    let (compiler_admission, _) =
-        super::compile_resource_gate::acquire_compiler_admission(state, exclusive, host_admission)
-            .await;
+    let (compiler_admission, _) = match super::compile_resource_gate::acquire_compiler_admission(
+        state,
+        exclusive,
+        host_admission,
+    )
+    .await
+    {
+        Ok(admission) => admission,
+        Err(error) => {
+            return Response::Error {
+                message: format!("compiler admission timed out: {error}"),
+            }
+        }
+    };
     if exclusive {
         tracing::info!(
             event = "compile_exclusive",

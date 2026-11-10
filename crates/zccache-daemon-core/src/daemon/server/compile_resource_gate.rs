@@ -176,21 +176,23 @@ pub(super) async fn acquire_compiler_admission(
     state: &SharedState,
     exclusive: bool,
     host: HostAdmissionPermit,
-) -> (CompilerAdmission, Option<usize>) {
+) -> Result<(CompilerAdmission, Option<usize>), kernal_api::async_engine::SemaphoreAcquireTimedOut>
+{
     let (compile, available_before) = super::compile_progress::acquire_compile_gate(
         state.compile_concurrency.as_ref(),
         &state.compile_queue,
+        zccache_core::sync::OPERATION_TIMEOUT,
     )
-    .await;
+    .await?;
     let resource = state.compile_resource_gate.acquire(exclusive).await;
-    (
+    Ok((
         CompilerAdmission {
             _resource: resource,
             _compile: compile,
             _host: host,
         },
         available_before,
-    )
+    ))
 }
 
 /// Decide whether one compiler invocation must run without sibling compilers.
@@ -609,9 +611,13 @@ mod tests {
         let semaphore = Arc::new(kernal_api::async_engine::Semaphore::new(1));
         let queue = Arc::new(crate::daemon::server::compile_progress::CompileQueueGauge::default());
         let resource_gate = CompileResourceGate::default();
-        let (compile, _) =
-            crate::daemon::server::compile_progress::acquire_compile_gate(Some(&semaphore), &queue)
-                .await;
+        let (compile, _) = crate::daemon::server::compile_progress::acquire_compile_gate(
+            Some(&semaphore),
+            &queue,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("compile gate admission");
         struct DropProbe(Arc<std::sync::atomic::AtomicBool>);
         impl Drop for DropProbe {
             fn drop(&mut self) {

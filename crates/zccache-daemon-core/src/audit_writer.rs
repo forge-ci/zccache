@@ -118,6 +118,9 @@ pub enum AuditSinkError {
     /// `emit` called after `shutdown`. The sink is no longer running.
     #[error("audit sink is shut down")]
     Closed,
+    /// Writer admission or acknowledgement exceeded the helper budget.
+    #[error("audit writer operation timed out")]
+    TimedOut,
 }
 
 /// Messages the public surface sends to the writer task. The
@@ -182,7 +185,17 @@ impl AuditSink {
         let degraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let writer_task = async move {
-            while let Some(cmd) = receiver.recv().await {
+            loop {
+                // Last-sender drop and the explicit Shutdown command own this
+                // task's lifetime; an idle interval is not a shutdown.
+                let cmd = match receiver
+                    .recv_within(zccache_core::wait::LIFECYCLE_POLL)
+                    .await
+                {
+                    Ok(cmd) => cmd,
+                    Err(async_engine::RecvTimeoutError::TimedOut) => continue,
+                    Err(async_engine::RecvTimeoutError::Disconnected) => break,
+                };
                 match cmd {
                     Command::Event(event) => {
                         // Best-effort write. The writer task does not
@@ -294,27 +307,45 @@ impl AuditSink {
     /// Drain the queue and `fsync` the underlying file. Called from
     /// [`crate::embedded::ZccacheService::flush`].
     pub async fn flush(&self) -> Result<(), AuditSinkError> {
-        let (tx, rx) = async_engine::oneshot_channel();
+        let (tx, mut rx) = async_engine::oneshot_channel();
         self.sender
-            .send(Command::Flush(tx))
+            .send_within(Command::Flush(tx), zccache_core::wait::HELPER_JOIN)
             .await
-            .map_err(|_| AuditSinkError::Closed)?;
-        let _ = rx.await;
+            .map_err(|error| match error {
+                async_engine::SendTimeoutError::Closed(_) => AuditSinkError::Closed,
+                async_engine::SendTimeoutError::TimedOut(_) => AuditSinkError::TimedOut,
+            })?;
+        rx.recv_within(zccache_core::wait::HELPER_JOIN)
+            .await
+            .map_err(|error| match error {
+                async_engine::RecvTimeoutError::Disconnected => AuditSinkError::Closed,
+                async_engine::RecvTimeoutError::TimedOut => AuditSinkError::TimedOut,
+            })?;
         Ok(())
     }
 
     /// Drain, close, and await the writer task. Called from
     /// [`crate::embedded::ZccacheService::shutdown`].
     pub async fn shutdown(&self) -> Result<(), AuditSinkError> {
-        let (tx, rx) = async_engine::oneshot_channel();
+        let (tx, mut rx) = async_engine::oneshot_channel();
         // If the writer is already closed, the send will fail — that's
         // also acceptable because the contract guarantees only that
         // pending events are drained on a best-effort basis.
-        match self.sender.send(Command::Shutdown(tx)).await {
-            Ok(()) => {
-                let _ = rx.await;
+        match self
+            .sender
+            .send_within(Command::Shutdown(tx), zccache_core::wait::HELPER_JOIN)
+            .await
+        {
+            Ok(()) => match rx.recv_within(zccache_core::wait::HELPER_JOIN).await {
+                Ok(()) | Err(async_engine::RecvTimeoutError::Disconnected) => {}
+                Err(async_engine::RecvTimeoutError::TimedOut) => {
+                    return Err(AuditSinkError::TimedOut)
+                }
+            },
+            Err(async_engine::SendTimeoutError::Closed(_)) => return Ok(()),
+            Err(async_engine::SendTimeoutError::TimedOut(_)) => {
+                return Err(AuditSinkError::TimedOut)
             }
-            Err(_) => return Ok(()),
         }
         Ok(())
     }

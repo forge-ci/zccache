@@ -6,17 +6,17 @@ LL |     let _ = capture(command);
    |
    = note: `#[deny(ban_raw_subprocess_in_daemon)]` on by default
 
-error: `kernal_api::platform::process::DaemonChild::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+error: `kernal_api::platform::process::DaemonChild::wait_within` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
   --> $DIR/platform_process.rs:5:16
    |
-LL |     let wait = DaemonChild::wait;
-   |                ^^^^^^^^^^^^^^^^^
+LL |     let wait = DaemonChild::wait_within;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: `kernal_api::platform::process::SpawnedChild::wait` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
+error: `kernal_api::platform::process::SpawnedChild::wait_within` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
   --> $DIR/platform_process.rs:7:13
    |
-LL |     let _ = child.wait();
-   |             ^^^^^^^^^^^^
+LL |     let _ = child.wait_within(std::time::Duration::from_secs(10));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: `kernal_api::platform::process::spawn_sync` bypasses bounded process ownership; use a daemon process facade with a mandatory ProcessLiveness policy; raw sessions belong only in process_session.rs functions with an explicit finite budget
   --> $DIR/platform_process.rs:8:18

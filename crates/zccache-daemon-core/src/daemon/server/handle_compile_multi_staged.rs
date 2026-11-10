@@ -249,7 +249,7 @@ pub(super) async fn try_handle_staged_misses(
                     exclusive,
                     host_admission,
                 )
-                .await;
+                .await.map_err(|error| format!("compiler admission timed out: {error}"))?;
             if let Some(available_before) = available_before {
                 tracing::info!(
                     event = "compile_start",

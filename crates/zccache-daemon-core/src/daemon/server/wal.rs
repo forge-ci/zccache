@@ -307,14 +307,17 @@ pub(super) async fn run_index_writer(
     ticker.set_missed_tick_behavior(kernal_api::async_engine::MissedTickBehavior::Delay);
     ticker.tick().await;
 
+    // Retain the registered shutdown edge across idle receive timeouts and
+    // timer wins; recreating this waiter can lose notify_waiters delivery.
+    let shutdown_wait = shutdown.notified();
+    let mut shutdown_wait = std::pin::pin!(shutdown_wait);
+    shutdown_wait.as_mut().enable();
     loop {
         let winner = {
-            let message = rx.recv();
+            let message = rx.recv_within(zccache_core::wait::LIFECYCLE_POLL);
             let tick = ticker.tick();
-            let shutdown_wait = shutdown.notified();
             let mut message = std::pin::pin!(message);
             let mut tick = std::pin::pin!(tick);
-            let mut shutdown_wait = std::pin::pin!(shutdown_wait);
             kernal_api::fair_race!(
                 (message.as_mut()),
                 (tick.as_mut()),
@@ -325,7 +328,7 @@ pub(super) async fn run_index_writer(
         match winner {
             kernal_api::async_engine::FairRace3::First(msg) => {
                 match msg {
-                    Some(command) => {
+                    Ok(command) => {
                         process_index_writer_command(command, &store, &mut wal, max_pending).await;
                         // Drain whatever else is already queued in this tick.
                         while let Ok(command) = rx.try_recv() {
@@ -333,7 +336,8 @@ pub(super) async fn run_index_writer(
                                 .await;
                         }
                     }
-                    None => {
+                    Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => continue,
+                    Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => {
                         // Channel closed (last sender dropped). Final flush.
                         flush_wal_to_disk(&store, &mut wal).await;
                         return;

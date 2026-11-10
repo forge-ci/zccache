@@ -132,23 +132,24 @@ pub(in crate::daemon) struct CompileGateGuard {
 pub(in crate::daemon) async fn acquire_compile_gate(
     semaphore: Option<&Arc<kernal_api::async_engine::Semaphore>>,
     gauge: &Arc<CompileQueueGauge>,
-) -> (CompileGateGuard, Option<usize>) {
+    bound: std::time::Duration,
+) -> Result<(CompileGateGuard, Option<usize>), kernal_api::async_engine::SemaphoreAcquireTimedOut> {
     let mut queue_guard = gauge.enqueue();
     let (permit, available_before) = if let Some(semaphore) = semaphore {
         let available_before = semaphore.available_permits();
-        let permit = semaphore.acquire().await;
+        let permit = semaphore.acquire_within(bound).await?;
         (Some(permit), Some(available_before))
     } else {
         (None, None)
     };
     queue_guard.admit();
-    (
+    Ok((
         CompileGateGuard {
             _permit: permit,
             _queue_guard: queue_guard,
         },
         available_before,
-    )
+    ))
 }
 
 impl CompileQueueGuard {
@@ -260,6 +261,32 @@ fn current_slot() -> Option<Arc<CompileProgressSlot>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn kernal_wait_2038_admission_timeout_releases_queue_ticket() {
+        let semaphore = Arc::new(kernal_api::async_engine::Semaphore::new(1));
+        let held = semaphore.try_acquire().expect("occupy compiler slot");
+        let gauge = Arc::new(CompileQueueGauge::default());
+        let bound = std::time::Duration::from_millis(20);
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            bound + std::time::Duration::from_secs(2),
+            acquire_compile_gate(Some(&semaphore), &gauge, bound),
+        )
+        .await
+        .expect("admission must honor its budget");
+        assert!(matches!(
+            result,
+            Err(kernal_api::async_engine::SemaphoreAcquireTimedOut)
+        ));
+        assert!(started.elapsed() <= bound + std::time::Duration::from_secs(2));
+        assert_eq!(gauge.waiting(), 0);
+        assert_eq!(gauge.in_flight(), 0);
+        drop(held);
+        assert!(acquire_compile_gate(Some(&semaphore), &gauge, bound)
+            .await
+            .is_ok());
+    }
 
     fn positions(response: &Response) -> (u32, u32, u32, String) {
         match response {

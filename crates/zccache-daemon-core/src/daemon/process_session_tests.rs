@@ -54,9 +54,10 @@ async fn compiler_output_live_consumer_backpressure_expires() {
     use kernal_api::{ProcessOutputChunk, ProcessOutputEvent};
     let (sender, _receiver) = kernal_api::async_engine::channel(1);
     sender
-        .send(crate::daemon::compile_output::RawOutputChunk::Stdout(vec![
-            0,
-        ]))
+        .send_within(
+            crate::daemon::compile_output::RawOutputChunk::Stdout(vec![0]),
+            std::time::Duration::from_secs(10),
+        )
         .await
         .unwrap();
     let mut stdout_bytes = 0;

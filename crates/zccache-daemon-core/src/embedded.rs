@@ -49,6 +49,9 @@ pub enum EmbeddedError {
     /// terminal outcome and not retry the same compile.
     #[error("embedded zccache operation cancelled")]
     Cancelled,
+    /// Queued compilation could not acquire capacity within the operation budget.
+    #[error("embedded zccache admission timed out")]
+    AdmissionTimedOut,
 }
 
 /// Opaque in-process zccache service handle.
@@ -883,7 +886,9 @@ impl ZccacheService {
         // succeeding; it only means the host saw a possibly-empty
         // tail in the JSONL.
         if let Some(sink) = &self.audit_sink {
-            let _ = sink.flush().await;
+            if let Err(error) = sink.flush().await {
+                tracing::warn!(%error, "embedded audit flush failed");
+            }
         }
         Ok(report)
     }
@@ -922,7 +927,9 @@ impl ZccacheService {
         // even if the disk is slow.
         if matches!(mode, ShutdownMode::Graceful) {
             if let Some(sink) = &self.audit_sink {
-                let _ = sink.shutdown().await;
+                if let Err(error) = sink.shutdown().await {
+                    tracing::warn!(%error, "embedded audit shutdown failed");
+                }
             }
         }
         Ok(report)

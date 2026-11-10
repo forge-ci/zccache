@@ -171,7 +171,7 @@ impl ZccacheService {
         let Some(semaphore) = &self.compile_permits else {
             return Ok(ExternalWorkPermit { _permit: None });
         };
-        let permit = semaphore.acquire();
+        let permit = semaphore.acquire_within(zccache_core::sync::OPERATION_TIMEOUT);
         let permit = match &self.host_cancellation {
             Some(token) => {
                 let force_cancellation = self.force_cancellation.token();
@@ -225,7 +225,8 @@ impl ZccacheService {
                     kernal_api::async_engine::BiasedRace3::Third(permit) => permit,
                 }
             }
-        };
+        }
+        .map_err(|_| EmbeddedError::AdmissionTimedOut)?;
         if self.force_cancellation.is_cancelled()
             || self
                 .host_cancellation

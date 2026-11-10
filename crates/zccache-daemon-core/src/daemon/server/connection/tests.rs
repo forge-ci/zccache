@@ -85,8 +85,10 @@ async fn a_saturated_compile_gate_reports_queued_then_delivers_the_terminal_resp
     let (held_gate, _) = super::super::compile_progress::acquire_compile_gate(
         server.state.compile_concurrency.as_ref(),
         &server.state.compile_queue,
+        std::time::Duration::from_secs(10),
     )
-    .await;
+    .await
+    .expect("compile gate admission");
     let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
     let release = tokio::spawn(async move {
         let did_observe_queued_progress =
@@ -141,8 +143,10 @@ async fn a_saturated_compile_gate_reports_queued_then_delivers_the_terminal_resp
             let (_gate, _) = super::super::compile_progress::acquire_compile_gate(
                 server.state.compile_concurrency.as_ref(),
                 &server.state.compile_queue,
+                std::time::Duration::from_secs(10),
             )
-            .await;
+            .await
+            .expect("compile gate admission");
             (Response::Pong, None)
         },
     )
