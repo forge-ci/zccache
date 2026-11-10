@@ -31,7 +31,7 @@ pub(crate) struct StagedSweepReport {
 }
 
 impl DetachedStagedTrash {
-    pub(super) fn empty(artifact_dir: &Path) -> Self {
+    pub(crate) fn empty(artifact_dir: &Path) -> Self {
         Self {
             artifact_dir: NormalizedPath::new(artifact_dir),
             paths: Vec::new(),

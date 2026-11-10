@@ -77,10 +77,22 @@ fn legacy_migration_publishes_only_durable_payloads() {
     .unwrap();
     let store = ArtifactStore::open_empty(&temp.path().join("index.bin"));
     let map = DashMap::new();
-    assert_eq!(migrate_meta_files(temp.path(), &map, &store), 1);
+    let (count, retired) = migrate_meta_files(temp.path(), &map, &store);
+    assert_eq!(count, 1);
+    let trash = temp
+        .path()
+        .join(zccache_artifact::staged_lock::STAGED_ROOT)
+        .join(".trash");
+    assert!(
+        std::fs::read_dir(trash).is_ok_and(|mut entries| entries.next().is_some()),
+        "migration unlinked legacy metadata instead of returning detached cleanup"
+    );
     let migrated = map.get(&key).unwrap().clone();
     let payloads = ensure_payloads_for_materialization(&migrated, temp.path(), &key).unwrap();
     assert!(matches!(payloads[0], CachedPayload::File(_)));
+    drop(payloads);
+    let report = retired.sweep_for(crate::core::wait::PROBE).unwrap();
+    assert_eq!(report.failures, 0);
 }
 
 /// Differential latency assertion: both entries use the same warmed resolver;

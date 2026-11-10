@@ -445,8 +445,9 @@ pub(super) fn migrate_meta_files(
     artifact_dir: &Path,
     artifacts: &DashMap<String, CachedArtifact>,
     store: &ArtifactStore,
-) -> usize {
+) -> (usize, DetachedStagedTrash) {
     use rayon::prelude::*;
+    let mut retired = DetachedStagedTrash::empty(artifact_dir);
 
     // Collect .meta file paths first.
     let meta_paths: Vec<NormalizedPath> = match std::fs::read_dir(artifact_dir) {
@@ -455,11 +456,11 @@ pub(super) fn migrate_meta_files(
             .map(|e| e.path().into())
             .filter(|p: &NormalizedPath| p.extension().and_then(|e| e.to_str()) == Some("meta"))
             .collect(),
-        Err(_) => return 0,
+        Err(_) => return (0, retired),
     };
 
     if meta_paths.is_empty() {
-        return 0;
+        return (0, retired);
     }
 
     // Parallel phase: read, deserialize, and write data files.
@@ -498,18 +499,20 @@ pub(super) fn migrate_meta_files(
         .collect();
 
     // Sequential phase: insert into the in-memory store and DashMap,
-    // then delete the legacy .meta files.
+    // then detach legacy metadata; the caller sweeps after releasing publication.
     let count = migrated.len();
     for (stem, cached, meta_path) in migrated {
         store.insert(&stem, &cached.meta);
         artifacts.insert(stem, cached);
-        std::fs::remove_file(&meta_path).ok();
+        if let Err(error) = retired.detach_legacy_blob_for(&meta_path, crate::core::wait::PROBE) {
+            tracing::warn!(%error, path = %meta_path.display(), "legacy metadata retirement deferred");
+        }
     }
 
     if count > 0 {
         tracing::info!(count, "migrated legacy .meta files to artifact index");
     }
-    count
+    (count, retired)
 }
 
 #[cfg(test)]

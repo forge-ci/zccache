@@ -23,7 +23,7 @@ pub(in crate::daemon::server) async fn spawn_artifact_loader(
             // Load the in-memory index that `ArtifactStore::open` already
             // hydrated from the on-disk blob.
             let entries = state_ref.artifact_store.load_all();
-            if !entries.is_empty() {
+            let (loaded, retired) = if !entries.is_empty() {
                 let count = entries.len();
                 for (key, meta) in entries {
                     state_ref
@@ -31,17 +31,25 @@ pub(in crate::daemon::server) async fn spawn_artifact_loader(
                         .entry(key)
                         .or_insert_with(|| CachedArtifact::from_index(meta));
                 }
-                count
+                (count, None)
             } else {
                 // Migration: legacy `.meta` files predate the current bincode
                 // index blob; populate the live store from them
                 // so the first session after upgrade still has its warm cache.
-                migrate_meta_files(
+                let (count, retired) = migrate_meta_files(
                     &artifact_dir,
                     &state_ref.artifacts,
                     &state_ref.artifact_store,
-                )
+                );
+                (count, Some(retired))
+            };
+            drop(_publication_guard);
+            if let Some(retired) = retired {
+                if let Err(error) = retired.sweep_for(crate::core::wait::PROBE) {
+                    tracing::warn!(%error, "legacy metadata sweep deferred for retry");
+                }
             }
+            loaded
         })
         .await
         .unwrap_or(0);
