@@ -7,14 +7,30 @@ mod daemon {
             impl IndexClearReceiver {
                 async fn receive_for(self) -> Option<PublicationCommitPermit> {
                     self.ready.try_send(()).ok()?;
+                    let _ = kernal_api::async_engine::timeout(
+                        Duration::from_secs(1),
+                        std::future::pending::<()>(),
+                    )
+                    .await;
+                    let hidden = async { std::fs::read("nested") };
+                    drop(hidden);
                     let _ = std::fs::remove_file("retired");
-                    let token =
-                        kernal_api::async_engine::timeout(Duration::from_secs(1), self.commit)
-                            .await
-                            .ok()?
-                            .ok()?;
+                    let token = kernal_api::async_engine::timeout(
+                        Duration::from_secs(1),
+                        delayed(self.commit),
+                    )
+                    .await
+                    .ok()?
+                    .ok()?;
                     Some(token.into_publication())
                 }
+            }
+            async fn delayed(
+                commit: kernal_api::async_engine::OneshotReceiver<IndexClearCommit>,
+            ) -> Result<IndexClearCommit, kernal_api::async_engine::OneshotReceiverClosed>
+            {
+                kernal_api::async_engine::sleep(Duration::from_secs(1)).await;
+                commit.await
             }
             fn unauthorized_constructor(permit: PublicationCommitPermit) {
                 let _ = IndexClearCommit::new(permit);

@@ -24,6 +24,23 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     } else {
         ((*stored.borrow()).clone(), None, Vec::new(), Vec::new())
     };
+    let suspension_count = owned
+        .basic_blocks
+        .iter()
+        .filter(|block| {
+            block.terminator.as_ref().is_some_and(|terminator| {
+                matches!(terminator.kind, mir::TerminatorKind::Yield { .. })
+            })
+        })
+        .count()
+        .max(suspensions.len());
+    if receive_owner && suspension_count > 1 {
+        super::emit(
+            cx,
+            cx.tcx.def_span(owner),
+            "index Clear receive permits only its bounded commit wait",
+        );
+    }
     // Borrow checking has imaginary edges that bypass real moves/drops.
     // Analyze execution paths, preserving the original MIR for the compiler.
     for block in owned.basic_blocks.as_mut() {
@@ -115,7 +132,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         }
         sets.push(guards);
     }
-    if sets[2].is_empty() && !borrowed[2] {
+    if !receive_owner && sets[2].is_empty() && !borrowed[2] {
         return;
     }
     let mut cursor = super::guard_initialization::GuardInitialization::new(cx.tcx, body, &data)
@@ -128,11 +145,19 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             block,
             statement_index: value.statements.len(),
         });
-        if !borrowed[2] && !sets[2].iter().any(|guard| cursor.get().contains(*guard)) {
+        if !receive_owner
+            && !borrowed[2]
+            && !sets[2].iter().any(|guard| cursor.get().contains(*guard))
+        {
             continue;
         }
+        // The sealed receive owner is independently checked in HIR: its only
+        // await must be timeout(bound, self.commit), with no nested async body.
+        // Its timeout result can mention a token on MIR's Pending path, but no
+        // dequeued token exists until that sole suspension has completed.
         if (suspensions.contains(&block)
             || matches!(terminator.kind, mir::TerminatorKind::Yield { .. }))
+            && !receive_owner
             && (borrowed[0] || sets[0].iter().any(|guard| cursor.get().contains(*guard)))
         {
             super::emit(
@@ -145,7 +170,9 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         // Automatic destruction releases owned fields in declaration order. Its own
         // first guard must not be counted through later capture destruction.
         // Any borrowed or separately held guard still prevents this proof.
-        if let Some(place) = super::ordered_drop::owned_place(cx, body, terminator) {
+        if let Some(place) =
+            super::ordered_drop::owned_place(cx, body, terminator).filter(|_| !receive_owner)
+        {
             let value = place.ty(&body.local_decls, cx.tcx).ty;
             let all_inside = !borrowed[1]
                 && sets[1].iter().all(|guard| {

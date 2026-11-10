@@ -231,10 +231,12 @@ task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: t
 mkdir -p /target/dylint-ui-shim
 printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
 chmod +x /target/dylint-ui-shim/cargo
-export PATH="/target/dylint-ui-shim:$task_tools:$PATH"
+export PATH="/target/dylint-ui-shim:/home/gate/.soldr/bin:$task_tools:$PATH"
 export RUSTUP_TOOLCHAIN=nightly-2026-08-15
 export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
+export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
 export CARGO_TARGET_DIR=/target/dylint-ui
+export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
 soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --lib
 '''
 

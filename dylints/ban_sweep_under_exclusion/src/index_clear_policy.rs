@@ -31,11 +31,68 @@ pub(super) fn queued<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>) -> bool 
         .any(|arg| matches!(arg.kind(), ty::Adt(def, _) if token(cx, def.did())))
 }
 
-pub(super) fn receive_owner(cx: &LateContext<'_>, definition: DefId) -> bool {
-    let path = super::canonical_path(cx, definition);
+pub(super) fn receive_owner(cx: &LateContext<'_>, mut definition: DefId) -> bool {
     let expected = format!("{WAL}IndexClearReceiver::receive_for");
-    path.strip_prefix(&expected)
-        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with("::{closure"))
+    loop {
+        if matches!(
+            cx.tcx.def_kind(definition),
+            rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+        ) {
+            return super::canonical_path(cx, definition) == expected;
+        }
+        let Some(parent) = cx.tcx.opt_parent(definition) else {
+            return false;
+        };
+        definition = parent;
+    }
+}
+
+fn check_await(cx: &LateContext<'_>, expr: &Expr<'_>) {
+    let ExprKind::Match(scrutinee, _, rustc_hir::MatchSource::AwaitDesugar) = expr.kind else {
+        return;
+    };
+    let ExprKind::Call(callee, [future]) = scrutinee.kind else {
+        return;
+    };
+    let ExprKind::Path(path) = callee.kind else {
+        return;
+    };
+    let Res::Def(_, definition) = cx.qpath_res(&path, callee.hir_id) else {
+        return;
+    };
+    if cx
+        .tcx
+        .lang_items()
+        .get(rustc_hir::attrs::lang_items::LangItem::IntoFutureIntoFuture)
+        != Some(definition)
+    {
+        return;
+    }
+    let valid = match future.kind {
+        ExprKind::Call(callee, [_, receiver]) => {
+            let timeout = if let ExprKind::Path(path) = callee.kind {
+                matches!(cx.qpath_res(&path, callee.hir_id), Res::Def(_, def)
+                    if super::canonical_path(cx, def) == "kernal_api::async_engine::timeout")
+            } else {
+                false
+            };
+            timeout
+                && matches!(receiver.kind, ExprKind::Field(value, name)
+                if name.name.as_str() == "commit"
+                    && matches!(value.kind, ExprKind::Path(path)
+                        if matches!(cx.qpath_res(&path, value.hir_id), Res::Local(_)))
+                    && matches!(cx.typeck_results().expr_ty(value).peel_refs().kind(), ty::Adt(def, _)
+                        if role(cx, def.did()) == Some("receiver")))
+        }
+        _ => false,
+    };
+    if !valid {
+        super::emit(
+            cx,
+            expr.span,
+            "index Clear receive must await its bounded commit channel directly",
+        );
+    }
 }
 
 fn role(cx: &LateContext<'_>, definition: DefId) -> Option<&'static str> {
@@ -83,6 +140,24 @@ fn reject(cx: &LateContext<'_>, span: rustc_span::Span) {
 }
 
 pub(super) fn check_expr<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
+    if super::enclosing_function(cx).is_some_and(|owner| receive_owner(cx, owner)) {
+        check_await(cx, expr);
+    }
+    // Only the compiler-generated async-function body may hide control flow.
+    // Explicit closures/async blocks could conceal a second wait after ready.
+    if let ExprKind::Closure(closure) = expr.kind {
+        if super::enclosing_function(cx).is_some_and(|owner| receive_owner(cx, owner))
+            && !matches!(
+                closure.kind,
+                rustc_hir::ClosureKind::Coroutine(rustc_hir::CoroutineKind::Desugared(
+                    rustc_hir::CoroutineDesugaring::Async,
+                    rustc_hir::CoroutineSource::Fn,
+                ))
+            )
+        {
+            reject(cx, expr.span);
+        }
+    }
     if let ExprKind::Struct(..) = expr.kind {
         if let ty::Adt(definition, _) = cx.typeck_results().expr_ty(expr).kind() {
             if let Some(role) = role(cx, definition.did()) {
