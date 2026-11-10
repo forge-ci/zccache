@@ -24,6 +24,7 @@ fn is_cached_artifact_method(cx: &LateContext<'_>, id: DefId) -> bool {
         cx.tcx
             .type_of(implementation)
             .instantiate_identity()
+            .skip_norm_wip()
             .ty_adt_def()
             .is_some_and(|adt| cx.tcx.item_name(adt.did()).as_str() == "CachedArtifact")
     })
