@@ -97,13 +97,14 @@ impl DepGraph {
         let rows: Vec<Row> = pending
             .iter()
             .map(|(key, accessed)| {
-                let value = accessed.and_then(|accessed| {
-                    self.contexts.get(key).map(|entry| {
-                        let mut snapshot = self.snapshot_context(key, &entry);
-                        snapshot.last_accessed_unix_ms =
-                            snapshot.last_accessed_unix_ms.max(accessed);
-                        snapshot
-                    })
+                // The queued marker can trail a newer registration/removal.
+                // Current state decides presence; the marker only refreshes age.
+                let value = self.contexts.get(key).map(|entry| {
+                    let mut snapshot = self.snapshot_context(key, &entry);
+                    snapshot.last_accessed_unix_ms = snapshot
+                        .last_accessed_unix_ms
+                        .max(accessed.unwrap_or_default());
+                    snapshot
                 });
                 (*key.hash().as_bytes(), value)
             })
@@ -185,6 +186,33 @@ pub(super) fn load_committed(
 mod tests {
     use super::*;
     use crate::scanner::ScanResult;
+
+    #[test]
+    fn incremental_delayed_eviction_does_not_remove_a_reregistered_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("depgraph.bin");
+        let graph = DepGraph::new();
+        let key = graph.register(super::super::tests::make_ctx("reregistered.c"));
+        graph
+            .update(
+                &key,
+                ScanResult {
+                    resolved: Vec::new(),
+                    unresolved: Vec::new(),
+                    has_computed: false,
+                },
+                super::super::tests::dummy_hash,
+            )
+            .unwrap();
+        // An older eviction queues its removal after re-registration completed.
+        let map_key = *graph.contexts_iter().next().unwrap().key();
+        graph.queue_removed_context(map_key);
+        graph.persist_incremental(&path).unwrap();
+        assert_eq!(
+            load_from_file(&path).unwrap().contexts_with_artifact_key(),
+            1
+        );
+    }
 
     #[test]
     fn incremental_late_env_dep_update_is_committed_with_the_context() {

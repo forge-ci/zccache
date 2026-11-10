@@ -7,9 +7,10 @@ use bincode::Options;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zccache_core::NormalizedPath;
 
 const MAX_PAYLOAD: u64 = 1024 * 1024 * 1024;
 const CHUNK_BYTES: usize = MAX_VALUE_BYTES / 2;
@@ -93,7 +94,7 @@ pub struct JournalView {
 
 /// Filesystem methods belong on a blocking lane; construction only owns paths.
 pub struct Journal<'a> {
-    root: PathBuf,
+    root: NormalizedPath,
     records: String,
     checkpoints: String,
     chunks: String,
@@ -104,7 +105,7 @@ impl<'a> Journal<'a> {
     #[must_use]
     pub fn new(root: &Path, namespace: &str, state: &'a JournalState) -> Self {
         Self {
-            root: root.to_path_buf(),
+            root: NormalizedPath::new(root),
             records: namespace.into(),
             checkpoints: format!("{namespace}-base"),
             chunks: format!("{namespace}-chunks"),
@@ -126,12 +127,7 @@ impl<'a> Journal<'a> {
                 .load(Ordering::Acquire)
                 .saturating_add(1),
         );
-        let previous = CLOCK
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |old| {
-                Some(floor.max(old.saturating_add(1)))
-            })
-            .unwrap_or_else(|old| old);
-        let tick_ns = floor.max(previous.saturating_add(1));
+        let tick_ns = CLOCK.fetch_max(floor, Ordering::AcqRel).max(floor);
         self.state.observed_ns.fetch_max(tick_ns, Ordering::AcqRel);
         Stamp {
             tick_ns,
@@ -141,7 +137,7 @@ impl<'a> Journal<'a> {
     }
 
     fn kv(&self) -> io::Result<KvStore> {
-        KvStore::open(&self.root).map_err(kv_error)
+        KvStore::open(self.root.as_path()).map_err(kv_error)
     }
 
     fn store_payload(
@@ -259,7 +255,7 @@ impl<'a> Journal<'a> {
     }
 
     pub fn read(&self) -> io::Result<JournalView> {
-        if !self.root.exists() {
+        if !self.root.as_path().exists() {
             return Ok(JournalView {
                 checkpoint: None,
                 records: Vec::new(),
