@@ -1,3 +1,6 @@
+//! Fixture roots match canonical watcher keys, including macOS symlinks and
+//! Windows short/verbatim temporary path aliases.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
@@ -22,10 +25,11 @@ fn scan(root: &Path) -> HashMap<NormalizedPath, FileState> {
 #[test]
 fn same_tick_same_size_rewrite_is_reported() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("input.cpp");
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("input.cpp");
     fs::write(&path, b"aaaa").unwrap();
     let mtime = fs::metadata(&path).unwrap().modified().unwrap();
-    let config = build_config(dir.path(), &[], &["**/*.cpp".into()], &[]).unwrap();
+    let config = build_config(&root, &[], &["**/*.cpp".into()], &[]).unwrap();
     let mut previous = scan_snapshot(&config, DirectoryWalkParallelism::SharedPool).unwrap();
     racy::verify(&HashMap::new(), &mut previous, mtime, racy::HASHES_PER_POLL).unwrap();
     fs::write(&path, b"bbbb").unwrap();
@@ -56,12 +60,13 @@ fn same_tick_same_size_rewrite_is_reported() {
 #[test]
 fn public_watcher_reports_restored_mtime_rewrite() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("input.cpp");
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("input.cpp");
     fs::write(&path, b"aaaa").unwrap();
     // Future mtime keeps this end-to-end test racy even on a loaded runner.
     let mtime = SystemTime::now() + Duration::from_secs(60);
     set_mtime(&path, mtime);
-    let mut config = PollingWatcherConfig::new(dir.path());
+    let mut config = PollingWatcherConfig::new(&root);
     config.poll_interval = Duration::from_millis(10);
     config.debounce = Duration::from_millis(10);
     let watcher = PollingWatcher::new(config).unwrap();
@@ -81,18 +86,19 @@ fn public_watcher_reports_restored_mtime_rewrite() {
 #[test]
 fn unchanged_racy_digest_is_verified_before_retirement() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("input.cpp");
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("input.cpp");
     fs::write(&path, b"aaaa").unwrap();
     let mtime = fs::metadata(&path).unwrap().modified().unwrap();
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     racy::verify(&HashMap::new(), &mut previous, mtime, 256).unwrap();
-    let mut current = scan(dir.path());
+    let mut current = scan(&root);
     let (changed, reads) =
         racy::verify(&previous, &mut current, mtime + Duration::from_secs(3), 256).unwrap();
     assert!(changed.is_empty());
     assert_eq!(reads, 1);
     assert!(current.values().all(|state| state.racy.is_none()));
-    let mut later = scan(dir.path());
+    let mut later = scan(&root);
     assert_eq!(
         racy::verify(&current, &mut later, mtime + Duration::from_secs(4), 256)
             .unwrap()
@@ -104,15 +110,16 @@ fn unchanged_racy_digest_is_verified_before_retirement() {
 #[test]
 fn capped_baselines_remain_pending_and_rotate_without_starvation() {
     let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
     let now = SystemTime::now();
     // Three cohorts exercise deferral across more than just the next poll.
     let count = racy::HASHES_PER_POLL * 2 + 1;
     for index in 0..count {
-        let path = dir.path().join(format!("input-{index:04}.cpp"));
+        let path = root.join(format!("input-{index:04}.cpp"));
         fs::write(&path, b"aaaa").unwrap();
         set_mtime(&path, now);
     }
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     assert_eq!(
         racy::verify(&HashMap::new(), &mut previous, now, racy::HASHES_PER_POLL)
             .unwrap()
@@ -121,7 +128,7 @@ fn capped_baselines_remain_pending_and_rotate_without_starvation() {
     );
     let mut checked = HashSet::new();
     for _ in 0..3 {
-        let mut current = scan(dir.path());
+        let mut current = scan(&root);
         let (changed, reads) = racy::verify(
             &previous,
             &mut current,
@@ -140,29 +147,30 @@ fn capped_baselines_remain_pending_and_rotate_without_starvation() {
 #[test]
 fn persistent_racy_entries_cannot_starve_behind_the_cap() {
     let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
     let now = SystemTime::now();
     for name in ["a.cpp", "b.cpp", "c.cpp"] {
-        let path = dir.path().join(name);
+        let path = root.join(name);
         fs::write(&path, b"aaaa").unwrap();
         set_mtime(&path, now);
     }
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     racy::verify(&HashMap::new(), &mut previous, now, 1).unwrap();
     let mut checked = HashSet::new();
     for _ in 0..4 {
-        let mut current = scan(dir.path());
+        let mut current = scan(&root);
         let (changed, reads) = racy::verify(&previous, &mut current, now, 1).unwrap();
         assert_eq!(reads, 1);
         checked.extend(changed);
         previous = current;
     }
-    assert!(checked.contains(&NormalizedPath::new(dir.path().join("c.cpp"))));
-    let path = dir.path().join("c.cpp");
+    assert!(checked.contains(&NormalizedPath::new(root.join("c.cpp"))));
+    let path = root.join("c.cpp");
     fs::write(&path, b"bbbb").unwrap();
     set_mtime(&path, now);
     let mut changes = HashSet::new();
     for _ in 0..3 {
-        let mut current = scan(dir.path());
+        let mut current = scan(&root);
         changes.extend(racy::verify(&previous, &mut current, now, 1).unwrap().0);
         previous = current;
     }
@@ -172,25 +180,26 @@ fn persistent_racy_entries_cannot_starve_behind_the_cap() {
 #[test]
 fn deferred_digests_survive_until_they_can_be_compared() {
     let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
     let now = SystemTime::now();
     for name in ["a.cpp", "b.cpp"] {
-        let path = dir.path().join(name);
+        let path = root.join(name);
         fs::write(&path, b"aaaa").unwrap();
         set_mtime(&path, now);
     }
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     racy::verify(&HashMap::new(), &mut previous, now, 2).unwrap();
-    let path = dir.path().join("b.cpp");
+    let path = root.join("b.cpp");
     fs::write(&path, b"bbbb").unwrap();
     set_mtime(&path, now);
-    let mut current = scan(dir.path());
+    let mut current = scan(&root);
     assert!(
         racy::verify(&previous, &mut current, now + Duration::from_secs(3), 1)
             .unwrap()
             .0
             .is_empty()
     );
-    let mut later = scan(dir.path());
+    let mut later = scan(&root);
     assert!(
         racy::verify(&current, &mut later, now + Duration::from_secs(4), 1)
             .unwrap()
@@ -202,10 +211,11 @@ fn deferred_digests_survive_until_they_can_be_compared() {
 #[test]
 fn unreadable_racy_content_fails_without_discarding_baseline() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("input.cpp");
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("input.cpp");
     fs::write(&path, b"aaaa").unwrap();
     let now = SystemTime::now();
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     racy::verify(
         &HashMap::new(),
         &mut previous,
@@ -213,7 +223,7 @@ fn unreadable_racy_content_fails_without_discarding_baseline() {
         1,
     )
     .unwrap();
-    let mut current = scan(dir.path());
+    let mut current = scan(&root);
     fs::remove_file(&path).unwrap();
     assert!(racy::verify(&previous, &mut current, now, 1).is_err());
     assert!(previous.values().all(|state| state.racy.is_some()));
@@ -222,12 +232,13 @@ fn unreadable_racy_content_fails_without_discarding_baseline() {
 #[test]
 fn perf_poll_old_files_has_zero_content_reads() {
     let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
     for index in 0..1000 {
-        let path = dir.path().join(format!("input-{index}.cpp"));
+        let path = root.join(format!("input-{index}.cpp"));
         fs::write(&path, b"aaaa").unwrap();
         set_mtime(&path, UNIX_EPOCH + Duration::from_secs(1_000));
     }
-    let config = build_config(dir.path(), &[], &["**/*.cpp".into()], &[]).unwrap();
+    let config = build_config(&root, &[], &["**/*.cpp".into()], &[]).unwrap();
     let (previous, _) = poll_snapshot(
         &config,
         DirectoryWalkParallelism::SharedPool,
@@ -257,13 +268,14 @@ fn perf_poll_old_files_has_zero_content_reads() {
 #[test]
 fn edit_between_scan_and_hash_reports_path_without_overflow() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("input.cpp");
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("input.cpp");
     fs::write(&path, b"a\n").unwrap();
     let mtime = SystemTime::now() + Duration::from_secs(60);
     set_mtime(&path, mtime);
-    let mut previous = scan(dir.path());
+    let mut previous = scan(&root);
     racy::verify(&HashMap::new(), &mut previous, mtime, racy::HASHES_PER_POLL).unwrap();
-    let mut current = scan(dir.path());
+    let mut current = scan(&root);
     // Deterministically overlap the edit with the scan/hash window (#2169).
     fs::write(&path, b"bb\n").unwrap();
     let (changed, reads) = racy::verify(&previous, &mut current, mtime, racy::HASHES_PER_POLL)
@@ -275,12 +287,12 @@ fn edit_between_scan_and_hash_reports_path_without_overflow() {
         previous[&NormalizedPath::new(&path)].racy
     );
     // The next complete scan catches up without losing the edit.
-    let mut next = scan(dir.path());
+    let mut next = scan(&root);
     let (changed, _) = racy::verify(&current, &mut next, mtime, racy::HASHES_PER_POLL).unwrap();
     let (mut stat_changed, _) = diff_snapshots(&current, &next);
     stat_changed.extend(changed);
     assert!(stat_changed.contains(&NormalizedPath::new(&path)));
-    let mut stable = scan(dir.path());
+    let mut stable = scan(&root);
     let (changed, _) = racy::verify(&next, &mut stable, mtime, racy::HASHES_PER_POLL).unwrap();
     assert!(changed.is_empty());
 }
