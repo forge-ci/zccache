@@ -214,6 +214,7 @@ pub struct DepGraph {
     pub(super) pending_contexts: Box<DashMap<ContextKey, Option<u64>>>,
     pub(super) migration_requested: AtomicBool,
     pub(crate) clear_requested: AtomicBool,
+    pub(crate) legacy_rejected: AtomicBool,
     pub(crate) journal_state: zccache_artifact::journal::JournalState,
 }
 
@@ -411,6 +412,7 @@ impl DepGraph {
             pending_contexts: Box::new(DashMap::new()),
             migration_requested: AtomicBool::new(false),
             clear_requested: AtomicBool::new(false),
+            legacy_rejected: AtomicBool::new(false),
             journal_state: zccache_artifact::journal::JournalState::default(),
             persistence_gate: std::sync::Arc::new(zccache_core::sync::Gate::new()),
         }
@@ -519,6 +521,7 @@ impl DepGraph {
             pending_contexts: Box::new(DashMap::new()),
             migration_requested: AtomicBool::new(false),
             clear_requested: AtomicBool::new(false),
+            legacy_rejected: AtomicBool::new(false),
             journal_state: zccache_artifact::journal::JournalState::default(),
             persistence_gate: std::sync::Arc::new(zccache_core::sync::Gate::new()),
         }

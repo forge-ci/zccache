@@ -127,6 +127,8 @@ impl DepGraphSetter {
                 .store(true, Ordering::Release);
         }
         if let Some(warning) = warning {
+            // The startup policy rejected the primary; quarantine may have failed.
+            self.state.dep_graph.load().reject_legacy_snapshot();
             self.state
                 .depgraph_load_warning
                 .with_blocking_for(STATE_TIMEOUT, |slot| *slot = Some(warning));

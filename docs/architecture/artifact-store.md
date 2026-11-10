@@ -382,7 +382,10 @@ Warm lookups remain entirely in memory.
 
 Startup schedules legacy imports even without a new compile. The blocking
 writer reads the old index/context snapshot before publishing a base checkpoint,
-so deferred loading cannot hide older entries. Until that checkpoint exists,
+so deferred loading cannot hide older entries. The first base also includes live
+contexts recovered from a quarantine sidecar. The startup loader explicitly marks
+a rejected primary, so failed quarantine cannot block later durable commits.
+Until that checkpoint exists,
 startup overlays committed batches onto the legacy snapshot. Afterwards, the
 journal is authoritative; old blobs remain compatibility/export checkpoints.
 Failed batches remain pending for retry. Global clear publishes an empty base

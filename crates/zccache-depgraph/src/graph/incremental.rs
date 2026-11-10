@@ -37,6 +37,13 @@ impl DepGraph {
         accessed
     }
 
+    /// Startup validation rejected the primary snapshot, even if quarantine failed.
+    /// The owning loader authorizes rebuilding its journal from live recovered state.
+    pub fn reject_legacy_snapshot(&self) {
+        self.legacy_rejected.store(true, Ordering::Release);
+        self.schedule_incremental_migration();
+    }
+
     pub(crate) fn schedule_incremental_migration(&self) {
         self.migration_requested.store(true, Ordering::Release);
     }

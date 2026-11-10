@@ -80,7 +80,22 @@ impl DepGraph {
             }
         }
         if !journal.has_checkpoint().map_err(io_error)? {
-            let contexts = legacy_contexts(path, &LoadOptions::default())?;
+            let legacy = if self.legacy_rejected.load(Ordering::Acquire) {
+                Vec::new()
+            } else {
+                legacy_contexts(path, &LoadOptions::default())?
+            };
+            // A recovered sidecar may be the only copy of these live contexts.
+            let contexts: Vec<_> = legacy
+                .into_iter()
+                .chain(
+                    self.contexts_iter()
+                        .map(|entry| self.snapshot_context(entry.key(), &entry)),
+                )
+                .map(|entry| (entry.context_key, entry))
+                .collect::<BTreeMap<_, _>>()
+                .into_values()
+                .collect();
             journal
                 .initialize(&encode_record(&contexts).map_err(io_error)?)
                 .map_err(io_error)?;
