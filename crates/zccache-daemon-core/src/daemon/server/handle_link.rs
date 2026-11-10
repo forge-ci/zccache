@@ -558,7 +558,7 @@ pub(super) async fn handle_link_ephemeral(
     if parsed_tool.is_archive {
         if let Some(plan) = staged_plan.take() {
             let started = std::time::Instant::now();
-            match plan.materialize(link_mode) {
+            match plan.materialize_for_state(state, link_mode) {
                 Ok(materialized) => {
                     state.profiler.staged.add_count(
                         StagedCounter::MaterializeReflink,

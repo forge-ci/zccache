@@ -2,6 +2,19 @@
 
 use super::*;
 
+pub(in crate::daemon::server) fn materialize_multi_hit_for_state(
+    state: &SharedState,
+    targets: &[NormalizedPath],
+    payloads: &[CachedPayload],
+    mode: MaterializationMode,
+) -> MaterializationResult<StagedMaterializationStats> {
+    // Multi-source hits are C/C++ objects: LINK may share their inodes (#1764).
+    write_payloads_par_with_delivery_for_state(state, targets, payloads, mode, |out| {
+        native_output_delivery(mode, out)
+    })
+}
+
+#[cfg(test)]
 pub(in crate::daemon::server) fn materialize_multi_hit(
     targets: &[NormalizedPath],
     payloads: &[CachedPayload],

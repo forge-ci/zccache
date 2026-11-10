@@ -101,8 +101,13 @@ pub(super) fn materialize_link_cache_hit(
     });
     let materialize_started = std::time::Instant::now();
     payloads.record_staged_pre_materialization(&state.profiler.staged);
-    let observed =
-        write_payloads_par_with_modes(&targets, &payloads, mode, &entry.meta.output_modes);
+    let observed = write_payloads_par_with_modes_for_state(
+        state,
+        &targets,
+        &payloads,
+        mode,
+        &entry.meta.output_modes,
+    );
     payloads.record_staged_lock_timings(&state.profiler.staged);
     drop(payloads);
     if let Err(failure) = &observed {

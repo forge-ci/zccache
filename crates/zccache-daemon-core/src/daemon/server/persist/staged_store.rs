@@ -34,9 +34,11 @@ pub(crate) use maintenance::{
 use publish::persist_staged_generation;
 pub(crate) use trash::{sweep_staged_trash_for, DetachedStagedTrash};
 mod materialize;
+#[cfg(test)]
+pub(in crate::daemon::server) use materialize::materialize_independent_with_mode;
 pub(in crate::daemon::server) use materialize::{
-    materialization_error, materialization_error_progress, materialize_independent_with_mode,
-    StagedMaterializationStats, StagedSource,
+    materialization_error, materialization_error_progress,
+    materialize_independent_with_mode_scoped, StagedMaterializationStats, StagedSource,
 };
 mod read_guard;
 use read_guard::validate_key;
@@ -289,7 +291,7 @@ fn manifest_path(generation_dir: &Path) -> NormalizedPath {
     generation_dir.join("manifest.bin").into()
 }
 
-fn temporary_path(path: &Path, suffix: &str) -> NormalizedPath {
+pub(super) fn temporary_path(path: &Path, suffix: &str) -> NormalizedPath {
     let nonce = STAGED_ARTIFACT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     path.with_file_name(format!(
         ".{}.{}.{}-{}",

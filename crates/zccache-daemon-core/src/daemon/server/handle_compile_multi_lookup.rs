@@ -157,8 +157,12 @@ pub(super) fn check_unit_cache(
                                 })
                                 .collect();
                             payloads.record_staged_pre_materialization(&state.profiler.staged);
-                            let materialization =
-                                materialize_multi_hit(&targets, &payloads, materialization_mode);
+                            let materialization = materialize_multi_hit_for_state(
+                                state,
+                                &targets,
+                                &payloads,
+                                materialization_mode,
+                            );
                             payloads.record_staged_lock_timings(&state.profiler.staged);
                             drop(payloads);
                             if let Err(failure) = &materialization {
@@ -335,8 +339,12 @@ pub(super) fn check_unit_cache(
                         })
                         .collect();
                     payloads.record_staged_pre_materialization(&state.profiler.staged);
-                    let materialization =
-                        materialize_multi_hit(&targets, &payloads, materialization_mode);
+                    let materialization = materialize_multi_hit_for_state(
+                        state,
+                        &targets,
+                        &payloads,
+                        materialization_mode,
+                    );
                     payloads.record_staged_lock_timings(&state.profiler.staged);
                     drop(payloads);
                     if let Err(failure) = &materialization {

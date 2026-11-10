@@ -29,6 +29,26 @@ pub(in crate::daemon::server) fn remove_output_file(path: &Path) -> std::io::Res
     std::fs::remove_file(path)
 }
 
+pub(in crate::daemon::server) fn remove_output_file_scoped(
+    destination: &OutputDestination,
+) -> std::io::Result<()> {
+    #[cfg(test)]
+    let path = destination.as_ref();
+    #[cfg(test)]
+    if let Ok(mut injected) = FAIL_DETACH_REMOVE_PATHS
+        .get_or_init(|| zccache_core::blocking_sync::Mutex::new(std::collections::HashSet::new()))
+        .lock_for(zccache_core::sync::STATE_TIMEOUT)
+    {
+        if injected.remove(path) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected detach remove failure",
+            ));
+        }
+    }
+    destination.unlink()
+}
+
 fn rename_detached_output(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if let Ok(mut injected) = FAIL_DETACH_RENAME_PATHS

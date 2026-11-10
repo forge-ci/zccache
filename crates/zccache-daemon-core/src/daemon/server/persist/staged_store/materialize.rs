@@ -1,5 +1,6 @@
 //! Independent requested-path materialization and physical-work observations.
 
+use super::super::OutputDestination;
 use crate::core::config::MaterializationMode;
 use std::fs;
 use std::io;
@@ -7,9 +8,10 @@ use std::path::Path;
 
 fn copy_independent(
     source: &Path,
-    destination: &Path,
+    output: &OutputDestination,
     mode: MaterializationMode,
 ) -> io::Result<(bool, u64)> {
+    let destination = output.as_ref();
     let reflink_allowed = mode != MaterializationMode::Copy && {
         #[cfg(test)]
         {
@@ -28,7 +30,7 @@ fn copy_independent(
     if fs::metadata(destination).is_ok() {
         let _ = crate::platform::fs::permissions::make_writable(destination);
     }
-    let _ = fs::remove_file(destination);
+    let _ = output.unlink();
     #[cfg(test)]
     super::fault::inject(destination, super::StagedFaultPoint::MaterializeCopy)?;
     let bytes = mode.copy_file(source, destination)?;
@@ -39,16 +41,17 @@ fn copy_independent(
 /// copy tier, then writable with the source's mtime (#1683).
 fn copy_output_with(
     source: &Path,
-    destination: &Path,
+    output: &OutputDestination,
     mode: MaterializationMode,
 ) -> io::Result<(bool, u64)> {
+    let destination = output.as_ref();
     let source_metadata = fs::metadata(source)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let result = copy_independent(source, destination, mode);
+    let result = copy_independent(source, output, mode);
     if result.is_err() {
-        let _ = fs::remove_file(destination);
+        let _ = output.unlink();
         return result;
     }
     // Keep the destination writable while restoring timestamps. On Windows,
@@ -84,11 +87,12 @@ impl StagedSource<'_> {
     /// generation duplicated the write for no benefit (#1774).
     pub(in crate::daemon::server) fn write_to(
         &self,
-        destination: &Path,
+        output: &OutputDestination,
         mode: MaterializationMode,
     ) -> io::Result<(bool, u64)> {
+        let destination = output.as_ref();
         match self {
-            StagedSource::Path(source) => copy_output_with(source, destination, mode),
+            StagedSource::Path(source) => copy_output_with(source, output, mode),
             StagedSource::Bytes(bytes) => {
                 if let Some(parent) = destination.parent() {
                     fs::create_dir_all(parent)?;
@@ -146,11 +150,12 @@ pub(in crate::daemon::server) fn materialization_error_progress(
 /// Deliver a private staged output to its requested path under an explicit
 /// `ZCCACHE_MODE`: every mode delivers an independent file here; `COPY`
 /// skips the reflink attempt (#1683).
-pub(in crate::daemon::server) fn materialize_independent_with_mode(
+pub(in crate::daemon::server) fn materialize_independent_with_mode_scoped(
     source: &Path,
-    destination: &Path,
+    output: &OutputDestination,
     mode: crate::core::config::MaterializationMode,
 ) -> io::Result<StagedMaterializationStats> {
+    let destination = output.as_ref();
     #[cfg(test)]
     super::hook::pause(destination, super::StagedHookPoint::MaterializeOutput);
     if let Ok(metadata) = fs::metadata(destination) {
@@ -177,15 +182,16 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
     // The exclusive guard below keeps every daemon child spawn out of the
     // open-write-close + rename window; see `daemon::spawn_exclusion`. A
     // spawn outside that lock is waited out after publishing (soldr#3350).
-    let temporary = super::temporary_path(destination, "materialize");
+    let temporary_output = output.sibling_temporary();
+    let temporary = temporary_output.as_ref();
     let result = (|| {
         let _materialize_guard = crate::daemon::spawn_exclusion::materialize_exclusive();
-        let (reflink, copy_bytes) = copy_output_with(source, &temporary, mode)?;
+        let (reflink, copy_bytes) = copy_output_with(source, &temporary_output, mode)?;
         #[cfg(test)]
         {
             // Test seam: keep a write descriptor on the temporary open while
             // paused, modelling the descriptor `copy_output` holds mid-copy.
-            let open_for_write = fs::OpenOptions::new().write(true).open(&temporary)?;
+            let open_for_write = fs::OpenOptions::new().write(true).open(temporary)?;
             super::hook::pause(
                 destination,
                 super::StagedHookPoint::MaterializeTemporaryOpen,
@@ -197,7 +203,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
         if fs::metadata(destination).is_ok() {
             let _ = crate::platform::fs::permissions::make_writable(destination);
         }
-        super::replace_staged_path(&temporary, destination)?;
+        super::replace_staged_path(temporary, destination)?;
         crate::daemon::server::persist::record_delivery(u64::from(reflink), 0, u64::from(!reflink));
         if !reflink && mode == crate::core::config::MaterializationMode::Reflink {
             crate::daemon::server::persist::note_reflink_fallback(source, destination);
@@ -213,7 +219,7 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
     match &result {
         Ok(_) => crate::daemon::spawn_exclusion::await_publishable(destination),
         Err(_) => {
-            let _ = fs::remove_file(&temporary);
+            let _ = temporary_output.unlink();
         }
     }
     result
@@ -222,3 +228,16 @@ pub(in crate::daemon::server) fn materialize_independent_with_mode(
 #[cfg(test)]
 #[path = "materialize_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::daemon::server) fn materialize_independent_with_mode(
+    source: &Path,
+    destination: &Path,
+    mode: MaterializationMode,
+) -> io::Result<StagedMaterializationStats> {
+    materialize_independent_with_mode_scoped(
+        source,
+        &OutputDestination::for_test(destination),
+        mode,
+    )
+}

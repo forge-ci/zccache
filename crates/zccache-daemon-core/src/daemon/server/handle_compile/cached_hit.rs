@@ -499,7 +499,8 @@ pub(super) fn materialize_cached_compile_hit(
     };
     payloads.record_staged_pre_materialization(&state.profiler.staged);
     let observed_result = if provisional_staged {
-        write_provisional_payloads_par_with_mtime_floor_observed(
+        write_provisional_payloads_par_with_mtime_floor_observed_for_state(
+            state,
             &targets,
             &payloads_to_write,
             floor_paths,
@@ -507,7 +508,8 @@ pub(super) fn materialize_cached_compile_hit(
             materialization_mode,
         )
     } else {
-        write_payloads_par_with_mtime_floor_and_policies_observed(
+        write_payloads_par_with_mtime_floor_and_policies_observed_for_state(
+            state,
             &targets,
             &payloads_to_write,
             floor_paths,

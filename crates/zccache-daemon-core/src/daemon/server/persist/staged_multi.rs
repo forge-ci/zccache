@@ -345,8 +345,6 @@ impl StagedMultiUnitPlan {
         })
     }
 
-
-
     pub(in crate::daemon::server) fn rewrite_logical_side_outputs(&self) -> std::io::Result<()> {
         for (fault_index, output) in self.outputs.iter().enumerate() {
             if output.role != StagedOutputRole::Depfile {

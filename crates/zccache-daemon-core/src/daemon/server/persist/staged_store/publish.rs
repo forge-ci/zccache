@@ -43,8 +43,9 @@ pub(super) fn persist_staged_generation(
     #[cfg(test)]
     fault::inject(artifact_dir, StagedFaultPoint::GenerationCreate)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    fs::create_dir(&temporary_generation)
-        .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
+    let private_outputs =
+        super::super::output_destination::PrivateOutputNamespace::create(&temporary_generation)
+            .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
 
     let mut retired_generation = None;
     let result = (|| {
@@ -58,19 +59,23 @@ pub(super) fn persist_staged_generation(
             #[cfg(test)]
             fault::inject(artifact_dir, StagedFaultPoint::OutputCopy(index))
                 .map_err(|error| publish_error(StagedPublishFailure::OutputCopy, error))?;
-            let (reflink, copied_bytes) = source.write_to(&destination, mode).map_err(|error| {
-                publish_error(
-                    StagedPublishFailure::OutputCopy,
-                    io::Error::new(
-                        error.kind(),
-                        format!(
-                            "staged output copy failed: {} -> {}: {error}",
-                            source.describe(),
-                            destination.display()
-                        ),
-                    ),
-                )
-            })?;
+            let output_destination = private_outputs.output(&destination)?;
+            let (reflink, copied_bytes) =
+                source
+                    .write_to(&output_destination, mode)
+                    .map_err(|error| {
+                        publish_error(
+                            StagedPublishFailure::OutputCopy,
+                            io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "staged output copy failed: {} -> {}: {error}",
+                                    source.describe(),
+                                    destination.display()
+                                ),
+                            ),
+                        )
+                    })?;
             #[cfg(test)]
             fault::inject(artifact_dir, StagedFaultPoint::OutputSync(index))
                 .map_err(|error| publish_error(StagedPublishFailure::OutputDurability, error))?;

@@ -171,7 +171,7 @@ pub(super) fn materialize_link_plan_observed(
         output_count,
         salvage_reason,
         started,
-        plan.materialize(mode),
+        plan.materialize_for_state(state, mode),
     )
 }
 
@@ -206,7 +206,7 @@ pub(super) fn materialize_exec_plan_observed(
         output_count,
         salvage_reason,
         started,
-        plan.materialize(mode),
+        plan.materialize_for_state(state, mode),
     )
 }
 
@@ -224,6 +224,6 @@ pub(super) fn materialize_multi_plan_observed(
         output_count,
         salvage_reason,
         started,
-        plan.materialize(mode),
+        plan.materialize_for_state(state, mode),
     )
 }

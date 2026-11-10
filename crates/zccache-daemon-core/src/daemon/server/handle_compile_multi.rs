@@ -21,7 +21,9 @@ use args::filter_multi_source_args;
 pub(super) use context::build_multi_base_context;
 pub(in crate::daemon::server) use preflight::detach_direct_batch_outputs;
 use preflight::InputSnapshot;
+#[cfg(test)]
 pub(super) use types::materialize_multi_hit;
+pub(super) use types::materialize_multi_hit_for_state;
 use types::{
     invalidate_multi_artifact_after_failure, legacy_depfile_policy, owned_fast_hit_entry,
     MissOutcome, PersistTaskParams, UnitCacheCheck, UnitCacheResult,

@@ -1,9 +1,11 @@
 //! Requested-path delivery for the owned staging plan.
+use super::super::{materialize_independent_with_mode_scoped, OutputScope, SharedState};
 use super::*;
 
 impl StagedMultiUnitPlan {
-    pub(in crate::daemon::server) fn materialize(
+    pub(in crate::daemon::server) fn materialize_scoped(
         &self,
+        scope: &OutputScope,
         mode: MaterializationMode,
     ) -> std::io::Result<StagedMaterializationStats> {
         let mut observed = StagedMaterializationStats::default();
@@ -23,13 +25,16 @@ impl StagedMultiUnitPlan {
                 )
                 .map_err(|error| materialization_error(error, observed))?;
             }
+            let destination = scope
+                .output(output.requested.as_path())
+                .map_err(|error| materialization_error(error, observed))?;
             if let Some(parent) = output.requested.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| materialization_error(error, observed))?;
             }
-            let output_stats = materialize_independent_with_mode(
+            let output_stats = materialize_independent_with_mode_scoped(
                 output.staged.as_path(),
-                output.requested.as_path(),
+                &destination,
                 mode,
             )
             .map_err(|error| materialization_error(error, observed))?;
@@ -44,5 +49,12 @@ impl StagedMultiUnitPlan {
             }
         }
         Ok(observed)
+    }
+    pub(in crate::daemon::server) fn materialize_for_state(
+        &self,
+        state: &SharedState,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_scoped(&OutputScope::for_state(state)?, mode)
     }
 }

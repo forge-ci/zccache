@@ -795,8 +795,6 @@ impl StagedCompilePlan {
         }
     }
 
-
-
     /// Dep-info is an output too. Translate the private staging prefix to one
     /// stable cache marker before hashing and publication. Miss and hit
     /// materialization rehydrate the marker to the current requested path.

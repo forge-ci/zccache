@@ -1,12 +1,14 @@
 //! Requested-path delivery for the owned staging plan.
+use super::super::{materialize_independent_with_mode_scoped, OutputScope, SharedState};
 use super::*;
 
 impl StagedCompilePlan {
-    pub(in crate::daemon::server) fn materialize(
+    pub(in crate::daemon::server) fn materialize_scoped(
         &self,
+        scope: &OutputScope,
         mode: MaterializationMode,
     ) -> io::Result<StagedMaterializationStats> {
-        let stats = self.materialize_without_cleanup(mode)?;
+        let stats = self.materialize_without_cleanup_scoped(scope, mode)?;
         self.cleanup()
             .map_err(|error| materialization_error(error, stats))?;
         Ok(stats)
@@ -15,8 +17,9 @@ impl StagedCompilePlan {
     /// Materialize the requested outputs while retaining the private staging
     /// root for a detached durable publisher. The caller must keep this plan
     /// alive until publication has consumed every staged source.
-    pub(in crate::daemon::server) fn materialize_without_cleanup(
+    pub(in crate::daemon::server) fn materialize_without_cleanup_scoped(
         &self,
+        scope: &OutputScope,
         mode: MaterializationMode,
     ) -> io::Result<StagedMaterializationStats> {
         let mut stats = StagedMaterializationStats::default();
@@ -36,13 +39,16 @@ impl StagedCompilePlan {
                 )
                 .map_err(|error| materialization_error(error, stats))?;
             }
+            let destination = scope
+                .output(output.requested.as_path())
+                .map_err(|error| materialization_error(error, stats))?;
             if let Some(parent) = output.requested.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| materialization_error(error, stats))?;
             }
-            let output_stats = crate::daemon::server::persist::materialize_independent_with_mode(
+            let output_stats = materialize_independent_with_mode_scoped(
                 output.staged.as_path(),
-                output.requested.as_path(),
+                &destination,
                 mode,
             )
             .map_err(|error| {
@@ -69,5 +75,34 @@ impl StagedCompilePlan {
             }
         }
         Ok(stats)
+    }
+    pub(in crate::daemon::server) fn materialize_for_state(
+        &self,
+        state: &SharedState,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_scoped(&OutputScope::for_state(state)?, mode)
+    }
+    #[cfg(test)]
+    pub(in crate::daemon::server) fn materialize(
+        &self,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_scoped(&OutputScope::unrestricted_for_test(), mode)
+    }
+
+    pub(in crate::daemon::server) fn materialize_without_cleanup_for_state(
+        &self,
+        state: &SharedState,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_without_cleanup_scoped(&OutputScope::for_state(state)?, mode)
+    }
+    #[cfg(test)]
+    pub(in crate::daemon::server) fn materialize_without_cleanup(
+        &self,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_without_cleanup_scoped(&OutputScope::unrestricted_for_test(), mode)
     }
 }

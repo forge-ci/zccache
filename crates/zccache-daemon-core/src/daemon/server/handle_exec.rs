@@ -112,8 +112,9 @@ impl ExecStagedPlan {
             .collect()
     }
 
-    pub(super) fn materialize(
+    pub(super) fn materialize_scoped(
         &self,
+        scope: &OutputScope,
         mode: MaterializationMode,
     ) -> std::io::Result<StagedMaterializationStats> {
         let mut observed = StagedMaterializationStats::default();
@@ -128,13 +129,16 @@ impl ExecStagedPlan {
                 )
                 .map_err(|error| materialization_error(error, observed))?;
             }
+            let destination = scope
+                .output(requested.as_path())
+                .map_err(|error| materialization_error(error, observed))?;
             if let Some(parent) = requested.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| materialization_error(error, observed))?;
             }
-            let output = crate::daemon::server::persist::materialize_independent_with_mode(
+            let output = crate::daemon::server::persist::materialize_independent_with_mode_scoped(
                 staged.as_path(),
-                requested.as_path(),
+                &destination,
                 mode,
             )
             .map_err(|error| materialization_error(error, observed))?;
@@ -143,6 +147,13 @@ impl ExecStagedPlan {
         self.cleanup()
             .map_err(|error| materialization_error(error, observed))?;
         Ok(observed)
+    }
+    pub(super) fn materialize_for_state(
+        &self,
+        state: &SharedState,
+        mode: MaterializationMode,
+    ) -> std::io::Result<StagedMaterializationStats> {
+        self.materialize_scoped(&OutputScope::for_state(state)?, mode)
     }
 
     pub(super) fn output_count(&self) -> usize {
@@ -755,7 +766,8 @@ fn try_exec_cache_hit_blocking(
     });
     let materialize_started = std::time::Instant::now();
     payloads.record_staged_pre_materialization(&state.profiler.staged);
-    let observed = write_payloads_par_observed(&targets, &payloads_for_write, mode);
+    let observed =
+        write_payloads_par_observed_for_state(state, &targets, &payloads_for_write, mode);
     payloads.record_staged_lock_timings(&state.profiler.staged);
     drop(payloads);
     if let Err(failure) = &observed {
