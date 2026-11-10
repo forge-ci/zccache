@@ -41,6 +41,12 @@ fn is_resident_constructor(cx: &LateContext<'_>, id: DefId) -> bool {
         )
 }
 
+fn is_provisional_owner(cx: &LateContext<'_>, id: DefId) -> bool {
+    cx.get_def_path(id)
+        .windows(2)
+        .any(|pair| pair[0].as_str() == "cached_artifact" && pair[1].as_str() == "provisional")
+}
+
 impl<'tcx> LateLintPass<'tcx> for BanResidentArtifactPublication {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         if cx.sess().opts.test {
@@ -59,10 +65,7 @@ impl<'tcx> LateLintPass<'tcx> for BanResidentArtifactPublication {
             return;
         }
         let owner = cx.tcx.hir_enclosing_body_owner(expr.hir_id).to_def_id();
-        if cx
-            .tcx
-            .def_path_str(owner)
-            .contains("::cached_artifact::provisional::")
+        if is_provisional_owner(cx, owner)
             || is_resident_constructor(cx, owner)
             || (is_cached_artifact_method(cx, owner)
                 && cx.tcx.item_name(owner).as_str() == "from_provisional_staged")
