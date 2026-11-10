@@ -173,6 +173,66 @@ pub fn now_unix_ms() -> u64 {
 // ---------------------------------------------------------------------------
 
 impl DepGraph {
+    pub(crate) fn snapshot_context(
+        &self,
+        key: &ContextKey,
+        ctx: &ContextEntry,
+    ) -> ContextEntrySnapshot {
+        let rustc_externs = self
+            .get_rustc_externs(key)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, path)| RustcExternSnapshot {
+                name,
+                path: path.to_string_lossy().into_owned(),
+            })
+            .collect();
+        let rustc_env_deps = ctx
+            .rustc_env_deps
+            .iter()
+            .cloned()
+            .map(|(name, value_hash)| RustcEnvDepSnapshot {
+                name,
+                value_hash: value_hash.map(|h| *h.as_bytes()),
+            })
+            .collect();
+        ContextEntrySnapshot {
+            context_key: *key.hash().as_bytes(),
+            logical_context_key: *ctx.logical_key.hash().as_bytes(),
+            key_root: ctx
+                .key_root
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            source_file: ctx.context.source_file.to_string_lossy().into_owned(),
+            iquote: paths_to_strings(&ctx.context.include_search.iquote),
+            user: paths_to_strings(&ctx.context.include_search.user),
+            system: paths_to_strings(&ctx.context.include_search.system),
+            after: paths_to_strings(&ctx.context.include_search.after),
+            defines: ctx.context.defines.clone(),
+            undefines: ctx.context.undefines.clone(),
+            flags: ctx.context.flags.clone(),
+            force_includes: paths_to_strings(&ctx.context.force_includes),
+            unknown_flags: ctx.context.unknown_flags.clone(),
+            resolved_includes: paths_to_strings(&ctx.resolved_includes),
+            unresolved_includes: ctx.unresolved_includes.clone(),
+            has_computed_includes: ctx.has_computed_includes,
+            artifact_key: ctx.artifact_key.map(|k| *k.hash().as_bytes()),
+            last_file_hashes: ctx
+                .last_file_hashes
+                .iter()
+                .map(|(p, h)| (p.to_string_lossy().into_owned(), *h.as_bytes()))
+                .collect(),
+            rustc_externs,
+            rustc_env_deps,
+            state: match ctx.state {
+                ContextState::Cold => 0,
+                ContextState::Warm => 1,
+                ContextState::Stale => 2,
+            },
+            last_accessed_unix_ms: ctx.last_accessed_unix_ms,
+        }
+    }
+
     /// Create a serializable snapshot of the current graph state.
     pub fn to_snapshot(&self) -> DepGraphSnapshot {
         self.to_snapshot_at(now_unix_ms())
@@ -208,63 +268,7 @@ impl DepGraph {
 
         let contexts: Vec<ContextEntrySnapshot> = self
             .contexts_iter()
-            .map(|entry| {
-                let key = entry.key();
-                let ctx = entry.value();
-                let rustc_externs = self
-                    .get_rustc_externs(key)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(name, path)| RustcExternSnapshot {
-                        name,
-                        path: path.to_string_lossy().into_owned(),
-                    })
-                    .collect();
-                let rustc_env_deps = ctx
-                    .rustc_env_deps
-                    .iter()
-                    .cloned()
-                    .map(|(name, value_hash)| RustcEnvDepSnapshot {
-                        name,
-                        value_hash: value_hash.map(|h| *h.as_bytes()),
-                    })
-                    .collect();
-                ContextEntrySnapshot {
-                    context_key: *key.hash().as_bytes(),
-                    logical_context_key: *ctx.logical_key.hash().as_bytes(),
-                    key_root: ctx
-                        .key_root
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    source_file: ctx.context.source_file.to_string_lossy().into_owned(),
-                    iquote: paths_to_strings(&ctx.context.include_search.iquote),
-                    user: paths_to_strings(&ctx.context.include_search.user),
-                    system: paths_to_strings(&ctx.context.include_search.system),
-                    after: paths_to_strings(&ctx.context.include_search.after),
-                    defines: ctx.context.defines.clone(),
-                    undefines: ctx.context.undefines.clone(),
-                    flags: ctx.context.flags.clone(),
-                    force_includes: paths_to_strings(&ctx.context.force_includes),
-                    unknown_flags: ctx.context.unknown_flags.clone(),
-                    resolved_includes: paths_to_strings(&ctx.resolved_includes),
-                    unresolved_includes: ctx.unresolved_includes.clone(),
-                    has_computed_includes: ctx.has_computed_includes,
-                    artifact_key: ctx.artifact_key.map(|k| *k.hash().as_bytes()),
-                    last_file_hashes: ctx
-                        .last_file_hashes
-                        .iter()
-                        .map(|(p, h)| (p.to_string_lossy().into_owned(), *h.as_bytes()))
-                        .collect(),
-                    rustc_externs,
-                    rustc_env_deps,
-                    state: match ctx.state {
-                        ContextState::Cold => 0,
-                        ContextState::Warm => 1,
-                        ContextState::Stale => 2,
-                    },
-                    last_accessed_unix_ms: ctx.last_accessed_unix_ms,
-                }
-            })
+            .map(|entry| self.snapshot_context(entry.key(), entry.value()))
             .collect();
 
         DepGraphSnapshot {
