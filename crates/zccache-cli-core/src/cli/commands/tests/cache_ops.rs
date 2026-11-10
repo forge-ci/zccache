@@ -5,6 +5,37 @@
 
 use super::super::cache_ops::warm_target;
 
+#[test]
+fn warm_restores_incremental_entries_without_an_index_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let index_path = dir.path().join("index.bin");
+    let artifact_dir = dir.path().join("artifacts");
+    let target_dir = dir.path().join("target");
+    let key = "a".repeat(64);
+    seed_staged_fixture(&artifact_dir, &key, b"obj");
+    let store = crate::artifact::ArtifactStore::open_empty(&index_path);
+    store.insert(
+        &key,
+        &crate::artifact::ArtifactIndex::new(
+            vec!["libserde-abc123.rlib".into()],
+            vec![3],
+            vec![],
+            vec![],
+            0,
+        ),
+    );
+    store.flush_incremental().unwrap();
+    assert!(!index_path.exists());
+    assert_eq!(
+        warm_target(&index_path, &artifact_dir, &target_dir, "debug", None).unwrap(),
+        (1, 0, 0)
+    );
+    assert_eq!(
+        std::fs::read(target_dir.join("debug/deps/libserde-abc123.rlib")).unwrap(),
+        b"obj"
+    );
+}
+
 #[derive(serde::Serialize)]
 struct StagedManifestFixture {
     version: u32,

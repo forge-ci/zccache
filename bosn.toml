@@ -104,6 +104,38 @@ repo = { source = ".", destination = "/work" }
 stack = "gate"
 cmd = "bash ci/docker/gate/run_gate_tests.sh"
 
+[task.incremental-persistence-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib incremental --locked -- --nocapture"
+
+[task.incremental-context-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-depgraph --lib incremental --locked -- --nocapture"
+
+[task.incremental-migration-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact -p zccache-depgraph --lib incremental_startup --locked -- --nocapture"
+
+[task.incremental-crash-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib incremental_crash --locked -- --nocapture"
+
+[task.orphan-persistence-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib orphan_reconcile --locked -- --nocapture"
+
+[task.incremental-store-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact -p zccache-depgraph --lib --locked"
+
+[task.incremental-daemon-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run -p zccache-daemon-core --features test-support --lib -E 'test(incremental_crash) | test(orphan_reconcile) | test(maintenance_schedule) | test(depgraph_save_failure) | test(wal::)' --status-level fail --final-status-level fail --failure-output immediate --success-output never"
+
+[task.incremental-warm-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features test-support --lib warm_restores_incremental --locked -- --nocapture"
+
 [task.durable-payload-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cached_artifact --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec::tests --locked -- --nocapture"

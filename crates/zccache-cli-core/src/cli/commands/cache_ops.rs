@@ -364,7 +364,7 @@ pub(crate) fn warm_target_with_mode(
     lockfile: Option<&Path>,
     mode: crate::core::config::MaterializationMode,
 ) -> Result<(u64, u64, u64), String> {
-    if !index_path.exists() {
+    if !crate::artifact::ArtifactStore::has_persisted_index(index_path) {
         return Err(format!("no artifact index at {}", index_path.display()));
     }
 

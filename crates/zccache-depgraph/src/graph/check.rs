@@ -284,8 +284,7 @@ impl DepGraph {
             }
         };
 
-        entry.last_accessed_unix_ms = now_unix_ms();
-        self.mark_dirty();
+        entry.last_accessed_unix_ms = self.record_context_access(key, now_unix_ms());
 
         if entry.state == ContextState::Cold || entry.artifact_key.is_none() {
             tracing::debug!(
@@ -499,8 +498,7 @@ impl DepGraph {
             }
         };
 
-        entry.last_accessed_unix_ms = now_unix_ms();
-        self.mark_dirty();
+        entry.last_accessed_unix_ms = self.record_context_access(key, now_unix_ms());
 
         if entry.state == ContextState::Cold || entry.artifact_key.is_none() {
             self.misses.fetch_add(1, Ordering::Relaxed);

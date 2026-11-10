@@ -205,6 +205,12 @@ impl ArtifactStoreLoader {
             self.state.cache_dir.as_path(),
             super::index_reconcile::reconcile_budget(),
         );
+        if let Err(error) = super::orphan_reconcile::reconcile(
+            &self.state,
+            super::index_reconcile::reconcile_budget(),
+        ) {
+            tracing::warn!(%error, "startup orphan reconciliation deferred");
+        }
         self.state
             .artifact_store_loaded
             .store(true, Ordering::Release);

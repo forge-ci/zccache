@@ -51,7 +51,7 @@ pub fn export_store_snapshot(
     validate_compatibility(compatibility)?;
     let _writer = zccache_core::cache_root_lock::CacheRootWriterLock::acquire(cache_root)?;
     let index = cache_root.join("index.bin");
-    let store = ArtifactStore::from_snapshot(&index, &fs::read(&index)?)?;
+    let store = ArtifactStore::open_export_source(&index)?;
     export_snapshot(
         &store,
         &cache_root.join("artifacts"),
@@ -214,6 +214,24 @@ mod tests {
             &ArtifactIndex::new(vec!["unit.o".into()], vec![3], vec![], vec![], 0),
         );
         (temp, store, key)
+    }
+
+    #[test]
+    fn incremental_startup_export_reads_commits_without_a_legacy_checkpoint() {
+        let (temp, store, key) = fixture();
+        store.flush_incremental().unwrap();
+        assert!(!temp.path().join("source/index.bin").exists());
+        let compatibility = "b".repeat(64);
+        let snapshot = temp.path().join("snapshot");
+        let receipt =
+            export_store_snapshot(&temp.path().join("source"), &compatibility, &snapshot).unwrap();
+        assert_eq!(receipt.entries, 1);
+        let destination = temp.path().join("restored");
+        import_snapshot(&snapshot, &compatibility, &destination).unwrap();
+        assert!(ArtifactStore::open(&destination.join("index.bin"))
+            .unwrap()
+            .get(&key)
+            .is_some());
     }
 
     fn file_identity(root: &Path) -> BTreeMap<String, Vec<u8>> {

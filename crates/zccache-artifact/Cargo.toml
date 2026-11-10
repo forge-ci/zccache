@@ -41,6 +41,7 @@ tracing = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+zccache-test-support = { workspace = true }
 # Test-only: `#[tokio::test]` needs the runtime in scope. The library
 # itself reaches the runtime through `kernal_api::async_engine`
 # (kernal-api#73).

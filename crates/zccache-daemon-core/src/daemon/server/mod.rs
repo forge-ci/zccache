@@ -217,6 +217,7 @@ mod link_helpers;
 mod link_process;
 mod loaders;
 mod maintenance_schedule;
+mod orphan_reconcile;
 mod out_dir;
 mod pch;
 mod pending_writes;

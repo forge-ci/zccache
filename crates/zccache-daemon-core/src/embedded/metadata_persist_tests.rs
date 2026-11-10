@@ -10,6 +10,9 @@ use super::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+#[path = "incremental_crash_tests.rs"]
+mod incremental_crash;
+
 async fn start_service(cache_root: &std::path::Path) -> ZccacheService {
     let mut audit = AuditConfig::default();
     audit.mode = crate::audit::AuditMode::Off;

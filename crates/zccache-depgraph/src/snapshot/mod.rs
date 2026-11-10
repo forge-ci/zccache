@@ -30,6 +30,7 @@ use super::graph::{ContextEntry, ContextState, DepGraph, FileEntry};
 use super::scanner::{IncludeDirective, IncludeKind};
 use super::search_paths::IncludeSearchPaths;
 
+mod incremental;
 mod persistence;
 pub mod quarantine;
 #[cfg(test)]
@@ -179,7 +180,7 @@ impl DepGraph {
         ctx: &ContextEntry,
     ) -> ContextEntrySnapshot {
         let rustc_externs = self
-            .get_rustc_externs(key)
+            .rustc_extern_inputs(key)
             .unwrap_or_default()
             .into_iter()
             .map(|(name, path)| RustcExternSnapshot {

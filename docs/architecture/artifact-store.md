@@ -1,6 +1,6 @@
 # Disk Artifact Cache
 
-The artifact store persists compiled output files on disk, keyed by content-addressed blake3 hash. The index is an in-memory `DashMap` snapshotted to a bincode blob (`index.bin`); it drives LRU eviction.
+The artifact store persists compiled output files on disk, keyed by content-addressed blake3 hash. The index is an in-memory `DashMap` backed by checksummed journal batches and compatibility snapshots (`index.bin`); it drives LRU eviction.
 
 For how cache keys are computed see [overview.md](overview.md) (section 2.8). For crash recovery see [runtime.md](runtime.md).
 
@@ -335,7 +335,7 @@ The manifest exists primarily for debugging and corruption detection. The cache 
 
 ## Index Schema
 
-The index is a `DashMap<String, ArtifactIndex>` keyed by the artifact's hex cache key, snapshotted whole to `index.bin` as one bincode blob.
+The index remains a `DashMap<String, ArtifactIndex>` keyed by the artifact's hex cache key. Background commits persist changed rows through the existing checksummed, atomic file-per-key `KvStore` under `index.entries/`. `index.bin` remains the legacy import and transport-checkpoint format.
 
 ```rust
 pub struct ArtifactIndex {
@@ -370,16 +370,64 @@ hits and does not publish a durable index row. The deny-level
 `ban_resident_artifact_publication` Dylint confines resident constructors to the
 provisional boundary; runtime ownership and race tests verify the lifecycle.
 
-All mutation methods (`insert`, `insert_many`, `remove`, `remove_batch`, `clear`) are **infallible** — they only touch the in-memory map. Disk I/O happens exclusively in `flush()`, called by the daemon's background WAL writer. See `run_index_writer` in `zccache-daemon-core`.
+All mutation methods (`insert`, `insert_many`, `remove`, `remove_batch`, `clear`) are **infallible** — they only touch the in-memory map. The background index writer calls `flush_incremental_async()` on the blocking lane; `flush()` creates explicit transport/shutdown checkpoints. See `run_index_writer` in `zccache-daemon-core`.
 
-### Why not redb
+### Incremental durability (#1954)
 
-The rationale lives with the code, in the `## Why not redb` module doc of [`crates/zccache-artifact/src/store.rs`](../../crates/zccache-artifact/src/store.rs). In short: the daemon already holds a complete authoritative copy of the index in memory, so the on-disk file is only read at startup. A bincode blob is one sequential write per flush instead of one fsync per commit, and a single `fs::read` + deserialize at startup.
+Queued metadata commits every 100 ms by default, or earlier at the existing
+pending-entry limit. One checksummed atomic KV publication commits each batch,
+amortizing fsync across changed entries. Independent publishers use unique
+segment names. The daemon's existing cache-root ownership policy still applies.
+Warm lookups remain entirely in memory.
 
-The tradeoff is durability granularity — a crash *between* flushes loses the whole delta, where an ACID store would recover to the last committed transaction. This is acceptable because the artifact files themselves remain on disk: the worst case is a re-miss on the unflushed keys, which the daemon repopulates on next access. Graceful shutdown flushes synchronously.
+Startup schedules legacy imports even without a new compile. The blocking
+writer reads the old index/context snapshot before publishing a base checkpoint,
+so deferred loading cannot hide older entries. Until that checkpoint exists,
+startup overlays committed batches onto the legacy snapshot. Afterwards, the
+journal is authoritative; old blobs remain compatibility/export checkpoints.
+Failed batches remain pending for retry. Global clear publishes an empty base
+instead of writing one tombstone for every removed entry.
 
-> [!NOTE]
-> A prior design used redb here (DD-008). It was superseded; see [DESIGN_DECISIONS.md](../DESIGN_DECISIONS.md) DD-008 for the original decision and why it changed. Legacy `index.redb` files are left on disk untouched — remove them with `zccache clear` or by hand.
+The owning daemon folds batches after 2,048 publications under its writer permit.
+Checkpoints record consumed batch IDs before reclaiming old segments, preventing
+interrupted cleanup from resurrecting deleted entries. Readers retry if a
+checkpoint changes during replay. Large records use content-addressed chunks
+published before their manifest, avoiding the KV value-size limit for legacy
+context databases. Compaction requires the cache-root owner and quiesced
+publishers. Versioned records retain bounded bincode encoding; this change does
+not resolve the separate serialization migration in #1948.
+
+Startup also reconciles unindexed payloads under publication exclusion. It first
+requires the index writer to confirm all queued metadata, so a payload awaiting
+an index commit is not mistaken for garbage. Verified single-output staged
+artifacts reuse the existing conservative recovery policy. Unrecoverable staged
+generations are removed only if their generation still matches the scan;
+unindexed legacy flat/pack files are removed through the existing COW cleanup
+owner. A missing writer defers cleanup. The scan retains its explicit budget.
+
+Lookups still read only the in-memory map. Filesystem work happens behind
+data-free operation permits on blocking workers. Cache payload bytes and
+materialized-output mtimes are unchanged. A killed process can lose work still
+queued or being published; entries whose atomic publications completed survive
+without running a shutdown drain. The process-kill regression waits for both
+index and context commits, kills the embedded host, and verifies a cache hit
+without either whole-store checkpoint.
+
+Dependency contexts use the same KV owner under `depgraph/depgraph.entries/`,
+with a namespace tied to `DEPGRAPH_VERSION`. Completed context updates enqueue
+keys and retention timestamps; eviction enqueues tombstones. The blocking
+writer captures the current full row, including late env-dep/extern changes.
+Access refreshes also queue only keys and timestamps, so an active context does
+not expire against an old retention timestamp after restart. Derived include-scan nodes
+are rebuilt lazily rather than restored from an older checkpoint. This adds a
+`zccache-depgraph` dependency on `zccache-artifact` specifically to reuse its
+existing durable KV implementation instead of duplicating atomic-file logic.
+
+The large Docker performance matrix is waived by #2170. Focused Rust duration
+budgets cover in-memory lookup and per-entry persistence. Cross-checkout key
+normalization remains separate: `-C metadata` participates in Rust crate
+identity, and renaming cached files alone cannot establish output compatibility.
+
 
 ## Daemon-owned retention policy
 
