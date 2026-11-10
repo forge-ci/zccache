@@ -1,6 +1,8 @@
 //! Typed persistence outcomes and bounded publication diagnostics.
 
-use super::*;
+use super::{
+    write_session_log, ArtifactIndex, IndexWriterCommand, SessionId, SharedState, StagedPublishFailure,
+};
 
 pub(super) const MAX_STAGED_PUBLICATION_ERROR_CHARS: usize = 512;
 
