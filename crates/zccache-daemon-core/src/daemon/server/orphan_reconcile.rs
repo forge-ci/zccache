@@ -3,8 +3,8 @@
 use super::{IndexWriterCommand, SharedState};
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use zccache_core::NormalizedPath;
 
 fn known(state: &SharedState, key: &str) -> bool {
     state.artifacts.contains_key(key) || state.artifact_store.get(key).is_some()
@@ -14,7 +14,7 @@ fn legacy_orphans(
     state: &SharedState,
     started: Instant,
     budget: Duration,
-) -> io::Result<Vec<(String, PathBuf)>> {
+) -> io::Result<Vec<(String, NormalizedPath)>> {
     let mut orphans = Vec::new();
     let entries = match std::fs::read_dir(&state.artifact_dir) {
         Ok(entries) => entries,
@@ -34,7 +34,7 @@ fn legacy_orphans(
             continue;
         };
         if !known(state, key) {
-            orphans.push((key.to_string(), entry.path()));
+            orphans.push((key.to_string(), NormalizedPath::new(entry.path())));
         }
     }
     Ok(orphans)
