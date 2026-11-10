@@ -911,7 +911,7 @@ pub(super) async fn handle_link_ephemeral(
             };
 
             // Build CachedArtifact once (no deep copies — all Arc clones).
-            let cached = CachedArtifact::from_artifact_data_with_modes(&artifact, output_modes);
+            let cached = ProvisionalArtifact::new(&artifact, output_modes);
 
             // Persist source paths in the background via hardlink/copy (#296),
             // retaining resident bytes for immediate warm hits.
@@ -932,7 +932,7 @@ pub(super) async fn handle_link_ephemeral(
             let cacheable = {
                 let artifact_dir = state.artifact_dir.clone();
                 let kh = key_hex.clone();
-                let persist_meta = cached.meta.clone();
+                let persist_meta = cached.meta().clone();
                 let source_paths: Vec<NormalizedPath> = read_targets
                     .iter()
                     .map(|(_, path, _)| NormalizedPath::from(path.as_path()))
@@ -978,7 +978,9 @@ pub(super) async fn handle_link_ephemeral(
                     }
                 } else {
                     let sem = Arc::clone(&state.persist_semaphore);
-                    state.artifacts.insert(key_hex.clone(), cached.clone());
+                    cached.publish(&state.artifacts, key_hex.clone());
+                    let published = cached.clone();
+                    let persist_state = Arc::clone(state);
                     let publication_guard_for_task = publication_guard
                         .take()
                         .expect("link publication acquired an owned guard");
@@ -997,7 +999,8 @@ pub(super) async fn handle_link_ephemeral(
                             let _publication_guard = publication_guard_for_task;
                             if persist_artifact_payloads(&artifact_dir, &kh, &payloads).is_ok() {
                                 let _ = index_writer_tx
-                                    .send(IndexWriterCommand::Insert(kh, persist_meta));
+                                    .send(IndexWriterCommand::Insert(kh.clone(), persist_meta));
+                                published.demote_to_durable(&persist_state.artifacts, &kh);
                             }
                         })
                         .detach_on_drop()
@@ -1014,7 +1017,7 @@ pub(super) async fn handle_link_ephemeral(
                 .unwrap_or(0);
 
             if cacheable && publication_guard.is_some() {
-                state.artifacts.insert(key_hex.clone(), cached);
+                state.artifacts.insert(key_hex.clone(), cached.durable());
                 tracing::debug!(%key_hex, "link artifact cached");
             }
             drop(publication_guard);

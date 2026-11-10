@@ -41,6 +41,7 @@ exclude = [
     "dylints/ban_swallowed_child_stdio",
     "dylints/ban_raw_env_flag",
     "dylints/ban_raw_network_access",
+    "dylints/ban_resident_artifact_publication",
 ]
 
 [workspace.package]

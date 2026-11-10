@@ -9,6 +9,10 @@
 use super::*;
 use std::sync::OnceLock;
 
+#[path = "cached_artifact_provisional.rs"]
+mod provisional;
+pub(super) use provisional::ProvisionalArtifact;
+
 #[derive(Clone)]
 pub(crate) enum CachedPayload {
     /// Payload bytes already resident in memory.
@@ -73,6 +77,7 @@ impl MaterializationPayloads {
     }
 }
 
+#[derive(Clone)]
 struct ArtifactAccess {
     last_used: std::time::Instant,
     last_used_wall: std::time::SystemTime,
@@ -165,9 +170,8 @@ impl CachedArtifact {
         }
     }
 
-    /// Create from a freshly compiled `ArtifactData`. Payload mapping is
-    /// 1:1 between the protocol `ArtifactPayload` enum and the internal
-    /// `CachedPayload` enum.
+    /// Test fixture constructor; production entries require a provisional owner.
+    #[cfg(test)]
     pub(super) fn from_artifact_data(artifact: &ArtifactData) -> Self {
         Self::from_artifact_data_with_modes(artifact, Vec::new())
     }
@@ -554,7 +558,7 @@ pub(super) fn migrate_meta_files(
                 .collect::<Option<_>>()?;
             persist_migrated_artifact_payloads(artifact_dir, &stem, &payloads).ok()?;
 
-            let cached = CachedArtifact::from_artifact_data(&artifact);
+            let cached = ProvisionalArtifact::new(&artifact, Vec::new()).durable();
             Some((stem, cached, path.clone()))
         })
         .collect();

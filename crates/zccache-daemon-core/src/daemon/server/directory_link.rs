@@ -49,7 +49,7 @@ pub(super) fn cache_staged_directory_link(
         stderr: Arc::clone(stderr),
         exit_code: 0,
     };
-    let cached = CachedArtifact::from_artifact_data(&artifact);
+    let cached = ProvisionalArtifact::new(&artifact, Vec::new());
     let payload_size = usize::try_from(bundle_size).unwrap_or(usize::MAX);
     state
         .in_flight_bytes
@@ -59,9 +59,9 @@ pub(super) fn cache_staged_directory_link(
         size: payload_size,
     };
     let cacheable =
-        publish_and_materialize_staged_directory(state, plan, key, cached.meta.clone())?;
+        publish_and_materialize_staged_directory(state, plan, key, cached.meta().clone())?;
     if cacheable {
-        state.artifacts.insert(key.to_string(), cached);
+        state.artifacts.insert(key.to_string(), cached.durable());
         tracing::debug!(%key, "directory artifact cached");
     }
     Ok(())

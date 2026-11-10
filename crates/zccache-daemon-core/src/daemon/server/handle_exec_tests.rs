@@ -27,6 +27,116 @@ fn empty_extra() -> Arc<Vec<u8>> {
     Arc::new(Vec::new())
 }
 
+#[tokio::test]
+async fn old_exec_persist_completion_preserves_new_same_key_instance() {
+    let temp = tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let cache_dir: NormalizedPath = temp.path().join("cache").into();
+    let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    let blocked = Arc::clone(&server.state.persist_semaphore)
+        .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
+        .await
+        .unwrap();
+    let artifact = |value: &[u8]| ArtifactData {
+        outputs: vec![ArtifactOutput {
+            name: "result.bin".to_string(),
+            payload: ArtifactPayload::Bytes(Arc::new(value.to_vec())),
+        }],
+        stdout: empty_extra(),
+        stderr: empty_extra(),
+        exit_code: 0,
+    };
+    let key = "e".repeat(64);
+    let gate = PublicationHandoffGate::new();
+    let task_state = Arc::clone(&server.state);
+    let task_gate = Arc::clone(&gate);
+    let task_key = key.clone();
+    let old = artifact(b"old");
+    let publisher = tokio::spawn(async move {
+        store_exec_artifact_with_handoff_gate(&task_state, task_key, old, task_gate).await
+    });
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_acquired())
+        .await
+        .unwrap();
+    gate.resume();
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, publisher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let newer = CachedArtifact::from_artifact_data(&artifact(b"new"));
+    server.state.artifacts.insert(key.clone(), newer.clone());
+    drop(blocked);
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_persisted())
+        .await
+        .unwrap();
+    let current = server.state.artifacts.get(&key).unwrap().clone();
+    assert!(
+        current.same_instance(&newer),
+        "stale completion replaced the newer instance"
+    );
+    let payloads =
+        ensure_payloads_for_materialization(&current, &server.state.artifact_dir, &key).unwrap();
+    assert!(matches!(&payloads[0], CachedPayload::Bytes(bytes) if bytes.as_slice() == b"new"));
+}
+
+#[tokio::test]
+async fn failed_exec_persistence_retains_a_correct_resident_hit() {
+    let temp = tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let cache_dir: NormalizedPath = temp.path().join("cache").into();
+    let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    // A regular file at the artifact-directory path forces a real I/O failure.
+    let artifact_dir = server.state.artifact_dir.as_path();
+    std::fs::rename(artifact_dir, temp.path().join("saved-artifacts")).unwrap();
+    std::fs::write(artifact_dir, b"not a directory").unwrap();
+    let bytes = Arc::new(b"survives failed persistence".to_vec());
+    let weak = Arc::downgrade(&bytes);
+    let artifact = ArtifactData {
+        outputs: vec![ArtifactOutput {
+            name: "result.bin".to_string(),
+            payload: ArtifactPayload::Bytes(bytes),
+        }],
+        stdout: empty_extra(),
+        stderr: empty_extra(),
+        exit_code: 0,
+    };
+    let key = "d".repeat(64);
+    let gate = PublicationHandoffGate::new();
+    let task_state = Arc::clone(&server.state);
+    let task_gate = Arc::clone(&gate);
+    let task_key = key.clone();
+    let publisher = tokio::spawn(async move {
+        store_exec_artifact_with_handoff_gate(&task_state, task_key, artifact, task_gate).await
+    });
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_acquired())
+        .await
+        .unwrap();
+    gate.resume();
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, publisher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_persisted())
+        .await
+        .unwrap();
+    assert!(weak.upgrade().is_some());
+    let cached = server.state.artifacts.get(&key).unwrap().clone();
+    let payloads = ensure_payloads_for_materialization(&cached, artifact_dir, &key).unwrap();
+    let destination: NormalizedPath = temp.path().join("restored.bin").into();
+    write_payloads_par_observed(
+        std::slice::from_ref(&destination),
+        &payloads,
+        MaterializationMode::Auto,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"survives failed persistence"
+    );
+}
+
 /// #1965: disk publication must release the live map's payload ownership.
 #[tokio::test]
 async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
@@ -34,6 +144,10 @@ async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
     let endpoint = crate::ipc::unique_test_endpoint();
     let cache_dir: NormalizedPath = temp.path().join("cache").into();
     let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+    let blocked_persist = Arc::clone(&server.state.persist_semaphore)
+        .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
+        .await
+        .unwrap();
     let bytes = Arc::new(b"durable exec payload".to_vec());
     let weak = Arc::downgrade(&bytes);
     let artifact = ArtifactData {
@@ -68,6 +182,16 @@ async fn persisted_exec_releases_resident_bytes_and_serves_disk_hit() {
         .unwrap()
         .unwrap()
         .unwrap();
+    {
+        let cached = server.state.artifacts.get(&key).unwrap().clone();
+        let payloads =
+            ensure_payloads_for_materialization(&cached, &server.state.artifact_dir, &key).unwrap();
+        assert!(
+            matches!(&payloads[0], CachedPayload::Bytes(bytes) if bytes.as_slice() == b"durable exec payload")
+        );
+        assert!(weak.upgrade().is_some());
+    }
+    drop(blocked_persist);
     tokio::time::timeout(HANDOFF_HANG_DETECTOR, gate.wait_until_persisted())
         .await
         .unwrap();

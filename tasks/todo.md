@@ -1,3 +1,15 @@
+# #1965 durable payload demotion
+
+- [x] Read handoffs, issue, repository rules, and soldr reference design.
+- [x] Audit compile, link, exec, directory link, and legacy migration.
+- [ ] Capture ownership-based RED in isolated Bosn exec publication test.
+- [ ] Add durable/provisional publication owner and identity-checked demotion.
+- [ ] Cover release, stale completion, failure, provisional hits, and disk hits.
+- [ ] Add deny-level Dylint and positive/negative alias/UFCS/function-item fixtures.
+- [ ] Document residency and add warm file-backed delivery regression budget.
+- [ ] Run isolated Dylint job, lint/clippy, review, and final committed-tree gate.
+- [ ] Push, create PR with closing reference, enable auto-merge, post outcome.
+
 # #2038 — bounded kernal-api waits
 
 - [x] Inspect 0.1.34–0.1.40 compatibility and inventory compiler deprecations.

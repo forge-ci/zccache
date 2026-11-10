@@ -830,7 +830,7 @@ fn store_single_output(
         .iter()
         .map(|o| o.payload.size_bytes())
         .sum();
-    let cached = CachedArtifact::from_artifact_data(&artifact);
+    let cached = ProvisionalArtifact::new(&artifact, Vec::new());
     let persist_payloads: Vec<Arc<Vec<u8>>> = artifact
         .outputs
         .iter()
@@ -841,7 +841,7 @@ fn store_single_output(
 
     let artifact_dir = state.artifact_dir.clone();
     let key_hex = artifact_key_hex.to_string();
-    let persist_meta = cached.meta.clone();
+    let persist_meta = cached.meta().clone();
     let mut source_paths: Vec<NormalizedPath> = vec![output_path.clone()];
     if let Some(dep_path) = depfile_source_path {
         source_paths.push(dep_path);
@@ -924,7 +924,7 @@ fn store_single_output(
         }
         stats.persist_enqueue_ns = t_persist_enqueue.elapsed().as_nanos() as u64;
         if written {
-            state.artifacts.insert(artifact_key_hex.to_string(), cached);
+            state.artifacts.insert(artifact_key_hex.to_string(), cached.durable());
         }
         let latency_ns = compile_start.elapsed().as_nanos() as u64;
         state.stats.record_miss(latency_ns, artifact_bytes);
@@ -945,9 +945,9 @@ fn store_single_output(
     // both success and failure paths (failure wakes waiters → re-lookup
     // misses → recompile; the DD-025 failure-mode-is-miss invariant).
     // Publish the in-process payload before handing persistence to the
-    // detached task. A failed persist removes this provisional entry, while
-    // the typed outcome below prevents the durable index publication.
-    state.artifacts.insert(artifact_key_hex.to_string(), cached);
+    // detached task. A failed persist retains its owned bytes for correct
+    // in-process hits, while the typed outcome prevents durable index publication.
+    cached.publish(&state.artifacts, artifact_key_hex.to_string());
     let _pending = pending_writes::register(&state.pending_cache_writes, artifact_key_hex);
     let sem = Arc::clone(&state.persist_semaphore);
     let state_ref = Arc::clone(state_arc);
@@ -1032,16 +1032,12 @@ fn store_single_output(
                             .count(StagedCounter::PublicationSuccess);
                     }
                 }
-                if !published {
-                    // This entry was only provisional while the filesystem
-                    // publish ran. Do not retain a lookup row for a failed
-                    // persist, or a later hit could point at missing payloads.
-                    state_ref.artifacts.remove(&completion_key);
+                if published {
+                    cached.demote_to_durable(&state_ref.artifacts, &completion_key);
                 }
             }
             Err(error) => {
                 tracing::warn!(%error, "artifact persistence task failed to join");
-                state_ref.artifacts.remove(&completion_key);
             }
         }
         // Always complete the pending entry, even on JoinError, so
