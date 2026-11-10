@@ -82,3 +82,32 @@ fn perf_write_seal_repeated_hit_sealing_budget() {
     assert_write_denied(&blob, dir.path());
     make_writable(&blob).unwrap();
 }
+
+/// Digest generations exceed MAX_PATH even with an ordinary short cache root.
+#[test]
+fn write_seal_roundtrip_beyond_legacy_max_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut parent = dir.path().join("artifacts");
+    while parent.as_os_str().len() < 280 {
+        parent = parent.join("staged-cache-segment");
+    }
+    std::fs::create_dir_all(&parent).unwrap();
+    let blob = parent.join("output-0");
+    std::fs::write(&blob, b"original").unwrap();
+    assert!(blob.as_os_str().len() > 260);
+
+    // Exercise both the ordinary stored path and Rust's verbatim Windows form.
+    let native = kernal_api::platform::fs::native_call_path(&blob).unwrap();
+    for path in [&blob, &native] {
+        seal_cache_blob(path).unwrap();
+        assert_write_denied(path, dir.path());
+        make_writable(path).unwrap();
+        assert!(!is_sealed(path).unwrap());
+        std::fs::write(path, b"writable").unwrap();
+    }
+    // read_dir paths also feed staged maintenance and eviction.
+    let entry = std::fs::read_dir(&parent).unwrap().next().unwrap().unwrap();
+    seal_cache_blob(&entry.path()).unwrap();
+    remove_registered_blob(&entry.path()).unwrap();
+    assert!(!blob.exists());
+}

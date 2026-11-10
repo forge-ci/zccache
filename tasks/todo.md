@@ -1836,3 +1836,10 @@ a separate behavior decision and regression coverage.
 - [x] GREEN: 33 focused depgraph tests and 19 daemon system-include tests passed (one existing ignored test). Includes header edits through `-isystem` / `C_INCLUDE_PATH`, failed probes, Clang fallback and daemon restart.
 - [x] Subsystem docs updated; `clud-review` clean after fixture timestamp correction.
 - Delivery: run clean-tree local gate, push PR closing #1879, enable auto-merge. Perf matrix waived by coordinator under #2170; no new hit-path operations.
+
+## Windows staged-store ACL paths (#1791)
+
+- [x] Trace cc8d8772 and failing Windows run 42730062946 into kernal-api 0.1.33.
+- [x] Adapt staged cache paths with the existing native_call_path facade before ACL operations.
+- [x] Add a portable long-path seal/query/unseal/removal regression test.
+- [ ] Validate with the pinned local gate and full Windows PR coverage.
