@@ -19,6 +19,7 @@ pub(super) struct Cache<'tcx> {
     pub(super) incomplete_epoch: usize,
     incomplete_functions: HashSet<usize>,
     drops: HashMap<(ty::Ty<'tcx>, ty::TypingEnv<'tcx>), u8>,
+    pub(super) dyn_summaries: HashMap<(ty::Ty<'tcx>, ty::TypingEnv<'tcx>), Option<(u8, bool)>>,
     targets: HashMap<LocalDefId, Vec<Target<'tcx>>>,
     guards: HashMap<(ty::Ty<'tcx>, super::guard_types::Scope), bool>,
 }
@@ -36,6 +37,9 @@ impl<'tcx> Cache<'tcx> {
     }
 
     pub(super) fn reset(&mut self) -> &mut Self {
+        // An independent query cannot inherit an active/partial cycle answer.
+        self.dyn_summaries
+            .retain(|_, result| matches!(*result, Some((_, true))));
         self.entries.clear();
         self.indices.clear();
         self.depth = 0;
@@ -370,7 +374,7 @@ pub(super) fn drop_value<'tcx>(
             }
         }
     }
-    let key = (value, cx.typing_env());
+    let key = (cx.tcx.erase_and_anonymize_regions(value), cx.typing_env());
     if let Some(effects) = summaries.drops.get(&key) {
         return *effects;
     }

@@ -12,15 +12,14 @@
 //! through every local use of its function, following generic callers up to
 //! a fixed depth. An exported generic function, or one deeper than that
 //! bound, keeps the conservative unknown effect. Each trait's result is
-//! memoized only when complete; a trait reached again while it is being
-//! resolved contributes nothing further on that cycle. Finished partial
-//! summaries are recomputed when reached from another root.
+//! memoized within one effect root; a trait reached again while it is being
+//! resolved contributes nothing further on that cycle. Only complete,
+//! context-keyed summaries survive into another root.
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{intravisit, Expr, ExprKind, HirId};
 use rustc_lint::LateContext;
 use rustc_middle::ty::{self, TypeVisitableExt};
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 enum Site {
@@ -41,8 +40,6 @@ thread_local! {
     // One driver invocation lints one crate. Sites are plain HIR ids; types
     // are recomputed from the cached typeck query on demand.
     static SITES: RefCell<Option<Vec<(LocalDefId, Site)>>> = const { RefCell::new(None) };
-    /// `None` while active, then (effects, complete). Never reuse partial bits.
-    static RESOLVED: RefCell<HashMap<Option<String>, Option<(u8, bool)>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn drop_effects<'tcx>(
@@ -52,16 +49,27 @@ pub(super) fn drop_effects<'tcx>(
     active: &mut Vec<ty::Ty<'tcx>>,
 ) -> u8 {
     let principal = principal(cx, object);
+    // HIR sources retain regions that MIR has erased. Drop effects do not
+    // depend on region names; retain the typing environment for trait bounds.
+    let key = (cx.tcx.erase_and_anonymize_regions(object), cx.typing_env());
     let epoch = summaries.incomplete_epoch;
-    match RESOLVED.with(|resolved| resolved.borrow().get(&principal).copied()) {
-        Some(Some((effects, true))) => return effects,
+    match summaries.dyn_summaries.get(&key).copied() {
+        Some(Some((effects, complete))) => {
+            if !complete {
+                summaries.incomplete_epoch += 1;
+            }
+            return effects;
+        }
         Some(None) => {
             summaries.incomplete_epoch += 1;
             return 0;
         }
-        Some(Some((_, false))) | None => {}
+        None => {}
     }
-    RESOLVED.with(|resolved| resolved.borrow_mut().insert(principal.clone(), None));
+    summaries.dyn_summaries.insert(key, None);
+    if std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE").is_some() {
+        super::effects::explain_trace(format_args!("dyn sources {object}"));
+    }
     let sites = SITES.with(|cell| cell.borrow_mut().get_or_insert_with(|| collect(cx)).clone());
     let mut effects = 0;
     for &(owner, site) in &sites {
@@ -114,11 +122,9 @@ pub(super) fn drop_effects<'tcx>(
         }
     }
     let complete = summaries.incomplete_epoch == epoch;
-    RESOLVED.with(|resolved| {
-        resolved
-            .borrow_mut()
-            .insert(principal, Some((effects, complete)))
-    });
+    summaries
+        .dyn_summaries
+        .insert(key, Some((effects, complete)));
     effects
 }
 

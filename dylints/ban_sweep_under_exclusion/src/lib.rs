@@ -271,6 +271,15 @@ fn ui() {
         "a complete destructor summary must be reused across recursive roots: {}",
         trace.display()
     );
+    assert_eq!(
+        summaries
+            .lines()
+            .filter(|line| { line.starts_with("dyn sources ") && line.contains("MemoCycleB") })
+            .count(),
+        3,
+        "partial dyn summaries must be reused within each root, then discarded: {}",
+        trace.display()
+    );
     match previous_trace {
         Some(value) => std::env::set_var("ZCCACHE_DYLINT_EXPLAIN_TRACE", value),
         None => std::env::remove_var("ZCCACHE_DYLINT_EXPLAIN_TRACE"),
