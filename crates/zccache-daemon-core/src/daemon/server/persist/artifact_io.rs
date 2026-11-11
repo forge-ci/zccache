@@ -51,8 +51,8 @@ pub(in crate::daemon::server) fn persist_artifact_output(
     let mut digest = DigestSidecarGuard::for_blob(cache_path)
         .map_err(|e| enrich_persist_err(e, None, cache_path))?;
     let result = (|| {
-        std::fs::write(&tmp_path, payload)?;
-        crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
+        std::fs::write(tmp_path, payload)?;
+        crate::platform::fs::permissions::set_cache_blob_sealed(tmp_path, readonly_enabled())?;
         // Write the digest sidecar for cache_path's *final* name while the
         // bytes are still private at tmp_path, so the rename that publishes
         // the blob is the last fallible step. Writing the digest *after*
@@ -60,11 +60,11 @@ pub(in crate::daemon::server) fn persist_artifact_output(
         // blob behind if this write failed — which verify_registered_blob
         // would later evict as unverifiable even though it was never
         // tampered with (issue #1042).
-        digest.write_for(&tmp_path, cache_path)?;
-        replace_artifact_cache_file(&tmp_path, cache_path)
+        digest.write_for(tmp_path, cache_path)?;
+        replace_artifact_cache_file(tmp_path, cache_path)
     })();
     if let Err(e) = result {
-        let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
+        let _ = crate::platform::fs::permissions::make_writable(tmp_path);
         let _ = destination.unlink();
         digest.defer_rollback(cache_path);
         return Err(enrich_persist_err(e, None, cache_path));
@@ -263,11 +263,11 @@ pub(in crate::daemon::server) fn persist_artifact_file(
     destination.unlink()?;
     let result = (|| {
         if store_plan.reflink
-            && kernal_api::platform::fs::reflink_file(source_path, &tmp_path).is_ok()
+            && kernal_api::platform::fs::reflink_file(source_path, tmp_path).is_ok()
         {
-            crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
-            digest.write_for(&tmp_path, cache_path)?;
-            replace_artifact_cache_file(&tmp_path, cache_path)?;
+            crate::platform::fs::permissions::set_cache_blob_sealed(tmp_path, readonly_enabled())?;
+            digest.write_for(tmp_path, cache_path)?;
+            replace_artifact_cache_file(tmp_path, cache_path)?;
             return Ok(PersistArtifactFileStats {
                 reflink_count: 1,
                 ..PersistArtifactFileStats::default()
@@ -277,7 +277,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         // (platform-dependent); clear it defensively before the next tier,
         // since std::fs::hard_link fails if the destination already exists.
         let _ = destination.unlink();
-        if store_plan.hardlink && std::fs::hard_link(source_path, &tmp_path).is_ok() {
+        if store_plan.hardlink && std::fs::hard_link(source_path, tmp_path).is_ok() {
             // The hardlink shares the compiler output's inode. Changing its
             // read-only bit through `tmp_path` would also make the still-live
             // source path read-only (and on Windows changes its FILE_ATTRIBUTE_READONLY),
@@ -285,8 +285,8 @@ pub(in crate::daemon::server) fn persist_artifact_file(
             // The hardlink registry's digest verification protects this
             // shared store entry; permission hardening is reserved for
             // independent reflink/copy blobs.
-            digest.write_for(&tmp_path, cache_path)?;
-            replace_artifact_cache_file(&tmp_path, cache_path)?;
+            digest.write_for(tmp_path, cache_path)?;
+            replace_artifact_cache_file(tmp_path, cache_path)?;
             return Ok(PersistArtifactFileStats {
                 hardlink_count: 1,
                 ..PersistArtifactFileStats::default()
@@ -295,10 +295,10 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         // The byte-copy tier creates its destination exclusively; clear any
         // leftover temporary (e.g. from a crashed store) first.
         let _ = destination.unlink();
-        let copy_bytes = mode.copy_file(source_path, &tmp_path)?;
-        crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
-        digest.write_for(&tmp_path, cache_path)?;
-        replace_artifact_cache_file(&tmp_path, cache_path)?;
+        let copy_bytes = mode.copy_file(source_path, tmp_path)?;
+        crate::platform::fs::permissions::set_cache_blob_sealed(tmp_path, readonly_enabled())?;
+        digest.write_for(tmp_path, cache_path)?;
+        replace_artifact_cache_file(tmp_path, cache_path)?;
         Ok(PersistArtifactFileStats {
             copy_count: 1,
             copy_bytes,
@@ -308,7 +308,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
     match result {
         Ok(stats) => Ok(stats),
         Err(e) => {
-            let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
+            let _ = crate::platform::fs::permissions::make_writable(tmp_path);
             let _ = destination.unlink();
             digest.defer_rollback(cache_path);
             Err(enrich_persist_err(e, Some(source_path), cache_path))

@@ -180,7 +180,7 @@ impl StagedSelection {
 struct CorruptSnapshot {
     blob: PinnedName,
     digest: Option<PinnedName>,
-    staged: Option<StagedSelection>,
+    staged: Option<Box<StagedSelection>>,
 }
 impl CorruptSnapshot {
     fn prepare(root: &Path, path: &Path) -> io::Result<Option<Self>> {
@@ -199,7 +199,7 @@ impl CorruptSnapshot {
             }
         }
         let staged = if is_staged_artifact_path(path) {
-            Some(StagedSelection::prepare(root, path)?)
+            Some(Box::new(StagedSelection::prepare(root, path)?))
         } else {
             if path.parent() != Some(root) {
                 return Err(io::Error::other("unsupported cache payload layout"));
