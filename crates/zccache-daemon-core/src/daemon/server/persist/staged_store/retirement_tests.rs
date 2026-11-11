@@ -50,9 +50,33 @@ fn stale_corruption_snapshot_preserves_a_replacement() {
     let publication = crate::core::sync::PublicationBarrier::new();
     let mut trash = trash::DetachedStagedTrash::empty(root.path());
     let writer = publication.try_write().unwrap();
-    commit(root.path(), &Prepared::Corrupt(snapshot), &mut trash).unwrap();
+    let mut prepared = Prepared::Corrupt(snapshot);
+    commit(root.path(), &mut prepared, &mut trash).unwrap();
     drop(writer);
+    drop(prepared);
     trash.sweep_for(crate::core::wait::PROBE).unwrap();
+    assert_eq!(fs::read(&blob).unwrap(), b"replacement");
+    verify_registered_blob(&blob).unwrap();
+}
+
+#[test]
+fn replacement_preserves_a_sealed_hardlink_and_its_open_identity() {
+    use std::io::Read;
+    let root = tempfile::tempdir().unwrap();
+    let blob = root.path().join("blob");
+    persist_artifact_output(&blob, b"original").unwrap();
+    let alias = root.path().join("alias");
+    fs::hard_link(&blob, &alias).unwrap();
+    crate::platform::fs::permissions::seal_cache_blob(&blob).unwrap();
+    let mut original = fs::File::open(&blob).unwrap();
+
+    persist_artifact_output(&blob, b"replacement").unwrap();
+
+    let mut pinned_bytes = Vec::new();
+    original.read_to_end(&mut pinned_bytes).unwrap();
+    assert_eq!(pinned_bytes, b"original");
+    assert_eq!(fs::read(&alias).unwrap(), b"original");
+    assert!(crate::platform::fs::permissions::is_sealed(&alias).unwrap());
     assert_eq!(fs::read(&blob).unwrap(), b"replacement");
     verify_registered_blob(&blob).unwrap();
 }
@@ -144,8 +168,10 @@ fn repointed_orphan_generation_is_preserved_by_a_stale_snapshot() {
     let publication = crate::core::sync::PublicationBarrier::new();
     let writer = publication.try_write().unwrap();
     let mut trash = trash::DetachedStagedTrash::empty(root.path());
-    commit(root.path(), &Prepared::Corrupt(snapshot), &mut trash).unwrap();
+    let mut prepared = Prepared::Corrupt(snapshot);
+    commit(root.path(), &mut prepared, &mut trash).unwrap();
     drop(writer);
+    drop(prepared);
     trash.sweep_for(crate::core::wait::PROBE).unwrap();
     assert!(
         blob.exists(),
