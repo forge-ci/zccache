@@ -169,10 +169,47 @@ pub(crate) mod fs {
     }
 
     pub(crate) mod replace {
+        #[cfg(not(windows))]
         pub(crate) use kernal_api::platform::fs::replacement::{
-            atomic_replace, install_directory, rename_generation as rename_without_replace,
-            replace_with_delete_fallback,
+            atomic_replace, replace_with_delete_fallback,
         };
+        pub(crate) use kernal_api::platform::fs::replacement::{
+            install_directory, rename_generation as rename_without_replace,
+        };
+
+        /// Keep the native write-through fast path. Rust's Windows rename
+        /// additionally supports replacing an open destination using POSIX
+        /// semantics; try that before deleting any existing cache name.
+        #[cfg(windows)]
+        pub(crate) fn atomic_replace(
+            source: &std::path::Path,
+            destination: &std::path::Path,
+        ) -> std::io::Result<()> {
+            kernal_api::platform::fs::replacement::atomic_replace(source, destination).or_else(
+                |error| {
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        kernal_api::platform::fs::rename(source, destination)
+                    } else {
+                        Err(error)
+                    }
+                },
+            )
+        }
+
+        #[cfg(windows)]
+        pub(crate) fn replace_with_delete_fallback(
+            source: &std::path::Path,
+            destination: &std::path::Path,
+        ) -> std::io::Result<()> {
+            // A legacy delete can leave an open destination delete-pending,
+            // preventing publication until its identity pins close.
+            atomic_replace(source, destination).or_else(|_| {
+                kernal_api::platform::fs::replacement::replace_with_delete_fallback(
+                    source,
+                    destination,
+                )
+            })
+        }
     }
 
     /// Windows antivirus/indexer scan windows (#490, #1757): an access-denied

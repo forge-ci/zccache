@@ -74,7 +74,7 @@ pub(in crate::daemon::server) fn has_pending_retirements(root: &Path) -> bool {
 /// A pinned handle prevents inode reuse from turning a stale scan into authority.
 pub(in crate::daemon::server) struct PinnedName {
     path: NormalizedPath,
-    file: fs::File,
+    file: Option<fs::File>,
     metadata: fs::Metadata,
 }
 impl PinnedName {
@@ -90,7 +90,7 @@ impl PinnedName {
         let metadata = file.metadata()?;
         Ok(Self {
             path: path.into(),
-            file,
+            file: Some(file),
             metadata,
         })
     }
@@ -98,9 +98,17 @@ impl PinnedName {
         let current = fs::File::open(&self.path)?;
         let metadata = current.metadata()?;
         Ok(kernal_api::platform::fs::file_identity(&current)?
-            == kernal_api::platform::fs::file_identity(&self.file)?
+            == kernal_api::platform::fs::file_identity(self.pinned_file()?)?
             && metadata.len() == self.metadata.len()
             && metadata.modified()? == self.metadata.modified()?)
+    }
+    fn pinned_file(&self) -> io::Result<&fs::File> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| io::Error::other("retirement identity pin already released"))
+    }
+    fn release_pin(&mut self) {
+        drop(self.file.take());
     }
 }
 fn validate_owned_path(root: &Path, path: &Path) -> io::Result<()> {
@@ -236,8 +244,19 @@ impl CorruptSnapshot {
         }
         Ok(true)
     }
-    fn detach(&self, root: &Path, trash: &mut trash::DetachedStagedTrash) -> io::Result<()> {
-        if let Some(staged) = &self.staged {
+    fn detach(&mut self, root: &Path, trash: &mut trash::DetachedStagedTrash) -> io::Result<()> {
+        // Identity was just revalidated under publication + store exclusion.
+        // These live names now prevent reclamation until the detach. Closing
+        // our read handles cannot free their data, and allows Windows to rename
+        // a generation directory containing those files.
+        self.blob.release_pin();
+        if let Some(digest) = &mut self.digest {
+            digest.release_pin();
+        }
+        if let Some(staged) = &mut self.staged {
+            if let Some(pointer) = &mut staged.pointer {
+                pointer.release_pin();
+            }
             if staged.selected {
                 trash.detach(&staged.pointer_path)?;
             }
@@ -274,7 +293,7 @@ fn prepare(root: &Path, candidate: &Candidate) -> io::Result<Option<Prepared>> {
             let digest_path = zccache_artifact::blob_digest::sidecar_path(blob);
             validate_owned_path(root, &digest_path)?;
             let digest = PinnedName::open(&digest_path)?;
-            if kernal_api::platform::fs::file_identity(&digest.file)?
+            if kernal_api::platform::fs::file_identity(digest.pinned_file()?)?
                 != kernal_api::platform::fs::file_identity(published)?
             {
                 return Ok(None);
@@ -306,7 +325,7 @@ fn prepare(root: &Path, candidate: &Candidate) -> io::Result<Option<Prepared>> {
 }
 fn commit(
     root: &Path,
-    prepared: &Prepared,
+    prepared: &mut Prepared,
     trash: &mut trash::DetachedStagedTrash,
 ) -> io::Result<()> {
     let _store = StagedCommitGuard::acquire_for(root, Duration::from_secs(2))?;
@@ -377,7 +396,7 @@ fn maintain_pending_retirements_for(
     for candidate in candidates {
         let mut trash = trash::DetachedStagedTrash::empty(root);
         let outcome = (|| {
-            let Some(prepared) = prepare(root, &candidate)? else {
+            let Some(mut prepared) = prepare(root, &candidate)? else {
                 return Ok(());
             };
             let Some(publication) = publication_barrier.try_write() else {
@@ -386,8 +405,9 @@ fn maintain_pending_retirements_for(
                     "publication busy",
                 ));
             };
-            let result = commit(root, &prepared, &mut trash);
+            let result = commit(root, &mut prepared, &mut trash);
             drop(publication);
+            // Rollback temporaries must clean up after both exclusions end.
             drop(prepared);
             result
         })();
