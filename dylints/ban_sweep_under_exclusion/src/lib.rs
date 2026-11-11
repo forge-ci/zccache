@@ -259,7 +259,7 @@ fn ui() {
             .filter(|line| line.starts_with("MIR targets ") && line.ends_with("invoke"))
             .count(),
         1,
-        "the generic callback body must be analyzed once across all three instantiations: {}",
+        "the generic callback body must be analyzed once across all three instantiations: {}\n{summaries}",
         trace.display()
     );
     assert_eq!(
@@ -268,7 +268,7 @@ fn ui() {
             .filter(|line| { line.starts_with("drop analysis ") && line.ends_with("CycleCleanup") })
             .count(),
         1,
-        "a complete destructor summary must be reused across recursive roots: {}",
+        "a complete destructor summary must be reused across recursive roots: {}\n{summaries}",
         trace.display()
     );
     assert_eq!(
@@ -277,7 +277,30 @@ fn ui() {
             .filter(|line| { line.starts_with("dyn sources ") && line.contains("MemoCycleB") })
             .count(),
         3,
-        "partial dyn summaries must be reused within each root, then discarded: {}",
+        "partial dyn summaries must be reused within each root, then discarded: {}\n{summaries}",
+        trace.display()
+    );
+    assert_eq!(
+        summaries
+            .lines()
+            .filter(|line| line.starts_with("MIR targets ") && line.ends_with("traced_callback"))
+            .count(),
+        1,
+        "parallel UI compilers must preserve complete trace records: {}\n{summaries}",
+        trace.display()
+    );
+    assert_eq!(
+        summaries
+            .lines()
+            .filter(|line| {
+                line.strip_prefix("MIR targets trace_contention_")
+                    .is_some_and(|suffix| {
+                        suffix.len() == 2 && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+            })
+            .count(),
+        32,
+        "parallel UI compilers must preserve every helper trace record: {}\n{summaries}",
         trace.display()
     );
     match previous_trace {
