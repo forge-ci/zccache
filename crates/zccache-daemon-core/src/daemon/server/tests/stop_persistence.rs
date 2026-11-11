@@ -3,6 +3,36 @@
 use super::super::*;
 
 #[tokio::test]
+async fn stop_persistence_accepts_stdout_only_exec_and_releases_writer() {
+    let cache = tempfile::tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut server = super::bind_isolated_server_at(&endpoint, cache.path());
+    let state = server.test_state_arc();
+    let task = tokio::spawn(async move { server.run(0).await.unwrap() });
+    let artifact = ArtifactData {
+        outputs: Vec::new(),
+        stdout: Arc::new(b"stdout-only result".to_vec()),
+        stderr: Arc::new(Vec::new()),
+        exit_code: 0,
+    };
+    handle_exec::store_exec_artifact(&state, "cd".repeat(32), artifact, None)
+        .await
+        .unwrap();
+    let mut client = crate::ipc::connect(&endpoint).await.unwrap();
+    client.send(&Request::Shutdown).await.unwrap();
+    assert_eq!(
+        client.recv::<Response>().await.unwrap(),
+        Some(Response::ShuttingDown)
+    );
+    tokio::time::timeout(crate::core::wait::HELPER_JOIN, task)
+        .await
+        .unwrap()
+        .unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let _restarted = super::bind_isolated_server_at(&endpoint, cache.path());
+}
+
+#[tokio::test]
 async fn stop_persistence_response_waits_for_detached_publishers() {
     let cache = tempfile::tempdir().unwrap();
     let endpoint = crate::ipc::unique_test_endpoint();

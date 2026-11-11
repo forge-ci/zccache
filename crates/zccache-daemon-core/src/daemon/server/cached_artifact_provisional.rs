@@ -48,9 +48,13 @@ impl ProvisionalArtifact {
         key: &str,
         payloads: &[Arc<Vec<u8>>],
     ) -> std::io::Result<()> {
-        persist_artifact_payloads(&state.artifact_dir, key, payloads).inspect_err(|_| {
-            state.shutdown_completion.fail();
-        })?;
+        // Stdout/stderr-only results live entirely in the index. The staged
+        // payload writer requires at least one file and must not receive them.
+        if !self.meta().output_sizes.is_empty() {
+            persist_artifact_payloads(&state.artifact_dir, key, payloads).inspect_err(|_| {
+                state.shutdown_completion.fail();
+            })?;
+        }
         enqueue_index_insert(state, key.to_string(), self.meta().clone());
         self.demote_to_durable(&state.artifacts, key);
         Ok(())

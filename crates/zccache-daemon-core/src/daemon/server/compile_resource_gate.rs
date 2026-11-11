@@ -734,7 +734,7 @@ mod tests {
             ),
             (
                 "legacy multi-source",
-                include_str!("handle_compile_multi.rs"),
+                include_str!("handle_compile_multi_execute.rs"),
             ),
             (
                 "staged multi-source",
