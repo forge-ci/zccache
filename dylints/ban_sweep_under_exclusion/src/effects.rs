@@ -14,6 +14,8 @@ pub(super) const ESCAPE: u8 = 8;
 #[derive(Default)]
 pub(super) struct Cache<'tcx> {
     entries: Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    indices: HashMap<(DefId, ty::GenericArgsRef<'tcx>), usize>,
+    depth: usize,
     targets: HashMap<LocalDefId, Vec<Target<'tcx>>>,
     guards: HashMap<(ty::Ty<'tcx>, super::guard_types::Scope), bool>,
 }
@@ -32,6 +34,8 @@ impl<'tcx> Cache<'tcx> {
 
     pub(super) fn reset(&mut self) -> &mut Self {
         self.entries.clear();
+        self.indices.clear();
+        self.depth = 0;
         self
     }
 }
@@ -83,25 +87,17 @@ fn function<'tcx>(
     arguments: ty::GenericArgsRef<'tcx>,
     seen: &mut Cache<'tcx>,
 ) -> u8 {
-    if let Some((_, _, effects)) = seen
-        .entries
-        .iter()
-        .find(|(id, args, _)| *id == definition && *args == arguments)
-    {
-        return effects.unwrap_or(0);
+    if let Some(index) = seen.indices.get(&(definition, arguments)) {
+        return seen.entries[*index].2.unwrap_or(0);
     }
-    if seen
-        .entries
-        .iter()
-        .filter(|(_, _, effects)| effects.is_none())
-        .count()
-        >= 128
-    {
+    if seen.depth >= 128 {
         explain_trace(format_args!("call depth limit at {definition:?}"));
         return UNKNOWN;
     }
     let index = seen.entries.len();
     seen.entries.push((definition, arguments, None));
+    seen.indices.insert((definition, arguments), index);
+    seen.depth += 1;
     let result = (|| {
         let path = cx.get_def_path(definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
@@ -244,6 +240,7 @@ fn function<'tcx>(
         })
     })();
     seen.entries[index].2 = Some(result);
+    seen.depth -= 1;
     result
 }
 
