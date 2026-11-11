@@ -89,102 +89,52 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
     match std::fs::metadata(path) {
         Ok(meta) if meta.is_file() => {}
         Ok(_) => return Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     }
-
     if crate::platform::fs::links::hard_link_count(path)? <= 1 {
-        crate::platform::fs::permissions::make_writable(path)?;
-        return Ok(());
+        return crate::platform::fs::permissions::make_writable(path);
     }
-
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("output"))
-        .to_string_lossy();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let pid = std::process::id();
-
-    let mut last_err = None;
-    for attempt in 0..32 {
-        let tmp_path = parent.join(format!(
-            ".zccache-detach-{pid}-{nonce}-{attempt}-{file_name}"
-        ));
-        let copy_result = (|| {
-            let mut src = std::fs::File::open(path)?;
-            let mut dst = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp_path)?;
-            std::io::copy(&mut src, &mut dst)?;
-            // No sync: this private copy replaces a build output that the
-            // compiler or tool rewrites next, and compilers never fsync their
-            // outputs. The rename below is what readers must not observe torn.
-            let permissions = src.metadata()?.permissions();
-            std::fs::set_permissions(&tmp_path, permissions)?;
-            Ok::<(), std::io::Error>(())
-        })();
-
-        match copy_result {
-            Ok(()) => {
-                let registration = prepare_registered_detach(path);
-                if let Err(error) = crate::platform::fs::permissions::make_writable(path) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(error);
-                }
-                if let Err(e) = remove_output_file(path) {
-                    if let Some((_, blob_path)) = &registration {
-                        let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
-                            blob_path,
-                            readonly_enabled(),
-                        );
-                    }
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(e);
-                }
-                if let Err(e) = rename_detached_output(&tmp_path, path) {
-                    if let Some((id, blob_path)) = &registration {
-                        let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
-                            blob_path,
-                            readonly_enabled(),
-                        );
-                        commit_registered_detach(*id, path);
-                    }
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(e);
-                }
-                if let Some((id, _)) = &registration {
-                    commit_registered_detach(*id, path);
-                }
-                crate::platform::fs::permissions::make_writable(path)?;
-                if let Some((_, blob_path)) = registration {
-                    let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
-                        &blob_path,
-                        readonly_enabled(),
-                    );
-                }
-                return Ok(());
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                last_err = Some(e);
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp_path);
-                return Err(e);
-            }
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut source = std::fs::File::open(path)?;
+    std::io::copy(&mut source, temporary.as_file_mut())?;
+    // The next compiler invocation rewrites this independent build output.
+    // Only the rename must be atomic; the transient copy needs no fsync.
+    let permissions = source.metadata()?.permissions();
+    std::fs::set_permissions(temporary.path(), permissions)?;
+    drop(source);
+    let temporary = temporary.into_temp_path();
+    let registration = prepare_registered_detach(path);
+    crate::platform::fs::permissions::make_writable(path)?;
+    if let Err(error) = remove_output_file(path) {
+        if let Some((_, blob_path)) = &registration {
+            let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
+                blob_path,
+                readonly_enabled(),
+            );
         }
+        return Err(error);
     }
-
-    Err(last_err.unwrap_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "failed to create hardlink detach temp file",
-        )
-    }))
+    if let Err(error) = rename_detached_output(&temporary, path) {
+        if let Some((id, blob_path)) = &registration {
+            let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
+                blob_path,
+                readonly_enabled(),
+            );
+            commit_registered_detach(*id, path);
+        }
+        return Err(error);
+    }
+    if let Some((id, _)) = &registration {
+        commit_registered_detach(*id, path);
+    }
+    crate::platform::fs::permissions::make_writable(path)?;
+    if let Some((_, blob_path)) = registration {
+        let _ =
+            crate::platform::fs::permissions::set_cache_blob_sealed(&blob_path, readonly_enabled());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
