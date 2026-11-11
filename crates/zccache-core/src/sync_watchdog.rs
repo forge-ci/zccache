@@ -43,12 +43,21 @@ fn thread_name() -> String {
 }
 
 pub(crate) fn acquisition_failed(site: &Location<'_>, error: super::sync::LockTimeout) -> ! {
+    let _ = report_acquisition_for(site, error, REPORT_GRACE);
+    std::process::abort()
+}
+
+pub(crate) fn report_acquisition_for(
+    site: &Location<'_>,
+    error: super::sync::LockTimeout,
+    bound: Duration,
+) -> bool {
     let entries = with_entries(|entries| entries.clone());
     let text = format!(
         "bounded synchronization failed at {site}: {error}\n{}",
         report(&entries, Instant::now(), false)
     );
-    abort_after_report(reporter(), text)
+    report_for(reporter(), text, bound)
 }
 
 struct Diagnostic {
@@ -87,20 +96,24 @@ fn reporter() -> &'static SyncSender<Diagnostic> {
     })
 }
 
+const REPORT_GRACE: Duration = Duration::from_millis(250);
+
 fn abort_after_report(sender: &SyncSender<Diagnostic>, text: String) -> ! {
+    // Healthy sinks get a chance to finish the complete context. A full
+    // pipe, logging lock, broken worker or full queue cannot defer abort.
+    let _ = report_for(sender, text, REPORT_GRACE);
+    std::process::abort()
+}
+
+fn report_for(sender: &SyncSender<Diagnostic>, text: String, bound: Duration) -> bool {
     let (complete, receiver) = mpsc::sync_channel(1);
-    if sender
+    sender
         .try_send(Diagnostic {
             text,
             complete: Some(complete),
         })
         .is_ok()
-    {
-        // Healthy sinks get a chance to finish the complete context. A full
-        // pipe, logging lock, broken worker or full queue cannot defer abort.
-        let _ = receiver.recv_timeout(Duration::from_millis(250));
-    }
-    std::process::abort()
+        && receiver.recv_timeout(bound).is_ok()
 }
 
 #[cfg(test)]

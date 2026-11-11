@@ -89,6 +89,13 @@ fn assert_termination_with_unread_stderr(case: &str) {
         })
         .expect("fatal reason must reach disk before the blocked stderr write");
     assert!(report.contains("Holding"));
+    if case == "blocked-acquisition-stderr" {
+        assert!(report.contains("Waiting"), "{report}");
+        assert!(
+            report.contains("bounded synchronization failed"),
+            "{report}"
+        );
+    }
     assert!(
         report.contains("bounded synchronization failed") || report.contains("lock hold exceeded")
     );
@@ -117,15 +124,24 @@ fn block_stderr() {
 }
 
 #[test]
-fn essential_acquisition_expiry_dumps_holder_and_waiter_despite_capture() {
+fn essential_acquisition_report_dumps_holder_and_waiter_despite_capture() {
+    let cache = tempfile::tempdir().unwrap();
     let output = crate::wait::output_for(
         kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
             .args(["--exact", "sync::watchdog_tests::watchdog_child"])
-            .env("ZCCACHE_WATCHDOG_TEST_CASE", "acquisition"),
-        Duration::from_secs(5),
+            .env("ZCCACHE_CACHE_DIR", cache.path())
+            .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
+            .env("ZCCACHE_WATCHDOG_TEST_CASE", "acquisition-report"),
+        Duration::from_secs(10),
     )
     .unwrap();
-    assert_ne!(output.exit.raw_code(), 0);
+    assert_eq!(
+        output.exit.raw_code(),
+        0,
+        "diagnostic child failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     for expected in [
         "bounded synchronization failed",
@@ -200,11 +216,20 @@ fn watchdog_child() {
         let _waiter = lock.lock_for(Duration::from_millis(1)).unwrap();
         unreachable!("a held mutex cannot be acquired twice");
     }
-    if case == "acquisition" {
+    if case == "acquisition-report" {
         let lock = crate::blocking_sync::Mutex::with_hold_limit(0, Duration::from_secs(60));
         let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
-        let _waiter = lock.lock_for(Duration::from_millis(1)).unwrap();
-        unreachable!("the second acquisition cannot complete");
+        let site = std::panic::Location::caller();
+        let _waiter = crate::sync_watchdog::Ticket::waiting(&lock, "Mutex", site);
+        // Fatal delivery is best effort within 250 ms, including crash-dump
+        // fsync. Test capture independently by acknowledging the actual write;
+        // blocked-acquisition-stderr separately proves bounded termination.
+        assert!(crate::sync_watchdog::report_acquisition_for(
+            site,
+            LockTimeout(Duration::from_millis(1)),
+            Duration::from_secs(5),
+        ));
+        return;
     }
     if case == "operation" {
         let runtime = tokio::runtime::Builder::new_current_thread()
