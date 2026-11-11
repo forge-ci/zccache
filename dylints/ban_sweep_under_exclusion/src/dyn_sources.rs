@@ -12,8 +12,9 @@
 //! through every local use of its function, following generic callers up to
 //! a fixed depth. An exported generic function, or one deeper than that
 //! bound, keeps the conservative unknown effect. Each trait's result is
-//! memoized; a trait reached again while it is being resolved contributes
-//! nothing further on that cycle.
+//! memoized only when complete; a trait reached again while it is being
+//! resolved contributes nothing further on that cycle. Finished partial
+//! summaries are recomputed when reached from another root.
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{intravisit, Expr, ExprKind, HirId};
 use rustc_lint::LateContext;
@@ -40,7 +41,7 @@ thread_local! {
     // One driver invocation lints one crate. Sites are plain HIR ids; types
     // are recomputed from the cached typeck query on demand.
     static SITES: RefCell<Option<Vec<(LocalDefId, Site)>>> = const { RefCell::new(None) };
-    /// `None` while active, then (effects, complete). Partial answers cannot enter the drop cache.
+    /// `None` while active, then (effects, complete). Never reuse partial bits.
     static RESOLVED: RefCell<HashMap<Option<String>, Option<(u8, bool)>>> = RefCell::new(HashMap::new());
 }
 
@@ -53,17 +54,12 @@ pub(super) fn drop_effects<'tcx>(
     let principal = principal(cx, object);
     let epoch = summaries.incomplete_epoch;
     match RESOLVED.with(|resolved| resolved.borrow().get(&principal).copied()) {
-        Some(Some((effects, complete))) => {
-            if !complete {
-                summaries.incomplete_epoch += 1;
-            }
-            return effects;
-        }
+        Some(Some((effects, true))) => return effects,
         Some(None) => {
             summaries.incomplete_epoch += 1;
             return 0;
         }
-        None => {}
+        Some(Some((_, false))) | None => {}
     }
     RESOLVED.with(|resolved| resolved.borrow_mut().insert(principal.clone(), None));
     let sites = SITES.with(|cell| cell.borrow_mut().get_or_insert_with(|| collect(cx)).clone());
