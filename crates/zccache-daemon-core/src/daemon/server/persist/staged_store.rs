@@ -17,7 +17,7 @@ mod retirement;
 pub(in crate::daemon::server) use retirement::verify_then_retire_blob_for_test;
 pub(in crate::daemon::server) use retirement::{
     has_pending_retirements, maintain_pending_retirements, queue_corrupt_blob,
-    queue_digest_rollback, retirement_wake, verified_corruption, CorruptBlobError,
+    queue_digest_rollback, retirement_wake, verified_corruption, CorruptBlobError, PinnedName,
 };
 mod immediate_children;
 mod maintenance;
@@ -25,6 +25,8 @@ mod maintenance;
 pub(in crate::daemon::server) use crate::core::scan_entry::listed_entry_with;
 pub(in crate::daemon::server) use crate::core::scan_entry::{entry_if_present, listed_entry};
 pub(in crate::daemon::server) use clear_detach::detach_clear_artifact_paths_for;
+pub(in crate::daemon::server) use maintenance::read_generation_pointer_for as read_staged_generation_pointer_for;
+pub(in crate::daemon::server) use pointer_path as staged_generation_pointer_path;
 mod publish;
 mod trash;
 #[cfg(test)]
@@ -282,7 +284,10 @@ fn validate_generation(generation_hex: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn pointer_path(artifact_dir: &Path, key_hex: &str) -> NormalizedPath {
+pub(in crate::daemon::server) fn pointer_path(
+    artifact_dir: &Path,
+    key_hex: &str,
+) -> NormalizedPath {
     staged_root(artifact_dir).join(format!("{key_hex}.current"))
 }
 

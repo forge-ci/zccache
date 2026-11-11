@@ -340,7 +340,7 @@ async fn incremental_startup_recovery_from_sidecar_survives_the_first_journal_co
     std::fs::rename(&fixture.depgraph_path, &mine).unwrap();
     std::fs::copy(&mine, &fixture.depgraph_path).unwrap();
     skew_snapshot_version(fixture.depgraph_path.as_path());
-    let server = fixture.bind();
+    let server = fixture.bind().await;
     assert!(start_with_production_load(
         &server,
         fixture.depgraph_path.as_path()
@@ -365,7 +365,7 @@ async fn incremental_startup_recovery_commits_when_rejected_primary_cannot_be_qu
         crate::depgraph::quarantine::corrupt_sidecar_path(fixture.depgraph_path.as_path());
     std::fs::create_dir_all(&sidecar).unwrap();
     std::fs::write(sidecar.join("block"), b"preserve").unwrap();
-    let mut server = fixture.bind();
+    let mut server = fixture.bind().await;
     let writer = spawn_index_writer(&mut server);
     assert!(!start_with_production_load(
         &server,

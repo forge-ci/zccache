@@ -14,7 +14,7 @@ use std::time::SystemTime;
 // A pointer is control metadata (one digest), never an artifact payload.
 // Bound both allocation and loop work while revalidating under exclusion.
 // The deadline cannot interrupt a single kernel filesystem syscall.
-pub(super) fn read_generation_pointer_for(
+pub(in crate::daemon::server) fn read_generation_pointer_for(
     path: &Path,
     bound: std::time::Duration,
 ) -> io::Result<String> {

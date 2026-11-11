@@ -72,12 +72,19 @@ pub(in crate::daemon::server) fn has_pending_retirements(root: &Path) -> bool {
 }
 
 /// A pinned handle prevents inode reuse from turning a stale scan into authority.
-struct PinnedName {
+pub(in crate::daemon::server) struct PinnedName {
     path: NormalizedPath,
     file: fs::File,
     metadata: fs::Metadata,
 }
 impl PinnedName {
+    pub(in crate::daemon::server) fn open_owned(root: &Path, path: &Path) -> io::Result<Self> {
+        validate_owned_path(root, path)?;
+        Self::open(path)
+    }
+    pub(in crate::daemon::server) fn path(&self) -> &Path {
+        self.path.as_path()
+    }
     fn open(path: &Path) -> io::Result<Self> {
         let file = fs::File::open(path)?;
         let metadata = file.metadata()?;
@@ -87,7 +94,7 @@ impl PinnedName {
             metadata,
         })
     }
-    fn unchanged(&self) -> io::Result<bool> {
+    pub(in crate::daemon::server) fn unchanged(&self) -> io::Result<bool> {
         let current = fs::File::open(&self.path)?;
         let metadata = current.metadata()?;
         Ok(kernal_api::platform::fs::file_identity(&current)?

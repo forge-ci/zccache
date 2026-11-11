@@ -22,6 +22,7 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     PrivatePlanCleanup,
     KvNamespaceSweep,
     IndexFlush,
+    OrphanPlanReady,
 }
 
 struct ActiveHook {

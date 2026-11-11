@@ -439,9 +439,14 @@ async fn process_index_writer_command(
             // the old namespace; no publisher can enqueue a post-Clear command
             // until the ordered acknowledgement below releases that exclusion.
             let mut flush_acks = Vec::new();
+            let mut reconciliation_acks = Vec::new();
             while let Ok(command) = rx.try_recv() {
-                if let IndexWriterCommand::Flush(ack) = command {
-                    flush_acks.push(ack);
+                match command {
+                    IndexWriterCommand::Flush(ack) => flush_acks.push(ack),
+                    IndexWriterCommand::FlushForReconciliation(ack) => {
+                        reconciliation_acks.push(ack)
+                    }
+                    _ => {}
                 }
             }
             wal.clear();
@@ -457,6 +462,9 @@ async fn process_index_writer_command(
                 tracing::warn!(%error, "cleared artifact index flush failed");
             }
             let _ = flushed.try_send(result.is_ok());
+            for ack in reconciliation_acks {
+                let _ = ack.try_send(result.is_ok());
+            }
             for ack in flush_acks {
                 let _ = ack.send(());
             }
@@ -722,6 +730,13 @@ mod tests {
             let cache_dir = NormalizedPath::new(directory.path());
             let endpoint = crate::ipc::unique_test_endpoint();
             let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+            // Seed a durable old row so reopening after the incremental Clear
+            // proves its journal checkpoint supersedes the legacy index.
+            server.state.artifact_store.insert(
+                "old",
+                &ArtifactIndex::new(vec!["old.o".into()], vec![1], vec![], vec![], 0),
+            );
+            server.state.artifact_store.flush().unwrap();
             let hook = persist::StagedHookGuard::arm_index_flush(&server.state.artifact_store);
             let writer = tokio::spawn(run_index_writer(
                 server.index_writer_rx.take().unwrap(),
@@ -767,15 +782,8 @@ mod tests {
             .await
             .unwrap();
             hook.resume();
-            // Observe the actual index rename before declaring this test done.
-            let until = std::time::Instant::now() + Duration::from_secs(5);
-            while !crate::core::config::index_path_from_cache_dir(&cache_dir).exists() {
-                assert!(
-                    std::time::Instant::now() < until,
-                    "owned WAL flush did not complete"
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            // Root reuse, rather than the legacy index.bin rename, observes
+            // completion of either a journal commit or a full checkpoint.
             let path = directory.path().to_path_buf();
             let next = tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
@@ -796,6 +804,14 @@ mod tests {
             })
             .await
             .expect("finished WAL write must release native ownership");
+            let reopened = ArtifactStore::open(
+                crate::core::config::index_path_from_cache_dir(&cache_dir).as_path(),
+            )
+            .unwrap();
+            assert!(
+                reopened.get("old").is_none(),
+                "Clear must durably supersede the old row"
+            );
             drop(next);
             assert!(
                 !acknowledged,
