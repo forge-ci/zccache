@@ -56,6 +56,10 @@ impl Drop for Reply<'_> {
 }
 
 impl Completion {
+    pub(super) fn fail(&self) {
+        self.failed.store(true, Ordering::Release);
+    }
+
     /// Register before signalling shutdown; keep the owner alive through send.
     pub(super) fn reply(&self) -> Reply<'_> {
         self.replies.fetch_add(1, Ordering::AcqRel);

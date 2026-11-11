@@ -389,6 +389,7 @@ fn store_rustc_outputs(
                     }
                 }
                 Err(error) => {
+                    state_ref.shutdown_completion.fail();
                     tracing::warn!(%error, key = %completion_key, "staged artifact persistence task failed to join");
                     if let Some(provisional) = provisional.as_ref() {
                         remove_provisional_artifact(
@@ -828,9 +829,12 @@ fn store_single_output(
                 }
                 if published {
                     cached.demote_to_durable(&state_ref.artifacts, &completion_key);
+                } else {
+                    state_ref.shutdown_completion.fail();
                 }
             }
             Err(error) => {
+                state_ref.shutdown_completion.fail();
                 tracing::warn!(%error, "artifact persistence task failed to join");
             }
         }

@@ -48,7 +48,9 @@ impl ProvisionalArtifact {
         key: &str,
         payloads: &[Arc<Vec<u8>>],
     ) -> std::io::Result<()> {
-        persist_artifact_payloads(&state.artifact_dir, key, payloads)?;
+        persist_artifact_payloads(&state.artifact_dir, key, payloads).inspect_err(|_| {
+            state.shutdown_completion.fail();
+        })?;
         enqueue_index_insert(state, key.to_string(), self.meta().clone());
         self.demote_to_durable(&state.artifacts, key);
         Ok(())

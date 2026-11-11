@@ -840,10 +840,12 @@ pub(super) async fn handle_compile_multi(
                 let gap_ms = t_persist_enqueue.elapsed().as_millis() as u64;
                 match persist_artifact_payloads(&artifact_dir, &key_hex, &payloads) {
                     Ok(()) => {
-                        let _ =
-                            index_writer_tx.send(IndexWriterCommand::Insert(key_hex, persist_meta));
+                        if index_writer_tx.send(IndexWriterCommand::Insert(key_hex, persist_meta)).is_err() {
+                            _guard.state.shutdown_completion.fail();
+                        }
                     }
                     Err(e) => {
+                        _guard.state.shutdown_completion.fail();
                         tracing::warn!(
                             key = %key_hex,
                             gap_ms,
@@ -855,6 +857,7 @@ pub(super) async fn handle_compile_multi(
             .detach_on_drop()
             .await;
             if let Err(error) = written {
+                pending_state.shutdown_completion.fail();
                 tracing::warn!(%error, "multi-source artifact persistence task failed to join");
             }
             pending_writes::complete(&pending_state.pending_cache_writes, &completion_key);

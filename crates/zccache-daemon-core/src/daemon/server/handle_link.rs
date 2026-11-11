@@ -863,14 +863,16 @@ pub(super) async fn handle_link_ephemeral(
                     let _retired = cached.publish(&state.artifacts, key_hex.clone());
                     let published = cached.clone();
                     let persist_state = Arc::clone(state);
+                    let failure_state = Arc::clone(state);
                     let publication_guard_for_task = publication_guard
                         .take()
                         .expect("link publication acquired an owned guard");
                     kernal_api::async_engine::launch(async move {
+                        let _publication_guard = publication_guard_for_task;
                         let _permit = sem.acquire_for(OPERATION_TIMEOUT).await;
                         let written = kernal_api::async_engine::launch_blocking(move || {
                             let _guard = guard;
-                            let _publication_guard = publication_guard_for_task;
+
                             if let Err(error) = published.persist_bytes(&persist_state, &kh, &payloads) {
                                 tracing::warn!(%error, "link artifact persistence failed; retaining resident payloads");
                             }
@@ -878,6 +880,7 @@ pub(super) async fn handle_link_ephemeral(
                         .detach_on_drop()
                         .await;
                         if let Err(error) = written {
+                            failure_state.shutdown_completion.fail();
                             tracing::warn!(%error, "link artifact persistence task failed to join");
                         }
                     })
