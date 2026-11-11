@@ -30,13 +30,22 @@ pub(super) fn call<'tcx>(
                     Some(ty::FnDef(definition, args)) => {
                         function(cx, definition, args.skip_binder(), seen)
                     }
-                    _ => UNKNOWN,
+                    _ => {
+                        explain_chain(cx, "opaque callback", seen);
+                        UNKNOWN
+                    }
                 };
             }
             function(cx, *definition, arguments.skip_binder(), seen)
         }
-        ty::FnPtr(..) => UNKNOWN,
-        _ => UNKNOWN,
+        ty::FnPtr(..) => {
+            explain_chain(cx, "function pointer", seen);
+            UNKNOWN
+        }
+        _ => {
+            explain_chain(cx, "unresolved callee", seen);
+            UNKNOWN
+        }
     }
 }
 
@@ -72,6 +81,7 @@ fn function<'tcx>(
             "zccache_daemon_core::daemon::server::wal::PendingIndexClear::wait_for"
                 | "zccache_daemon_core::daemon::server::wal::reserve_index_clear_blocking"
         ) {
+            explain_chain(cx, "clear wait effect", seen);
             return SWEEP;
         }
         if super::output_policy::unlink(cx, definition) {
@@ -105,6 +115,7 @@ fn function<'tcx>(
                     "sweep_staged_trash_for" | "sweep_retired_namespaces_for"
                 ))
         {
+            explain_chain(cx, "detached sweep effect", seen);
             return SWEEP;
         }
         if matches!(krate.as_str(), "std" | "tokio")
@@ -112,6 +123,7 @@ fn function<'tcx>(
             && path.iter().any(|part| part.as_str() == "fs")
             && matches!(name, "remove_dir_all" | "remove_file")
         {
+            explain_chain(cx, "raw filesystem sweep", seen);
             return SWEEP;
         }
         if matches!(krate.as_str(), "std" | "tokio")
@@ -451,4 +463,21 @@ pub(super) fn explain_trace(line: std::fmt::Arguments<'_>) {
     {
         let _ = writeln!(file, "{line}");
     }
+}
+
+fn explain_chain(
+    cx: &LateContext<'_>,
+    label: &str,
+    seen: &[(DefId, ty::GenericArgsRef<'_>, Option<u8>)],
+) {
+    if std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE").is_none() {
+        return;
+    }
+    let path = seen
+        .iter()
+        .filter(|(_, _, effect)| effect.is_none())
+        .map(|(definition, _, _)| cx.tcx.def_path_str(*definition))
+        .collect::<Vec<_>>()
+        .join(" > ");
+    explain_trace(format_args!("{label}: {path}"));
 }

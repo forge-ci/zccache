@@ -86,6 +86,22 @@ pub(in crate::daemon::server) fn fail_detach_rename_for_test(path: &Path) {
 pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
     path: &Path,
 ) -> std::io::Result<()> {
+    break_output_hardlink_with(path, || remove_output_file(path))
+}
+
+/// Detach only the compiler-visible output authorized by the caller's scope.
+pub(super) fn break_output_hardlink_before_compile_scoped(
+    destination: &super::OutputDestination,
+) -> std::io::Result<()> {
+    break_output_hardlink_with(destination.as_ref(), || {
+        remove_output_file_scoped(destination)
+    })
+}
+
+fn break_output_hardlink_with(
+    path: &Path,
+    remove: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     match std::fs::metadata(path) {
         Ok(meta) if meta.is_file() => {}
         Ok(_) => return Ok(()),
@@ -107,7 +123,7 @@ pub(in crate::daemon::server) fn break_output_hardlink_before_compile(
     let temporary = temporary.into_temp_path();
     let registration = prepare_registered_detach(path);
     crate::platform::fs::permissions::make_writable(path)?;
-    if let Err(error) = remove_output_file(path) {
+    if let Err(error) = remove() {
         if let Some((_, blob_path)) = &registration {
             let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
                 blob_path,

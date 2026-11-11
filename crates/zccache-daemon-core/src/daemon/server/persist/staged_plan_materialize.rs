@@ -70,7 +70,7 @@ impl StagedCompilePlan {
             stats.copy_count = stats.copy_count.saturating_add(output_stats.copy_count);
             stats.copy_bytes = stats.copy_bytes.saturating_add(output_stats.copy_bytes);
             if output.role == StagedOutputRole::Depfile {
-                rehydrate_logical_depfile(output.requested.as_path(), &requested_outputs)
+                rehydrate_logical_depfile_scoped(&destination, &requested_outputs)
                     .map_err(|error| materialization_error(error, stats))?;
             }
         }

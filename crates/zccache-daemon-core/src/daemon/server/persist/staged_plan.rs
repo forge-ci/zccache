@@ -11,8 +11,8 @@ use super::staged_link_args::{
     rewrite_link_output_arg,
 };
 use super::staged_paths::{
-    canonicalize_logical_depfile, canonicalize_staged_output_bytes, rehydrate_logical_depfile,
-    rehydrate_staged_output_bytes, STAGED_OUTPUT_REMAP_ROOT,
+    canonicalize_logical_depfile, canonicalize_staged_output_bytes,
+    rehydrate_logical_depfile_scoped, rehydrate_staged_output_bytes, STAGED_OUTPUT_REMAP_ROOT,
 };
 #[cfg(test)]
 use super::staged_store::materialization_error_progress;

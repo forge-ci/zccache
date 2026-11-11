@@ -257,7 +257,12 @@ export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
 export CARGO_TARGET_DIR=/target/dylint-ui
 export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
 unset RUSTUP_TOOLCHAIN RUSTC
-SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 ZCCACHE_DYLINT_EXPLAIN=1 SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
+set +e
+: > /target/1964-effects-trace.log
+SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 ZCCACHE_DYLINT_EXPLAIN=1 ZCCACHE_DYLINT_EXPLAIN_TRACE=/target/1964-effects-trace.log SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
+task_status=$?
+head -n 100 /target/1964-effects-trace.log
+exit "$task_status"
 '''
 
 [task.clear-index-detach-test]
@@ -375,3 +380,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.cached-delivery-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::write_cached --locked"
+
+[task.watcher-retirement-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib watcher_lifecycle --locked"

@@ -334,21 +334,20 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temporary = temporary_path(path, "tmp");
-    let result = (|| {
-        let mut file = OpenOptions::new()
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("atomic write has no parent"))?;
+    // Preserve OpenOptions' normal creation mode while owning error cleanup.
+    let mut temporary = tempfile::Builder::new().make_in(parent, |path| {
+        std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        replace_staged_path(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+            .open(path)
+    })?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    let temporary = temporary.into_temp_path();
+    replace_staged_path(&temporary, path)
 }
 
 fn replace_staged_path(source: &Path, destination: &Path) -> io::Result<()> {
