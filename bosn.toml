@@ -397,3 +397,8 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccach
 [task.stop-persistence-perf]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib perf_shutdown_request_exits_idle_daemon_promptly --locked -- --ignored --nocapture"
+
+# Isolate comparison builds so Cargo cannot reuse the baseline executable.
+[task.stop-persistence-cli-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target/1984-cli-fixed soldr cargo nextest run --locked -p zccache --features zccache-bin,test-support --test daemon_lifecycle -E 'test(daemon_stop_persistence_test)' --status-level fail --final-status-level fail --failure-output immediate --success-output never"

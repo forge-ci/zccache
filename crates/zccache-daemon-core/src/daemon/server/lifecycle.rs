@@ -481,6 +481,14 @@ impl DaemonServer {
         self.state.artifacts.len()
     }
 
+    /// Test-only seam for delaying actual payload writes through a real CLI stop.
+    #[doc(hidden)]
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn test_persistence_gate(&self) -> Arc<crate::core::sync::Gate> {
+        Arc::clone(&self.state.persist_semaphore)
+    }
+
     /// Test-only seam: insert a synthetic system-includes entry for the
     /// given compiler path. Issue #558 — lets the `handle_clear` test
     /// pre-populate the cache before sending Clear so the test can
