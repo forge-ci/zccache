@@ -632,11 +632,14 @@ fn scan_artifact_usage(artifact_dir: &Path) -> io::Result<(Vec<DiskArtifact>, u6
                 staged_generation: None,
             });
         add_file_metadata(&path, &metadata, artifact, &mut seen);
+        // Preserve payload access age while accounting for maintenance sidecars.
+        let last_access = artifact.last_access;
         add_file(
             &crate::artifact::blob_digest::sidecar_path(&path),
             artifact,
             &mut seen,
         )?;
+        artifact.last_access = last_access;
         artifact.legacy_files.push(path.into());
     }
 

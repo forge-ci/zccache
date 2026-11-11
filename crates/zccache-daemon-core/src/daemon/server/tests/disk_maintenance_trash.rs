@@ -2,6 +2,43 @@
 use super::*;
 
 #[test]
+fn fresh_integrity_sidecars_preserve_payload_retention_age() {
+    let root = tempfile::tempdir().unwrap();
+    let payload = root.path().join(format!("{}_0", "a".repeat(64)));
+    std::fs::write(&payload, vec![3u8; 8192]).unwrap();
+    let now = SystemTime::now();
+    let stale = kernal_api::platform::fs::FileTime::from_system_time(now - EXPIRE_AGE - DAY);
+    kernal_api::platform::fs::set_file_mtime(&payload, stale).unwrap();
+    let before = scan_artifacts(root.path()).unwrap();
+    let digest = crate::artifact::blob_digest::sidecar_path(&payload);
+    std::fs::write(&digest, vec![7u8; 4096]).unwrap();
+    let after = scan_artifacts(root.path()).unwrap();
+
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].last_access, before[0].last_access);
+    let allocated = [payload.as_path(), digest.as_path()]
+        .into_iter()
+        .map(|path| {
+            crate::platform::fs::volume::allocated_bytes(path, &std::fs::metadata(path).unwrap())
+        })
+        .sum::<u64>();
+    assert_eq!(after[0].allocated_bytes, allocated);
+    let plan = plan_maintenance(
+        bytes_policy(GIB),
+        MaintenanceKind::Full,
+        now,
+        FilesystemSpace {
+            capacity_bytes: 1000 * GIB,
+            free_bytes: 500 * GIB,
+        },
+        &after,
+        0,
+    );
+    assert_eq!(plan.pressure, MaintenancePressure::None);
+    assert_eq!(plan.selected, vec!["a".repeat(64)]);
+}
+
+#[test]
 fn legacy_payload_sweep_releases_publication_and_accounts_sidecars() {
     use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
     let root = tempfile::tempdir().unwrap();
