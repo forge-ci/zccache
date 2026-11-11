@@ -4,7 +4,11 @@ use rustc_hir::def_id::LocalDefId;
 use rustc_lint::LateContext;
 use rustc_middle::{mir, ty};
 
-pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
+pub(super) fn check<'tcx>(
+    cx: &LateContext<'tcx>,
+    owner: LocalDefId,
+    cache: &mut super::effects::Cache<'tcx>,
+) {
     let receive_owner = super::index_clear_policy::receive_owner(cx, owner.to_def_id());
     use rustc_mir_dataflow::{move_paths::MoveData, Analysis};
     let (stored, _) = cx.tcx.mir_promoted(owner);
@@ -66,6 +70,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                     mir::Place::from(local),
                     scope,
                     &mut leaves,
+                    cache,
                 );
             }
         }
@@ -75,8 +80,11 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             scope,
             aliases: &aliases,
             leaves: &mut leaves,
+            cache,
         };
         rustc_middle::mir::visit::Visitor::visit_body(&mut collector, &owned);
+        let mut unique = std::collections::HashSet::new();
+        leaves.retain(|leaf| unique.insert(*leaf));
         leaf_sets.push(leaves);
     }
     // Fake reads register exact move paths without any initialization/move
@@ -184,7 +192,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             if all_inside
                 && [Scope::Critical, Scope::Any]
                     .into_iter()
-                    .all(|scope| super::ordered_drop::safe(cx, value, scope))
+                    .all(|scope| super::ordered_drop::safe(cx, value, scope, cache))
             {
                 continue;
             }
@@ -207,7 +215,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         }
         let effects = match &terminator.kind {
             mir::TerminatorKind::Call { func, .. } => {
-                super::effects::call(cx, func.ty(&body.local_decls, cx.tcx), &mut Vec::new())
+                super::effects::call(cx, func.ty(&body.local_decls, cx.tcx), cache.reset())
             }
             mir::TerminatorKind::Drop { place, .. } => {
                 super::drop_paths::live_types(cx, body, *place, |place| {
@@ -221,8 +229,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                 })
                 .into_iter()
                 .fold(0, |effects, value| {
-                    effects
-                        | super::effects::drop_value(cx, value, &mut Vec::new(), &mut Vec::new())
+                    effects | super::effects::drop_value(cx, value, cache.reset(), &mut Vec::new())
                 })
             }
             _ => continue,
@@ -321,15 +328,6 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     }
 }
 
-fn contains_guard<'tcx>(
-    cx: &LateContext<'tcx>,
-    value: ty::Ty<'tcx>,
-    scope: Scope,
-    seen: &mut Vec<ty::Ty<'tcx>>,
-) -> bool {
-    super::guard_types::contains(cx, value, scope, seen)
-}
-
 // Query guard leaves rather than initialized wrapper roots. Moving one field
 // must not erase its sibling, and a moved-out Result must not retain a phantom
 // guard. Untracked leaves conservatively use the compiler's nearest parent.
@@ -339,8 +337,9 @@ fn guard_leaves<'tcx>(
     place: mir::Place<'tcx>,
     scope: Scope,
     leaves: &mut Vec<mir::Place<'tcx>>,
+    cache: &mut super::effects::Cache<'tcx>,
 ) {
-    if !contains_guard(cx, value, scope, &mut Vec::new()) {
+    if !cache.contains_guard(cx, value, scope) {
         return;
     }
     let fields = match value.kind() {
@@ -363,6 +362,7 @@ fn guard_leaves<'tcx>(
                 ),
                 scope,
                 leaves,
+                cache,
             );
         }
         return;
@@ -388,6 +388,7 @@ fn guard_leaves<'tcx>(
                         base.project_deeper(&[mir::ProjectionElem::Field(index, field)], cx.tcx),
                         scope,
                         leaves,
+                        cache,
                     );
                 }
             }
@@ -403,6 +404,7 @@ struct GuardPlaces<'a, 'tcx> {
     scope: Scope,
     aliases: &'a [mir::Local],
     leaves: &'a mut Vec<mir::Place<'tcx>>,
+    cache: &'a mut super::effects::Cache<'tcx>,
 }
 impl<'tcx> mir::visit::Visitor<'tcx> for GuardPlaces<'_, 'tcx> {
     fn visit_place(
@@ -418,6 +420,7 @@ impl<'tcx> mir::visit::Visitor<'tcx> for GuardPlaces<'_, 'tcx> {
                 *place,
                 self.scope,
                 self.leaves,
+                self.cache,
             );
         }
         self.super_place(place, context, location);

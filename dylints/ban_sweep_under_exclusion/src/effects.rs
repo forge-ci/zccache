@@ -1,17 +1,45 @@
 //! Resolved bulk/sweep effects, including local function and closure bodies.
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_lint::LateContext;
 use rustc_middle::{mir, ty};
+use std::collections::HashMap;
 
 pub(super) const BULK: u8 = 1;
 pub(super) const SWEEP: u8 = 2;
 pub(super) const UNKNOWN: u8 = 4;
 pub(super) const ESCAPE: u8 = 8;
 
+/// Crate-owned MIR summaries survive individual guarded calls. Only the resolved
+/// targets are cached: recursive effect evaluation keeps its own cycle state.
+#[derive(Default)]
+pub(super) struct Cache<'tcx> {
+    entries: Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    targets: HashMap<LocalDefId, Vec<Target<'tcx>>>,
+    guards: HashMap<(ty::Ty<'tcx>, super::guard_types::Scope), bool>,
+}
+impl<'tcx> Cache<'tcx> {
+    pub(super) fn contains_guard(
+        &mut self,
+        cx: &LateContext<'tcx>,
+        value: ty::Ty<'tcx>,
+        scope: super::guard_types::Scope,
+    ) -> bool {
+        *self
+            .guards
+            .entry((value, scope))
+            .or_insert_with(|| super::guard_types::contains(cx, value, scope, &mut Vec::new()))
+    }
+
+    pub(super) fn reset(&mut self) -> &mut Self {
+        self.entries.clear();
+        self
+    }
+}
+
 pub(super) fn call<'tcx>(
     cx: &LateContext<'tcx>,
     callee: ty::Ty<'tcx>,
-    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    seen: &mut Cache<'tcx>,
 ) -> u8 {
     match callee.kind() {
         ty::FnDef(definition, arguments) => {
@@ -31,7 +59,7 @@ pub(super) fn call<'tcx>(
                         function(cx, definition, args.skip_binder(), seen)
                     }
                     _ => {
-                        explain_chain(cx, "opaque callback", seen);
+                        explain_chain(cx, "opaque callback", &seen.entries);
                         UNKNOWN
                     }
                 };
@@ -39,11 +67,11 @@ pub(super) fn call<'tcx>(
             function(cx, *definition, arguments.skip_binder(), seen)
         }
         ty::FnPtr(..) => {
-            explain_chain(cx, "function pointer", seen);
+            explain_chain(cx, "function pointer", &seen.entries);
             UNKNOWN
         }
         _ => {
-            explain_chain(cx, "unresolved callee", seen);
+            explain_chain(cx, "unresolved callee", &seen.entries);
             UNKNOWN
         }
     }
@@ -53,15 +81,17 @@ fn function<'tcx>(
     cx: &LateContext<'tcx>,
     definition: DefId,
     arguments: ty::GenericArgsRef<'tcx>,
-    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    seen: &mut Cache<'tcx>,
 ) -> u8 {
     if let Some((_, _, effects)) = seen
+        .entries
         .iter()
         .find(|(id, args, _)| *id == definition && *args == arguments)
     {
         return effects.unwrap_or(0);
     }
     if seen
+        .entries
         .iter()
         .filter(|(_, _, effects)| effects.is_none())
         .count()
@@ -70,8 +100,8 @@ fn function<'tcx>(
         explain_trace(format_args!("call depth limit at {definition:?}"));
         return UNKNOWN;
     }
-    let index = seen.len();
-    seen.push((definition, arguments, None));
+    let index = seen.entries.len();
+    seen.entries.push((definition, arguments, None));
     let result = (|| {
         let path = cx.get_def_path(definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
@@ -81,7 +111,7 @@ fn function<'tcx>(
             "zccache_daemon_core::daemon::server::wal::PendingIndexClear::wait_for"
                 | "zccache_daemon_core::daemon::server::wal::reserve_index_clear_blocking"
         ) {
-            explain_chain(cx, "clear wait effect", seen);
+            explain_chain(cx, "clear wait effect", &seen.entries);
             return SWEEP;
         }
         if super::output_policy::unlink(cx, definition) {
@@ -115,7 +145,7 @@ fn function<'tcx>(
                     "sweep_staged_trash_for" | "sweep_retired_namespaces_for"
                 ))
         {
-            explain_chain(cx, "detached sweep effect", seen);
+            explain_chain(cx, "detached sweep effect", &seen.entries);
             return SWEEP;
         }
         if matches!(krate.as_str(), "std" | "tokio")
@@ -123,7 +153,7 @@ fn function<'tcx>(
             && path.iter().any(|part| part.as_str() == "fs")
             && matches!(name, "remove_dir_all" | "remove_file")
         {
-            explain_chain(cx, "raw filesystem sweep", seen);
+            explain_chain(cx, "raw filesystem sweep", &seen.entries);
             return SWEEP;
         }
         if matches!(krate.as_str(), "std" | "tokio")
@@ -167,16 +197,23 @@ fn function<'tcx>(
         }
         // Release the query borrow before following callees: a query for a callee
         // may legitimately advance/consume MIR for an enclosing function.
-        let calls = {
+        let calls = if let Some(calls) = seen.targets.get(&local) {
+            calls.clone()
+        } else {
             let (stored, _) = cx.tcx.mir_promoted(local);
-            if stored.is_stolen() {
+            let calls = if stored.is_stolen() {
                 targets(cx, cx.tcx.optimized_mir(local).clone(), false)
             } else {
                 {
                     let body = (*stored.borrow()).clone();
                     targets(cx, body, true)
                 }
+            };
+            if std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE").is_some() {
+                explain_trace(format_args!("MIR targets {}", cx.tcx.def_path_str(local)));
             }
+            seen.targets.insert(local, calls.clone());
+            calls
         };
         calls.into_iter().fold(0, |effects, target| {
             if let Target::Erase(source, destination) = target {
@@ -206,10 +243,11 @@ fn function<'tcx>(
             } else { call(cx, value, seen) }
         })
     })();
-    seen[index].2 = Some(result);
+    seen.entries[index].2 = Some(result);
     result
 }
 
+#[derive(Clone, Copy)]
 enum Target<'tcx> {
     Call(ty::Ty<'tcx>),
     Drop(ty::Ty<'tcx>),
@@ -309,7 +347,7 @@ fn casts<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<Target<'tc
 pub(super) fn drop_value<'tcx>(
     cx: &LateContext<'tcx>,
     value: ty::Ty<'tcx>,
-    summaries: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    summaries: &mut Cache<'tcx>,
     active: &mut Vec<ty::Ty<'tcx>>,
 ) -> u8 {
     if matches!(value.kind(), ty::Alias(..)) {

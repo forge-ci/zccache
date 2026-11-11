@@ -47,7 +47,7 @@ thread_local! {
 pub(super) fn drop_effects<'tcx>(
     cx: &LateContext<'tcx>,
     object: ty::Ty<'tcx>,
-    summaries: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    summaries: &mut super::effects::Cache<'tcx>,
     active: &mut Vec<ty::Ty<'tcx>>,
 ) -> u8 {
     let principal = principal(cx, object);

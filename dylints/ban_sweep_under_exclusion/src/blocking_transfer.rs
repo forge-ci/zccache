@@ -60,5 +60,6 @@ pub(super) fn cancellation_safe<'tcx>(
     value: ty::Ty<'tcx>,
     scope: Scope,
 ) -> bool {
-    matches!(value.kind(), ty::Closure(..)) && super::ordered_drop::safe(cx, value, scope)
+    matches!(value.kind(), ty::Closure(..))
+        && super::ordered_drop::safe(cx, value, scope, &mut super::effects::Cache::default())
 }

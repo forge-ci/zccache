@@ -24,9 +24,13 @@ mod index_clear_policy;
 mod ordered_drop;
 mod output_policy;
 mod runtime_mir;
+extern crate rustc_lint;
+extern crate rustc_session;
 extern crate rustc_span;
 
-dylint_linting::declare_late_lint! {
+dylint_linting::dylint_library!();
+
+rustc_session::declare_lint! {
     /// Confine recursive deletion to cleanup owners and keep it outside exclusion.
     pub BAN_SWEEP_UNDER_EXCLUSION,
     Deny,
@@ -37,7 +41,19 @@ use rustc_hir::{def::Res, Expr, ExprKind};
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::{FileName, RemapPathScopeComponents, Span};
 
-impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
+#[derive(Default)]
+struct BanSweepUnderExclusion<'tcx> {
+    effects: effects::Cache<'tcx>,
+}
+rustc_session::impl_lint_pass!(BanSweepUnderExclusion<'_> => [BAN_SWEEP_UNDER_EXCLUSION]);
+
+#[unsafe(no_mangle)]
+pub fn register_lints(_: &rustc_session::Session, store: &mut rustc_lint::LintStore) {
+    store.register_lints(&[BAN_SWEEP_UNDER_EXCLUSION]);
+    store.register_late_lint_pass(Box::new(|_| Box::new(BanSweepUnderExclusion::default())));
+}
+
+impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion<'tcx> {
     fn check_fn(
         &mut self,
         cx: &LateContext<'tcx>,
@@ -49,7 +65,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
     ) {
         if checks_guards(cx, span) {
             output_policy::check_fn(cx, body, owner.to_def_id());
-            guard_analysis::check(cx, owner);
+            guard_analysis::check(cx, owner, &mut self.effects);
         }
     }
 
@@ -224,7 +240,32 @@ mod ui_dependencies;
 
 #[test]
 fn ui() {
+    let trace = std::env::temp_dir().join(format!(
+        "zccache-1964-mir-targets-{}-{}.log",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    std::fs::File::create_new(&trace).unwrap();
+    let previous_trace = std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE");
+    std::env::set_var("ZCCACHE_DYLINT_EXPLAIN_TRACE", &trace);
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
+    let summaries = std::fs::read_to_string(&trace).unwrap();
+    assert_eq!(
+        summaries
+            .lines()
+            .filter(|line| line.starts_with("MIR targets ") && line.ends_with("invoke"))
+            .count(),
+        1,
+        "the generic callback body must be analyzed once across all three instantiations: {}",
+        trace.display()
+    );
+    match previous_trace {
+        Some(value) => std::env::set_var("ZCCACHE_DYLINT_EXPLAIN_TRACE", value),
+        None => std::env::remove_var("ZCCACHE_DYLINT_EXPLAIN_TRACE"),
+    }
     let _directory =
         ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
     let flags = ui_dependencies::dependency_flags(std::time::Duration::from_secs(300));

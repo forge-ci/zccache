@@ -2,7 +2,7 @@
 use rustc_lint::LateContext;
 use rustc_middle::ty;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Scope {
     Critical,
     Any,

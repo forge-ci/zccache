@@ -28,8 +28,13 @@ pub(super) fn owned_place<'tcx>(
     }
 }
 
-pub(super) fn safe<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope) -> bool {
-    check(cx, value, scope, 0)
+pub(super) fn safe<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    scope: Scope,
+    cache: &mut super::effects::Cache<'tcx>,
+) -> bool {
+    check(cx, value, scope, 0, cache)
 }
 fn structural<'tcx>(cx: &LateContext<'tcx>, definition: ty::AdtDef<'tcx>) -> bool {
     !definition.is_union()
@@ -40,7 +45,13 @@ fn structural<'tcx>(cx: &LateContext<'tcx>, definition: ty::AdtDef<'tcx>) -> boo
                 "core::option::Option" | "core::result::Result"
             ))
 }
-fn check<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope, depth: usize) -> bool {
+fn check<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    scope: Scope,
+    depth: usize,
+    cache: &mut super::effects::Cache<'tcx>,
+) -> bool {
     if depth >= 32 {
         return false;
     }
@@ -53,8 +64,9 @@ fn check<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope, depth:
             arguments.as_closure().upvar_tys().iter().collect(),
             scope,
             depth,
+            cache,
         ),
-        ty::Tuple(values) => fields(cx, values.iter().collect(), scope, depth),
+        ty::Tuple(values) => fields(cx, values.iter().collect(), scope, depth, cache),
         ty::Adt(definition, arguments) if structural(cx, *definition) => {
             definition.variants().iter().all(|variant| {
                 fields(
@@ -66,6 +78,7 @@ fn check<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope, depth:
                         .collect(),
                     scope,
                     depth,
+                    cache,
                 )
             })
         }
@@ -80,6 +93,7 @@ fn fields<'tcx>(
     values: Vec<ty::Ty<'tcx>>,
     scope: Scope,
     depth: usize,
+    cache: &mut super::effects::Cache<'tcx>,
 ) -> bool {
     let mut held = values
         .iter()
@@ -89,8 +103,8 @@ fn fields<'tcx>(
         let own = owns(cx, field, scope);
         // A nested owner can order its own releases, but it cannot release a
         // guard owned by a different field or a different caller variable.
-        if held != 0 && !(own && held == 1 && check(cx, field, scope, depth + 1)) {
-            let effects = super::effects::drop_value(cx, field, &mut Vec::new(), &mut Vec::new());
+        if held != 0 && !(own && held == 1 && check(cx, field, scope, depth + 1, cache)) {
+            let effects = super::effects::drop_value(cx, field, cache.reset(), &mut Vec::new());
             let forbidden = super::effects::SWEEP
                 | super::effects::UNKNOWN
                 | super::effects::ESCAPE
