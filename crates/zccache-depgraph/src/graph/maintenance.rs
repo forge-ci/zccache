@@ -77,6 +77,7 @@ impl DepGraph {
             if let Some(mut entry) = self.contexts.get_mut(ctx_key) {
                 if entry.artifact_key.is_some() {
                     entry.artifact_key = None;
+                    self.queue_context(*ctx_key, &entry);
                     cleared += 1;
                 }
             }
@@ -129,6 +130,7 @@ impl DepGraph {
         let mut removed = 0;
         for key in keys {
             if self.contexts.remove(key).is_some() {
+                self.queue_removed_context(*key);
                 removed += 1;
             }
         }
@@ -206,12 +208,14 @@ impl DepGraph {
 
     /// Clear all graph state: files, contexts, and stats counters.
     pub fn clear(&self) {
+        self.pending_contexts.clear();
         self.files.clear();
         self.contexts.clear();
         self.indexes.equivalent_contexts.clear();
         self.rustc_externs.clear();
         self.rustc_check_metadata_compat.clear();
         self.indexes.path_key_cache.clear();
+        self.clear_requested.store(true, Ordering::Release);
         self.checks.store(0, Ordering::Relaxed);
         self.hits.store(0, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
@@ -336,7 +340,7 @@ impl DepGraph {
         };
         if let Some(mut entry) = self.contexts.get_mut(&key) {
             entry.rustc_env_deps = deps;
-            self.mark_dirty();
+            self.queue_context(key, &entry);
         }
     }
 
@@ -376,7 +380,7 @@ impl DepGraph {
         };
         if let Some(mut entry) = self.contexts.get_mut(&key) {
             entry.state = ContextState::Stale;
-            self.mark_dirty();
+            self.queue_context(key, &entry);
             true
         } else {
             false

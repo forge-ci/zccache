@@ -187,3 +187,12 @@ Registration tracks the same directory under two keys — its raw path in `watch
 - **Raw paths are marked up front**, before any registration runs. They are the pre-filter that lets a directory already known to be watched skip a `canonicalize()` syscall (1-5 ms on Windows).
 - **A canonicalize failure stays marked, on purpose.** The path does not exist (or is otherwise unreachable); unmarking it would re-issue a failing syscall for a nonexistent path on every subsequent compile call — a canonicalize storm, not a retry.
 - **A registration failure is unmarked from both sets**, so the next call re-canonicalizes and retries. This is a correctness invariant, not tidiness: when `w.watch` errors (inotify `ENOSPC`, a permission error) or no watcher is armed at all, a directory left marked is silently unwatched forever. No events means no confidence downgrades, so `journal_proves_fresh` keeps returning true and `try_fast_hit` — which consults only the journal, never `get_cached_hash_if_stat_valid` — authorizes a cache hit with zero content hashing over a source tree that may have changed (#1906).
+
+## Context durability
+
+File metadata remains a stat-verified optimization rather than authority for
+cache validity. Dependency contexts and artifact-index entries commit separately
+from `metadata.bin`, so a restart can validate inputs and reuse a committed
+artifact without a recent metadata checkpoint. See
+[incremental durability](artifact-store.md#incremental-durability-1954) for the
+per-entry format, migration boundary and process-kill contract.

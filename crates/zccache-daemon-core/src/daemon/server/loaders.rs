@@ -127,6 +127,8 @@ impl DepGraphSetter {
                 .store(true, Ordering::Release);
         }
         if let Some(warning) = warning {
+            // The startup policy rejected the primary; quarantine may have failed.
+            self.state.dep_graph.load().reject_legacy_snapshot();
             self.state
                 .depgraph_load_warning
                 .with_blocking_for(STATE_TIMEOUT, |slot| *slot = Some(warning));
@@ -205,6 +207,12 @@ impl ArtifactStoreLoader {
             self.state.cache_dir.as_path(),
             super::index_reconcile::reconcile_budget(),
         );
+        if let Err(error) = super::orphan_reconcile::reconcile(
+            &self.state,
+            super::index_reconcile::reconcile_budget(),
+        ) {
+            tracing::warn!(%error, "startup orphan reconciliation deferred");
+        }
         self.state
             .artifact_store_loaded
             .store(true, Ordering::Release);

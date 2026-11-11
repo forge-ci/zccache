@@ -104,6 +104,15 @@ repo = { source = ".", destination = "/work" }
 stack = "gate"
 cmd = "bash ci/docker/gate/run_gate_tests.sh"
 
+# #1954: full store contracts plus daemon crash/WAL/orphan and CLI readers.
+[task.incremental-persistence-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-artifact -p zccache-depgraph -p zccache-daemon-core -p zccache-cli-core --features zccache-daemon-core/test-support,zccache-cli-core/cli -E 'package(zccache-artifact) | package(zccache-depgraph) | test(incremental_crash) | test(orphan_reconcile) | test(maintenance_schedule) | test(depgraph_save_failure) | test(wal::) | test(warm_restores_incremental) | test(incremental_startup_recovery)' --status-level fail --final-status-level fail --failure-output immediate --success-output never"
+
+[task.incremental-startup-recovery-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib incremental_startup_recovery --locked -- --nocapture"
+
 [task.durable-payload-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cached_artifact --locked -- --nocapture && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec::tests --locked -- --nocapture"

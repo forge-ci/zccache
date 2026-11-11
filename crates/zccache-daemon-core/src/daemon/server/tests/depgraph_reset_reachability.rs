@@ -310,3 +310,67 @@ async fn repeated_resets_are_idempotent() {
         "three resets of the same foreign version must leave one sidecar"
     );
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn incremental_startup_recovery_from_sidecar_survives_the_first_journal_commit() {
+    let fixture = Fixture::new("journal_sidecar");
+    let _env_lock = CacheDirEnvGuard::lock();
+    assert!(!fixture.session(false).await);
+    let mine = crate::depgraph::quarantine::quarantine_path(
+        fixture.depgraph_path.as_path(),
+        crate::depgraph::DEPGRAPH_VERSION,
+    );
+    std::fs::rename(&fixture.depgraph_path, &mine).unwrap();
+    std::fs::copy(&mine, &fixture.depgraph_path).unwrap();
+    skew_snapshot_version(fixture.depgraph_path.as_path());
+    let server = fixture.bind();
+    assert!(start_with_production_load(
+        &server,
+        fixture.depgraph_path.as_path()
+    ));
+    persist_incremental_recovery(&fixture, &server).await;
+    assert_eq!(
+        crate::depgraph::load_from_file(fixture.depgraph_path.as_path())
+            .unwrap()
+            .contexts_with_artifact_key(),
+        1
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn incremental_startup_recovery_commits_when_rejected_primary_cannot_be_quarantined() {
+    let fixture = Fixture::new("journal_rejected");
+    let _env_lock = CacheDirEnvGuard::lock();
+    std::fs::create_dir_all(fixture.depgraph_path.parent().unwrap()).unwrap();
+    std::fs::write(&fixture.depgraph_path, b"corrupt primary").unwrap();
+    let sidecar =
+        crate::depgraph::quarantine::corrupt_sidecar_path(fixture.depgraph_path.as_path());
+    std::fs::create_dir_all(&sidecar).unwrap();
+    std::fs::write(sidecar.join("block"), b"preserve").unwrap();
+    let mut server = fixture.bind();
+    let writer = spawn_index_writer(&mut server);
+    assert!(!start_with_production_load(
+        &server,
+        fixture.depgraph_path.as_path()
+    ));
+    assert!(!fixture.compile(&server).await);
+    persist_incremental_recovery(&fixture, &server).await;
+    assert_eq!(
+        crate::depgraph::load_from_file(fixture.depgraph_path.as_path())
+            .unwrap()
+            .contexts_with_artifact_key(),
+        1
+    );
+    quiesce_and_persist(&server, writer, fixture.depgraph_path.as_path()).await;
+}
+
+async fn persist_incremental_recovery(fixture: &Fixture, server: &DaemonServer) {
+    let graph = server.state.dep_graph.load_full();
+    let path = fixture.depgraph_path.clone();
+    kernal_api::async_engine::launch_blocking(move || graph.persist_incremental(path.as_path()))
+        .await
+        .unwrap()
+        .unwrap();
+}

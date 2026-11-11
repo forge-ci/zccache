@@ -12,6 +12,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | `zccache-protocol` | [overview.md](architecture/overview.md) (2.4), [ipc.md](architecture/ipc.md) |
 | `zccache-fscache` | [metadata-cache.md](architecture/metadata-cache.md) |
 | `zccache-watcher` | [metadata-cache.md](architecture/metadata-cache.md) (watcher section) |
+| Incremental index/context durability (#1954) | [artifact-store.md](architecture/artifact-store.md#incremental-durability-1954) |
 | `zccache-artifact` | [artifact-store.md](architecture/artifact-store.md) |
 | Resident payload lifetime and durable publication (#1965) | [artifact-store.md](architecture/artifact-store.md#resident-payload-lifetime-1965), `dylints/ban_resident_artifact_publication/README.md` |
 | Compiler-store snapshot export/import and writer exclusion | [artifact-store.md](architecture/artifact-store.md#compiler-store-transport-snapshots-ciyml362) |

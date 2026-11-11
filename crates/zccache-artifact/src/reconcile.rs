@@ -100,6 +100,8 @@ pub struct IndexReconciliation {
     pub truncated_by_budget: bool,
     /// Wall-clock cost of the scan.
     pub elapsed_ns: u64,
+    /// Visited orphan keys whose payloads cannot safely reconstruct metadata.
+    pub unrecoverable_keys: Vec<String>,
 }
 
 impl IndexReconciliation {
@@ -119,10 +121,19 @@ impl IndexReconciliation {
 /// immediately with `truncated_by_budget` set — which is how the budget
 /// behaviour is tested without sleeping.
 pub fn reconcile_index_from_disk(artifact_dir: &Path, budget: Duration) -> IndexReconciliation {
+    reconcile_missing_index_entries(artifact_dir, budget, |_| false)
+}
+
+/// Verify only payloads that have no authoritative index metadata.
+pub fn reconcile_missing_index_entries(
+    artifact_dir: &Path,
+    budget: Duration,
+    is_known: impl Fn(&str) -> bool,
+) -> IndexReconciliation {
     let started = Instant::now();
     let mut outcome = IndexReconciliation::default();
 
-    let keys = match crate::layout::published_staged_keys(artifact_dir) {
+    let mut keys = match crate::layout::published_staged_keys(artifact_dir) {
         Ok(keys) => keys,
         Err(error) => {
             tracing::warn!(
@@ -133,6 +144,7 @@ pub fn reconcile_index_from_disk(artifact_dir: &Path, budget: Duration) -> Index
             return outcome;
         }
     };
+    keys.retain(|key| !is_known(key));
     outcome.candidates = keys.len();
 
     for key in keys {
@@ -144,6 +156,7 @@ pub fn reconcile_index_from_disk(artifact_dir: &Path, budget: Duration) -> Index
             Ok(Some((sizes, stored_at))) => {
                 if sizes.len() != 1 {
                     outcome.skipped_multi_output += 1;
+                    outcome.unrecoverable_keys.push(key);
                     continue;
                 }
                 outcome.entries.push((key, rebuilt_entry(sizes, stored_at)));
@@ -157,6 +170,7 @@ pub fn reconcile_index_from_disk(artifact_dir: &Path, budget: Duration) -> Index
                     "artifact index reconciliation skipped an unverifiable generation: {error}"
                 );
                 outcome.skipped_unverifiable += 1;
+                outcome.unrecoverable_keys.push(key);
             }
         }
     }

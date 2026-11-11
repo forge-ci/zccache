@@ -3993,6 +3993,7 @@ dependencies = [
  "zccache-core",
  "zccache-gha",
  "zccache-hash",
+ "zccache-test-support",
 ]
 
 [[package]]
@@ -4150,6 +4151,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "uuid",
+ "zccache-artifact",
  "zccache-compiler",
  "zccache-core",
  "zccache-hash",

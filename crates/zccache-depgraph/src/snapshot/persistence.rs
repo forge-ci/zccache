@@ -171,10 +171,15 @@ pub fn save_to_file_with(
     path: &Path,
     opts: &SaveOptions,
 ) -> Result<(), SnapshotError> {
-    // GC: trim stale entries before saving.
+    let _permit = graph
+        .persistence_gate
+        .blocking_acquire_for(zccache_core::sync::STATE_TIMEOUT);
+    // GC removals must join the per-entry commit before a checkpoint is reported durable.
     graph.trim(opts.ttl);
-
     let payload = fit_to_budget(graph, opts)?;
+    if path.with_extension("entries").exists() {
+        graph.checkpoint_incremental_locked(path)?;
+    }
 
     // Atomic write: write to .tmp, then rename.
     let tmp_path = path.with_extension("bin.tmp");
@@ -378,6 +383,16 @@ pub fn load_from_file(path: &Path) -> Result<DepGraph, SnapshotError> {
 /// persisted wall-clock age exceeds `opts.ttl` are dropped; the rest keep
 /// their persisted wall-clock `last_accessed_unix_ms` verbatim.
 pub fn load_from_file_with(path: &Path, opts: &LoadOptions) -> Result<DepGraph, SnapshotError> {
+    if let Some(graph) = super::incremental::load_committed(path, opts)? {
+        return Ok(graph);
+    }
+    load_snapshot_with(path, opts)
+}
+
+pub(super) fn load_snapshot_with(
+    path: &Path,
+    opts: &LoadOptions,
+) -> Result<DepGraph, SnapshotError> {
     let file = std::fs::File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
@@ -432,6 +447,7 @@ pub fn load_from_file_with(path: &Path, opts: &LoadOptions) -> Result<DepGraph, 
     let expired_any = snapshot.contexts.len() != before;
 
     let graph = DepGraph::from_snapshot(snapshot);
+    graph.schedule_incremental_migration();
     if expired_any {
         // Prune file entries and indexes only the expired contexts referenced.
         graph.evict_contexts(&[]);

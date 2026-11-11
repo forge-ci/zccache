@@ -587,13 +587,8 @@ impl KvStore {
             .map_err(|e| KvError::BlockingJoin(e.to_string()))?
     }
 
-    /// Sorted by hex-key. Returns `(key, value-len)` pairs.
-    ///
-    /// Files that are not well-formed value files (foreign files, leftover
-    /// temp files from an interrupted `put`) are skipped rather than failing
-    /// the listing — the directory is not exclusively ours in the way a
-    /// database table was.
-    pub fn list_namespace(&self, namespace: &str) -> KvResult<Vec<(Key, u64)>> {
+    /// Enumerate value-shaped names without interpreting their headers.
+    fn namespace_value_paths(&self, namespace: &str) -> KvResult<Vec<(Key, NormalizedPath)>> {
         check_namespace(namespace)?;
         let dir = self.namespace_dir(namespace);
         let entries = match std::fs::read_dir(dir.as_path()) {
@@ -601,7 +596,7 @@ impl KvStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(KvError::Io(e)),
         };
-        let mut out: Vec<(Key, u64)> = Vec::new();
+        let mut out = Vec::new();
         for entry in entries {
             let entry = entry?;
             let name = entry.file_name();
@@ -612,7 +607,28 @@ impl KvStore {
             let Ok(key) = Key::from_hex(hex) else {
                 continue;
             };
-            if let Some(len) = read_declared_len(&entry.path())? {
+            out.push((key, NormalizedPath::new(entry.path())));
+        }
+        Ok(out)
+    }
+
+    /// Journal enumeration must not turn a damaged value header into absence.
+    /// Only foreign/temp names are ignored; callers validate each returned value.
+    pub(crate) fn namespace_keys(&self, namespace: &str) -> KvResult<Vec<Key>> {
+        self.namespace_value_paths(namespace)
+            .map(|paths| paths.into_iter().map(|(key, _)| key).collect())
+    }
+
+    /// Sorted by hex-key. Returns `(key, value-len)` pairs.
+    ///
+    /// Files that are not well-formed value files (foreign files, leftover
+    /// temp files from an interrupted `put`) are skipped rather than failing
+    /// the listing — the directory is not exclusively ours in the way a
+    /// database table was.
+    pub fn list_namespace(&self, namespace: &str) -> KvResult<Vec<(Key, u64)>> {
+        let mut out = Vec::new();
+        for (key, path) in self.namespace_value_paths(namespace)? {
+            if let Some(len) = read_declared_len(&path)? {
                 out.push((key, len));
             }
         }

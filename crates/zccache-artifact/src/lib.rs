@@ -7,6 +7,7 @@
 #![allow(clippy::missing_errors_doc)] // TODO: add error docs
 
 pub mod blob_digest;
+pub mod journal;
 pub mod kv;
 mod layout;
 mod reconcile;
@@ -27,8 +28,8 @@ pub use layout::{
 pub use staged_lock::StagedReadGuard;
 
 pub use reconcile::{
-    reconcile_index_from_disk, IndexReconciliation, DEFAULT_RECONCILE_BUDGET,
-    RECONCILED_OUTPUT_NAME,
+    reconcile_index_from_disk, reconcile_missing_index_entries, IndexReconciliation,
+    DEFAULT_RECONCILE_BUDGET, RECONCILED_OUTPUT_NAME,
 };
 #[cfg(feature = "gha")]
 pub use rust_plan::{

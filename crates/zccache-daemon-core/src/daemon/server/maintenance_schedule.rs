@@ -43,7 +43,7 @@ pub(super) const TASK_DEPGRAPH_SAVE: &str = "depgraph-save";
 /// zackees/soldr#2436 D5: registrations that force a save before the timer.
 pub(super) const DEPGRAPH_SAVE_BATCH: usize = 32;
 /// How often the batch condition is polled between interval saves.
-pub(super) const DEPGRAPH_SAVE_BATCH_POLL: Duration = Duration::from_secs(5);
+pub(super) const DEPGRAPH_SAVE_BATCH_POLL: Duration = Duration::from_millis(100);
 /// How often the save loop checks the latched shutdown flag between ticks.
 /// It polls the flag rather than the shared `Notify` for the reasons on
 /// `wait_for_next_pass_or_shutdown`, and shares the maintenance loop's short
@@ -437,6 +437,15 @@ impl MaintenanceSchedule {
                         let contexts = state.dep_graph.load().stats().context_count;
                         let decision =
                             depgraph_save_due(waited, interval, contexts, last_saved_contexts);
+                        let decision = if state.dep_graph.load().needs_checkpoint() {
+                            Some("checkpoint")
+                        } else if state.dep_graph.load().has_pending_contexts() {
+                            Some("incremental")
+                        } else {
+                            decision.filter(|reason| {
+                                *reason == "interval" || state.dep_graph.load().is_dirty()
+                            })
+                        };
                         let Some(reason) = decision else {
                             continue;
                         };
@@ -450,7 +459,12 @@ impl MaintenanceSchedule {
                             runtime_handle.as_ref(),
                             move |dg| {
                                 let saved = dg.stats().context_count;
-                                crate::depgraph::save_to_file(dg, &save_path).map(|()| saved)
+                                let result = if reason == "incremental" {
+                                    dg.persist_incremental(&save_path)
+                                } else {
+                                    crate::depgraph::save_to_file(dg, &save_path)
+                                };
+                                result.map(|()| saved)
                             },
                         )
                         .await
@@ -459,7 +473,9 @@ impl MaintenanceSchedule {
                                 state.dep_graph_persisted.store(true, Ordering::Release);
                                 last_saved_contexts = saved;
                                 tracing::info!(contexts = saved, reason, "depgraph save");
-                                snapshot_metadata(&state, runtime_handle.as_ref()).await;
+                                if reason != "incremental" {
+                                    snapshot_metadata(&state, runtime_handle.as_ref()).await;
+                                }
                             }
                             // zccache#1661: a failed save is logged and the
                             // loop keeps ticking. The next due tick retries;

@@ -112,7 +112,7 @@ impl DepGraph {
     ) -> ContextRegistration {
         let registration = self.register_context_entry(key, ctx, key_root);
         self.rustc_externs.remove(&registration.map_key);
-        registration
+        self.queue_registration(registration)
     }
 
     /// Derive the checkout-specific map key used by rustc metadata aliases.
@@ -148,10 +148,10 @@ impl DepGraph {
             self.rustc_check_metadata_compat
                 .insert(compat_map_key, registration.map_key);
         }
-        ContextRegistration {
+        self.queue_registration(ContextRegistration {
             metadata_compat_map_key,
             ..registration
-        }
+        })
     }
 
     pub(super) fn register_context_entry(
@@ -166,7 +166,8 @@ impl DepGraph {
         let instance_key = instance.map_key();
         self.mark_dirty();
         if let Some(mut existing) = self.contexts.get_mut(&instance_key) {
-            existing.last_accessed_unix_ms = now_unix_ms();
+            existing.last_accessed_unix_ms =
+                self.record_context_access(instance_key, now_unix_ms());
             let state = existing.state;
             return ContextRegistration {
                 key,
@@ -238,6 +239,7 @@ impl DepGraph {
         };
         if let Some(evicted) = evicted {
             self.contexts.remove(&evicted);
+            self.queue_removed_context(evicted);
             self.rustc_externs.remove(&evicted);
             let stale_compat: Vec<ContextKey> = self
                 .rustc_check_metadata_compat

@@ -1,29 +1,17 @@
-//! In-memory artifact index, snapshotted to a bincode blob.
+//! In-memory artifact metadata with incremental durable KV publications.
 //!
-//! Stores lightweight metadata (`ArtifactIndex`) for each cached artifact in
-//! a `DashMap` for O(1) sharded concurrent access. The map is periodically
-//! flushed to a single on-disk blob at `~/.zccache/index.bin` by the daemon's
-//! background WAL writer (see `zccache_daemon::server::run_index_writer`).
+//! Mutations update the sharded map and queue per-key deltas. The daemon's
+//! blocking index writer commits them through the existing checksummed,
+//! fsynced, atomically replaced KV files; hits never consult those files.
+//! `store_incremental.rs` owns replay, migration and failed-write retry.
 //!
-//! The output payloads for each entry live on disk as `{key}_0`, `{key}_1`,
-//! ... (or `{key}.pack` under pack mode) and are loaded lazily on cache hit.
+//! Legacy `index.bin` blobs are imported at the first incremental commit.
+//! Explicit `flush()` calls retain whole-store checkpoints for transport and
+//! shutdown compatibility. Once migration completes, per-entry records are
+//! authoritative. A process crash loses only still-uncommitted work.
 //!
-//! ## Why not redb
-//!
-//! redb's MVCC + per-txn fsync is overkill for this use case: the daemon
-//! already keeps a complete authoritative copy of the index in memory
-//! (`SharedState::artifacts`), so the on-disk file is only consulted at
-//! startup and only persists the runtime DashMap. A bincode blob is:
-//!
-//!   * faster to write (one sequential write per flush instead of one fsync
-//!     per commit), and
-//!   * trivial to read at startup (single `fs::read` + `bincode::deserialize`).
-//!
-//! The tradeoff is that a crash *between* flushes can lose the whole delta
-//! (whereas redb could recover up to the last committed txn). The artifact
-//! files themselves remain durable on disk, so the worst case is a re-miss
-//! on the keys that hadn't been flushed — the daemon repopulates them on
-//! next access. Graceful shutdown flushes synchronously.
+//! Artifact payloads remain separately owned by the staged/pack/flat layouts.
+//! This index never changes output mtimes or keeps resident payload bytes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -207,7 +195,7 @@ impl ArtifactIndex {
 pub struct ArtifactStore {
     path: NormalizedPath,
     entries: DashMap<String, ArtifactIndex>,
-    flush_lock: zccache_core::blocking_sync::Mutex<()>,
+    flush_lock: Arc<zccache_core::sync::Gate>,
     /// Set when a `load_from_disk` found the blob present but unparseable.
     ///
     /// This is the #1157 seam between the two crates. The corrupt arm lives
@@ -216,6 +204,7 @@ pub struct ArtifactStore {
     /// on this crate, never the reverse, so the store only *reports* that it
     /// started corrupt and the daemon owns the recovery policy.
     started_corrupt: std::sync::atomic::AtomicBool,
+    legacy_unusable: std::sync::atomic::AtomicBool,
     /// Set by every mutation (`insert`, `insert_many`, `remove`,
     /// `remove_batch`, `clear`); cleared by [`Self::take_dirty`]. Lets a
     /// shutdown drain skip a redundant final `flush()` when the WAL flush
@@ -225,6 +214,10 @@ pub struct ArtifactStore {
     /// `load_from_disk` deliberately does not set this — its inserts mirror
     /// content already on disk.
     dirty: std::sync::atomic::AtomicBool,
+    pending: DashMap<String, ()>,
+    clear_requested: std::sync::atomic::AtomicBool,
+    journal_state: crate::journal::JournalState,
+    migration_requested: std::sync::atomic::AtomicBool,
 }
 
 impl ArtifactStore {
@@ -269,9 +262,14 @@ impl ArtifactStore {
         Self {
             path: NormalizedPath::new(path),
             entries: DashMap::new(),
-            flush_lock: zccache_core::blocking_sync::Mutex::new(()),
+            flush_lock: Arc::new(zccache_core::sync::Gate::new()),
             started_corrupt: std::sync::atomic::AtomicBool::new(false),
+            legacy_unusable: std::sync::atomic::AtomicBool::new(false),
             dirty: std::sync::atomic::AtomicBool::new(false),
+            pending: DashMap::new(),
+            clear_requested: std::sync::atomic::AtomicBool::new(false),
+            journal_state: crate::journal::JournalState::default(),
+            migration_requested: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -311,17 +309,18 @@ impl ArtifactStore {
     /// missing file and a corrupt blob are both logged and treated
     /// as "empty" — same shape as the inline path in [`Self::open`].
     pub fn load_from_disk(&self) -> std::io::Result<()> {
+        if self.load_committed_entries()? {
+            return Ok(());
+        }
         let path = self.path.as_path();
+        let mut loaded_rows = Vec::new();
+        let mut legacy_loaded = false;
         match std::fs::read(path) {
             Ok(bytes) => match decode_index_rows(&bytes) {
                 Ok(rows) => {
                     let count = rows.len();
-                    for (k, v) in rows {
-                        // Deferred loading can race request-time publication.
-                        // Disk state fills holes but must not replace a row
-                        // already advanced by the running process.
-                        self.entries.entry(k).or_insert(v);
-                    }
+                    loaded_rows = rows;
+                    legacy_loaded = true;
                     if count > 0 {
                         tracing::info!(
                             path = %path.display(),
@@ -336,6 +335,8 @@ impl ArtifactStore {
                     }
                 }
                 Err(e) => {
+                    self.legacy_unusable
+                        .store(true, std::sync::atomic::Ordering::Release);
                     self.started_corrupt
                         .store(true, std::sync::atomic::Ordering::Release);
                     tracing::warn!(
@@ -372,12 +373,21 @@ impl ArtifactStore {
             }
             Err(e) => return Err(e),
         };
+        for (key, value) in self.overlay_incremental(loaded_rows)? {
+            // Deferred loading fills holes without overwriting a live publication.
+            self.entries.entry(key).or_insert(value);
+        }
+        if legacy_loaded || self.path.as_path().with_extension("entries").exists() {
+            self.migration_requested
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         Ok(())
     }
 
     /// Insert or update an artifact entry. In-memory only.
     pub fn insert(&self, key: &str, meta: &ArtifactIndex) {
         self.entries.insert(key.to_string(), meta.clone());
+        self.pending.insert(key.to_string(), ());
         self.mark_dirty();
     }
 
@@ -390,6 +400,7 @@ impl ArtifactStore {
         let mut count = 0usize;
         for (k, v) in entries {
             self.entries.insert(k.as_ref().to_string(), v);
+            self.pending.insert(k.as_ref().to_string(), ());
             count += 1;
         }
         if count > 0 {
@@ -424,6 +435,7 @@ impl ArtifactStore {
     pub fn remove(&self, key: &str) -> bool {
         let removed = self.entries.remove(key).is_some();
         if removed {
+            self.pending.insert(key.to_string(), ());
             self.mark_dirty();
         }
         removed
@@ -434,6 +446,7 @@ impl ArtifactStore {
         let mut removed = 0usize;
         for key in keys {
             if self.entries.remove(*key).is_some() {
+                self.pending.insert((*key).to_string(), ());
                 removed += 1;
             }
         }
@@ -471,7 +484,10 @@ impl ArtifactStore {
     /// Remove every entry. Returns the number removed.
     pub fn clear(&self) -> usize {
         let n = self.entries.len();
+        self.pending.clear();
         self.entries.clear();
+        self.clear_requested
+            .store(true, std::sync::atomic::Ordering::Release);
         if n > 0 {
             self.mark_dirty();
         }
@@ -489,8 +505,7 @@ impl ArtifactStore {
     pub fn flush(&self) -> std::io::Result<()> {
         let _flush_guard = self
             .flush_lock
-            .lock_for(zccache_core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .blocking_acquire_for(zccache_core::sync::STATE_TIMEOUT);
         // Clear dirty BEFORE taking the snapshot, not after: a mutation that
         // lands concurrently (even mid-snapshot, per the fuzzy-snapshot note
         // below) calls `mark_dirty()` again and correctly leaves the flag set
@@ -498,7 +513,11 @@ impl ArtifactStore {
         // durable. Restored on failure, since nothing was actually persisted.
         self.dirty
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        let result = self.flush_locked();
+        let result = if self.path.as_path().with_extension("entries").exists() {
+            self.checkpoint_incremental_locked()
+        } else {
+            self.flush_locked()
+        };
         if result.is_err() {
             self.mark_dirty();
         }
@@ -513,7 +532,11 @@ impl ArtifactStore {
             .iter()
             .map(|e| (e.key().clone(), e.value().clone()))
             .collect();
-        let bytes = bincode::serialize(&snapshot)
+        self.write_legacy_rows(&snapshot)
+    }
+
+    fn write_legacy_rows(&self, snapshot: &[(String, ArtifactIndex)]) -> std::io::Result<()> {
+        let bytes = bincode::serialize(snapshot)
             .map_err(|e| std::io::Error::other(format!("bincode serialize: {e}")))?;
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -556,6 +579,9 @@ impl ArtifactStore {
         self.flush_async().await
     }
 }
+
+#[path = "store_incremental.rs"]
+mod incremental;
 
 /// Atomic, durable write: write to `tmp`, fsync the file, rename to
 /// `target`, then best-effort fsync the parent directory so the rename

@@ -11,6 +11,7 @@
 //! - `maintenance` — `trim`, `clear`, stats, accessors, `ingest_compile_commands`.
 
 mod check;
+mod incremental;
 mod maintenance;
 mod register;
 mod update;
@@ -208,6 +209,13 @@ pub struct DepGraph {
     /// mutating methods below, so the on-disk content and the in-memory
     /// content agree until the first real mutation.
     pub(super) dirty: AtomicBool,
+    pub(crate) persistence_gate: std::sync::Arc<zccache_core::sync::Gate>,
+    // Keep persistence bookkeeping off the graph value carried by load-result enums.
+    pub(super) pending_contexts: Box<DashMap<ContextKey, Option<u64>>>,
+    pub(super) migration_requested: AtomicBool,
+    pub(crate) clear_requested: AtomicBool,
+    pub(crate) legacy_rejected: AtomicBool,
+    pub(crate) journal_state: zccache_artifact::journal::JournalState,
 }
 
 /// Cache key for `path_key_cache`. `(header_path, key_root_or_none)`.
@@ -401,6 +409,12 @@ impl DepGraph {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
+            pending_contexts: Box::new(DashMap::new()),
+            migration_requested: AtomicBool::new(false),
+            clear_requested: AtomicBool::new(false),
+            legacy_rejected: AtomicBool::new(false),
+            journal_state: zccache_artifact::journal::JournalState::default(),
+            persistence_gate: std::sync::Arc::new(zccache_core::sync::Gate::new()),
         }
     }
 
@@ -504,6 +518,12 @@ impl DepGraph {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
+            pending_contexts: Box::new(DashMap::new()),
+            migration_requested: AtomicBool::new(false),
+            clear_requested: AtomicBool::new(false),
+            legacy_rejected: AtomicBool::new(false),
+            journal_state: zccache_artifact::journal::JournalState::default(),
+            persistence_gate: std::sync::Arc::new(zccache_core::sync::Gate::new()),
         }
     }
 }

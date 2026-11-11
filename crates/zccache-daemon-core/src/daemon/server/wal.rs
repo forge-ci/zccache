@@ -1,4 +1,4 @@
-//! Artifact-index WAL: in-memory write-ahead log that batches `ArtifactStore` snapshots to disk.
+//! Batch artifact-index deltas into checksummed per-entry disk commits.
 
 use super::*;
 
@@ -9,35 +9,23 @@ pub(super) enum IndexWriterCommand {
     Remove(Vec<String>),
     Clear(kernal_api::async_engine::OneshotSender<()>),
     Flush(kernal_api::async_engine::OneshotSender<()>),
+    /// Blocking startup reconciliation needs proof that queued rows are committed.
+    FlushForReconciliation(std::sync::mpsc::SyncSender<bool>),
 }
 
-/// Default WAL flush interval. Persist tasks return immediately after sending
-/// to the WAL; the WAL is flushed to the on-disk bincode blob on this cadence
-/// (or earlier if it exceeds the size budget).
-///
-/// 5 s is intentionally long: hot-path reads and writes both go through the
-/// in-memory `state.artifacts` `DashMap` (hydrated from the blob at startup),
-/// so the on-disk file is touched only by the periodic background flush. The
-/// cost of losing a flush window on hard crash is bounded — the artifact
-/// files themselves are durable on disk, and the next session re-misses only
-/// the keys that hadn't been flushed yet, repopulating both layers. Graceful
-/// shutdown flushes synchronously, so this cost only materialises on power
-/// loss / `kill -9`. Override via `ZCCACHE_WAL_FLUSH_MS`.
+/// Commit queued entries every 100 ms by default. Each entry is an atomic,
+/// checksummed KV publication; a killed process loses only uncommitted work.
+/// The in-memory lookup path performs no additional filesystem operations.
+/// Override with `ZCCACHE_WAL_FLUSH_MS`.
 pub(super) fn wal_flush_interval() -> std::time::Duration {
     let ms: u64 = std::env::var("ZCCACHE_WAL_FLUSH_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(5000);
+        .unwrap_or(100);
     std::time::Duration::from_millis(ms.max(1))
 }
 
-/// Size-based early-flush threshold. Prevents the WAL from growing unbounded
-/// under a sustained burst that fills more than one flush window.
-///
-/// 2048 entries × ~770 bytes serialised = ~1.5 MB per flush. Each flush
-/// snapshots the whole in-memory map (typically ~9 MB at steady state) and
-/// writes it sequentially, so the trigger is "how many *new* entries before
-/// we should re-snapshot" — not the size of one write.
+/// Maximum queued entries before committing early, independent of total store size.
 pub(super) fn wal_max_pending() -> usize {
     std::env::var("ZCCACHE_WAL_MAX_PENDING")
         .ok()
@@ -345,7 +333,7 @@ pub(super) async fn run_index_writer(
                 }
             }
             kernal_api::async_engine::FairRace3::Second(()) => {
-                if !wal.is_empty() {
+                if !wal.is_empty() || store.has_pending_entries() || store.needs_checkpoint() {
                     flush_wal_to_disk(&store, &mut wal).await;
                 }
             }
@@ -396,7 +384,7 @@ async fn process_index_writer_command(
             }
             let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
             let removed = store.remove_batch(&refs);
-            match Arc::clone(store).flush_async().await {
+            match Arc::clone(store).flush_incremental_async().await {
                 Ok(()) => tracing::info!(removed, "artifact-index removals flushed to disk"),
                 Err(error) => {
                     tracing::warn!(removed, %error, "artifact-index removal flush failed")
@@ -406,7 +394,7 @@ async fn process_index_writer_command(
         IndexWriterCommand::Clear(ack) => {
             wal.clear();
             store.clear();
-            if let Err(error) = Arc::clone(store).flush_async().await {
+            if let Err(error) = Arc::clone(store).flush_incremental_async().await {
                 tracing::warn!(%error, "cleared artifact index flush failed");
             }
             let _ = ack.send(());
@@ -414,6 +402,10 @@ async fn process_index_writer_command(
         IndexWriterCommand::Flush(ack) => {
             flush_wal_to_disk(store, wal).await;
             let _ = ack.send(());
+        }
+        IndexWriterCommand::FlushForReconciliation(ack) => {
+            flush_wal_to_disk(store, wal).await;
+            let _ = ack.try_send(wal.is_empty() && !store.has_pending_entries());
         }
     }
 }
@@ -450,7 +442,7 @@ pub(super) async fn flush_wal_to_disk(
     store: &Arc<ArtifactStore>,
     wal: &mut std::collections::HashMap<String, ArtifactIndex>,
 ) {
-    if wal.is_empty() {
+    if wal.is_empty() && !store.has_pending_entries() && !store.needs_checkpoint() {
         return;
     }
     let drained: Vec<(String, ArtifactIndex)> = wal.drain().collect();
@@ -459,7 +451,11 @@ pub(super) async fn flush_wal_to_disk(
     // do the disk write off the runtime thread so the flush doesn't block
     // request handlers.
     store.insert_many(drained);
-    let res = Arc::clone(store).flush_async().await;
+    let res = if store.needs_checkpoint() {
+        Arc::clone(store).flush_async().await
+    } else {
+        Arc::clone(store).flush_incremental_async().await
+    };
     match res {
         Ok(()) => tracing::info!(committed = count, "WAL flushed to disk"),
         Err(e) => tracing::warn!(count, "WAL flush to disk failed: {e}"),
