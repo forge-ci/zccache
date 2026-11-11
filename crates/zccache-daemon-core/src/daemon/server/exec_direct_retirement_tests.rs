@@ -72,6 +72,19 @@ async fn direct_exec_cleanup_does_not_retain_publication_or_its_async_caller() {
                 .is_some_and(|entry| entry.stdout.as_slice() == b"replacement");
         let root = server.state.cache_dir.clone();
         server.state.cache_root_lock.release();
+        let lifetime = Arc::downgrade(&server.state);
+        drop(server);
+        // Publication release can wake the drainer before the persistence
+        // worker drops its final state capture. Drain that task tail while
+        // cleanup is still paused: retaining state in cleanup must time out.
+        let state_released = tokio::time::timeout(Duration::from_secs(5), async {
+            while lifetime.upgrade().is_some() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .is_ok();
+        // After persistence drains, only the paused cleanup may retain the root.
         let contention_root = root.clone();
         let contender = tokio::task::spawn_blocking(move || {
             crate::core::cache_root_lock::CacheRootWriterLock::acquire(&contention_root)
@@ -82,9 +95,6 @@ async fn direct_exec_cleanup_does_not_retain_publication_or_its_async_caller() {
             .as_ref()
             .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock);
         drop(contender);
-        let lifetime = Arc::downgrade(&server.state);
-        drop(server);
-        let state_released = lifetime.upgrade().is_none();
         hook.resume();
         if !caller_proceeded {
             assert!(tokio::time::timeout(Duration::from_secs(10), store)
