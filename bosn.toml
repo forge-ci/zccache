@@ -367,3 +367,11 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.delivery-retry-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib delivery_retry_ladder --locked"
+
+[task.corruption-retirement-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib retirement_regressions --locked"
+
+[task.cached-delivery-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::write_cached --locked"

@@ -378,7 +378,7 @@ fn persist_artifact_output_writes_digest_before_publishing() {
     // Simulate a daemon restart: the in-memory registry is gone, so
     // verification must fall back to the durable digest sidecar.
     forget_blob_registration_for_restart_test(&cache);
-    verify_registered_blob(&cache).expect(
+    verify_then_retire_blob_for_test(&cache).expect(
         "a freshly-persisted blob must have a durable digest sidecar keyed to its \
          final name, surviving a restart without being evicted",
     );
@@ -398,7 +398,7 @@ fn persist_artifact_file_writes_digest_before_publishing() {
     assert!(cache.exists());
 
     forget_blob_registration_for_restart_test(&cache);
-    verify_registered_blob(&cache).expect(
+    verify_then_retire_blob_for_test(&cache).expect(
         "a freshly-persisted blob must have a durable digest sidecar keyed to its \
          final name, surviving a restart without being evicted",
     );
@@ -470,7 +470,7 @@ fn staged_generation_hardlinks_only_when_semantically_authorized() {
     std::fs::write(&output, b"poisoned rust archive").unwrap();
     mark_registered_links_suspect([output.as_path()]);
     assert!(
-        verify_registered_blob(&payloads[0]).is_err(),
+        verify_then_retire_blob_for_test(&payloads[0]).is_err(),
         "a hardlink contract violation must be rejected before serve"
     );
 }
@@ -550,7 +550,7 @@ fn staged_generation_digest_survives_registry_restart() {
         .unwrap()
         .unwrap();
     forget_blob_registration_for_restart_test(&payloads[0]);
-    verify_registered_blob(&payloads[0])
+    verify_then_retire_blob_for_test(&payloads[0])
         .expect("the v2 generation digest must rebuild registry trust after restart");
 }
 
@@ -581,7 +581,7 @@ fn verify_registered_blob_evicts_undigested_blob_even_when_singly_linked() {
     // Deliberately skip seed_persisted_blob's digest write.
     std::fs::write(&cache, content).unwrap();
 
-    let error = verify_registered_blob(&cache)
+    let error = verify_then_retire_blob_for_test(&cache)
         .expect_err("an undigested, unregistered blob must be evicted, even singly-linked");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!cache.exists(), "unverifiable blob must be evicted");
@@ -603,13 +603,14 @@ fn legacy_digest_migration_preserves_blob_and_is_idempotent() {
 
     // Simulate a daemon restart: durable verification must retain the blob.
     forget_blob_registration_for_restart_test(&cache);
-    verify_registered_blob(&cache).expect("migrated legacy blob must survive restart verification");
+    verify_then_retire_blob_for_test(&cache)
+        .expect("migrated legacy blob must survive restart verification");
     assert_eq!(std::fs::read(&cache).unwrap(), content);
 
     // Verify the durable sidecar path again after forgetting the rebuilt
     // in-memory record; migration and restart verification must be repeatable.
     forget_blob_registration_for_restart_test(&cache);
-    verify_registered_blob(&cache).unwrap();
+    verify_then_retire_blob_for_test(&cache).unwrap();
     assert_eq!(std::fs::read(&cache).unwrap(), content);
 }
 
@@ -708,7 +709,8 @@ fn unmediated_mutation_cannot_silently_poison_cache() {
             // Privileged writers (notably root in containers) can bypass mode
             // bits. The watcher/registry safety net must detect and evict.
             mark_registered_links_suspect([out.as_path()]);
-            let error = verify_registered_blob(&cache).expect_err("poison must be detected");
+            let error =
+                verify_then_retire_blob_for_test(&cache).expect_err("poison must be detected");
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
             assert!(!cache.exists(), "poisoned cache blob must be evicted");
             return;
@@ -792,7 +794,8 @@ fn suspect_corruption_emits_durable_forensics() {
     std::fs::write(&output, b"poisoned").unwrap();
     mark_registered_links_suspect([output.as_path()]);
 
-    let error = verify_registered_blob(&blob).expect_err("poisoned blob must be rejected");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("poisoned blob must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     let log = std::fs::read_to_string(crate::core::lifecycle::log_file_path()).unwrap();
     let event: serde_json::Value = log
@@ -827,7 +830,8 @@ fn removed_link_event_marks_blob_suspect_before_forgetting_path() {
 
     mark_removed_links_suspect([output.as_path()]);
 
-    let error = verify_registered_blob(&blob).expect_err("removed poison must be rejected");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("removed poison must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }
@@ -845,7 +849,8 @@ fn watcher_overflow_marks_every_blob_suspect() {
 
     mark_all_registered_links_suspect();
 
-    let error = verify_registered_blob(&blob).expect_err("overflow poison must be rejected");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("overflow poison must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }
@@ -866,7 +871,7 @@ fn watcher_event_between_hardlink_publish_and_registry_commit_is_retained() {
     let commit = commit_hardlink_registration(registration, &output);
     assert_eq!(commit.unwrap_err().kind(), std::io::ErrorKind::NotFound);
 
-    let error = verify_registered_blob(&blob).expect_err("publish race must be detected");
+    let error = verify_then_retire_blob_for_test(&blob).expect_err("publish race must be detected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }
@@ -883,7 +888,8 @@ fn daemon_restart_fails_closed_for_unregistered_multilink_blob() {
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::write(&output, b"poisoned while daemon was down").unwrap();
 
-    let error = verify_registered_blob(&blob).expect_err("unknown shared blob must be evicted");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("unknown shared blob must be evicted");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
     assert!(
@@ -906,7 +912,8 @@ fn restart_digest_detects_poison_after_alias_was_deleted() {
     std::fs::remove_file(&output).unwrap();
     forget_blob_registration_for_restart_test(&blob);
 
-    let error = verify_registered_blob(&blob).expect_err("durable digest must reject poison");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("durable digest must reject poison");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }
@@ -918,28 +925,28 @@ fn restart_digest_rebuilds_registry_for_clean_blob() {
     std::fs::write(&blob, b"original").unwrap();
     write_authoritative_blob_digest(&blob).unwrap();
 
-    verify_registered_blob(&blob).unwrap();
+    verify_then_retire_blob_for_test(&blob).unwrap();
 
     assert!(registered_blob_id(&blob).is_some());
     assert_eq!(std::fs::read(blob).unwrap(), b"original");
 }
 
 #[test]
-fn failed_restart_eviction_restores_readonly_and_retries_after_alias_delete() {
+fn restart_verification_defers_retirement_and_retries_after_alias_delete() {
     let dir = tempfile::tempdir().unwrap();
     let blob = dir.path().join("blob.rlib");
     let output = dir.path().join("output.rlib");
     std::fs::write(&blob, b"unverifiable").unwrap();
     std::fs::hard_link(&blob, &output).unwrap();
-    fail_detach_remove_for_test(&blob);
-
-    let first = verify_registered_blob(&blob).expect_err("injected restart eviction must fail");
-    assert_eq!(first.kind(), std::io::ErrorKind::PermissionDenied);
-    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
+    let first =
+        verify_registered_blob(&blob).expect_err("restart verification must reject the blob");
+    assert_eq!(first.kind(), std::io::ErrorKind::InvalidData);
+    assert!(blob.exists());
 
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::remove_file(&output).unwrap();
-    let retry = verify_registered_blob(&blob).expect_err("unverifiable blob must retry eviction");
+    let retry =
+        verify_then_retire_blob_for_test(&blob).expect_err("unverifiable blob must retry eviction");
     assert_eq!(retry.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }
@@ -967,8 +974,15 @@ fn multi_hit_materialization_failure_is_reported_to_the_handler() {
         Err(MaterializationFailure::CacheBlobMissing(_))
     ));
     assert!(
-        blobs.iter().any(|blob| !blob.exists()),
-        "at least the rejected blob must be evicted before the handler rebuilds"
+        blobs.iter().all(|blob| blob.exists()),
+        "delivery must retain leased names"
+    );
+    for blob in &blobs {
+        assert!(verify_then_retire_blob_for_test(blob).is_err());
+    }
+    assert!(
+        blobs.iter().all(|blob| !blob.exists()),
+        "maintenance retires rejected names after release"
     );
 }
 
@@ -1179,7 +1193,7 @@ fn failed_blob_removal_restores_readonly_and_registration() {
 }
 
 #[test]
-fn failed_corrupt_blob_eviction_retains_suspect_record_for_retry() {
+fn deferred_corrupt_blob_retirement_retains_suspect_record_for_retry() {
     let dir = tempfile::tempdir().unwrap();
     let blob = dir.path().join("blob.rlib");
     let output = dir.path().join("output.rlib");
@@ -1189,16 +1203,14 @@ fn failed_corrupt_blob_eviction_retains_suspect_record_for_retry() {
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::write(&output, b"poisoned").unwrap();
     mark_registered_links_suspect([output.as_path()]);
-    fail_detach_remove_for_test(&blob);
-
-    let first = verify_registered_blob(&blob).expect_err("injected eviction must fail");
-    assert_eq!(first.kind(), std::io::ErrorKind::PermissionDenied);
+    let first = verify_registered_blob(&blob).expect_err("verification must reject corruption");
+    assert_eq!(first.kind(), std::io::ErrorKind::InvalidData);
     assert!(blob.exists());
-    assert!(crate::platform::fs::permissions::is_sealed(&blob).unwrap());
 
     crate::platform::fs::permissions::make_writable(&output).unwrap();
     std::fs::remove_file(&output).unwrap();
-    let retry = verify_registered_blob(&blob).expect_err("known corruption must remain suspect");
+    let retry =
+        verify_then_retire_blob_for_test(&blob).expect_err("known corruption must remain suspect");
     assert_eq!(retry.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists());
 }

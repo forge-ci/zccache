@@ -12,6 +12,13 @@ use std::path::Path;
 use crate::core::config::MaterializationMode;
 
 mod clear_detach;
+mod retirement;
+#[cfg(test)]
+pub(in crate::daemon::server) use retirement::verify_then_retire_blob_for_test;
+pub(in crate::daemon::server) use retirement::{
+    has_pending_retirements, maintain_pending_retirements, queue_corrupt_blob,
+    queue_digest_rollback, retirement_wake, verified_corruption, CorruptBlobError,
+};
 mod immediate_children;
 mod maintenance;
 #[cfg(test)]

@@ -40,3 +40,11 @@ impl AsRef<Path> for OutputDestination {
         &self.path
     }
 }
+
+impl OutputDestination {
+    pub fn fresh_temporary(parent: &Path) -> std::io::Result<(std::fs::File, Self)> {
+        let path = parent.join(".owned-temporary");
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        Ok((file, Self { path }))
+    }
+}

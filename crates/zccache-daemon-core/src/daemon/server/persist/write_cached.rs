@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Evidence that a cache payload disappeared after its metadata was selected.
+/// Evidence that a selected payload disappeared or failed durable verification.
 /// Only this type authorizes a caller to invalidate a depgraph entry.
 #[derive(Debug)]
 pub(in crate::daemon::server) struct CacheBlobMissing {
@@ -972,6 +972,9 @@ fn classify_file_materialization_error(
     cache_path: &Path,
     error: std::io::Error,
 ) -> MaterializationFailure {
+    if verified_corruption(&error) {
+        return cache_blob_missing(cache_path, error);
+    }
     match std::fs::metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)
@@ -981,6 +984,9 @@ fn classify_file_materialization_error(
 }
 
 fn classify_cache_read_error(cache_path: &Path, error: std::io::Error) -> MaterializationFailure {
+    if verified_corruption(&error) {
+        return cache_blob_missing(cache_path, error);
+    }
     match std::fs::metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)

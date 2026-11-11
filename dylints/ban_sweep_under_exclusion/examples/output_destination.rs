@@ -13,6 +13,11 @@ mod daemon {
                 fn restore(guard: zccache_core::sync::PublicationReadPermit) {
                     let output = OutputScope::for_state().output(Path::new("requested-output"));
                     let _ = output.unlink();
+                    if let Ok((_file, temporary)) =
+                        OutputDestination::fresh_temporary(Path::new("cache"))
+                    {
+                        let _ = temporary.unlink();
+                    }
                     drop(guard);
                 }
             }

@@ -43,6 +43,7 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
         let _root = worker_root;
         let worker_state = maintenance_state;
         let result = (|| {
+            let corruption_reclaimed = maintain_pending_retirements(&worker_state)?;
             let dep_graph = worker_state.dep_graph.load_full();
             let mut report = maintain_disk_artifacts_with_barrier(
                 MaintenancePass {
@@ -60,13 +61,13 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
                 Some(&worker_state.artifact_publication),
                 Some(&worker_state.shutdown_requested),
             )?;
-            report.bytes_reclaimed =
-                report
-                    .bytes_reclaimed
-                    .saturating_add(recover_retired_exec_for(
-                        &worker_state.exec_store,
-                        crate::core::wait::PROBE,
-                    ));
+            report.bytes_reclaimed = report
+                .bytes_reclaimed
+                .saturating_add(corruption_reclaimed)
+                .saturating_add(recover_retired_exec_for(
+                    &worker_state.exec_store,
+                    crate::core::wait::PROBE,
+                ));
             Ok::<_, io::Error>(report)
         })();
         // The worker retains ownership if its caller is cancelled. On a
@@ -423,15 +424,17 @@ pub(in crate::daemon::server) fn spawn_disk_maintenance(
             if kind == MaintenanceKind::Full {
                 sweep_stale_depfile_dirs(runtime_handle.as_ref()).await;
             }
-            if kind == MaintenanceKind::Pressure {
+            if kind == MaintenanceKind::Pressure
+                && !has_pending_retirements(state.artifact_dir.as_path())
+            {
                 match pressure_scan_needed(&state, policy) {
                     Ok(false) => {
                         tracing::debug!(
                             cache_root = %state.cache_dir.display(),
                             "disk maintenance skipped exact scan below logical preflight threshold"
                         );
-                        if wait_for_next_pass_or_shutdown(
-                            &state.shutdown_requested,
+                        if wait_for_next_pass_or_cleanup(
+                            &state,
                             PRESSURE_INTERVAL,
                             SHUTDOWN_POLL_INTERVAL,
                         )
@@ -464,12 +467,8 @@ pub(in crate::daemon::server) fn spawn_disk_maintenance(
             if state.shutdown_requested.load(Ordering::Acquire) {
                 break;
             }
-            if wait_for_next_pass_or_shutdown(
-                &state.shutdown_requested,
-                PRESSURE_INTERVAL,
-                SHUTDOWN_POLL_INTERVAL,
-            )
-            .await
+            if wait_for_next_pass_or_cleanup(&state, PRESSURE_INTERVAL, SHUTDOWN_POLL_INTERVAL)
+                .await
             {
                 break;
             }
@@ -498,5 +497,16 @@ pub(in crate::daemon::server) fn recover_retired_exec_for(store: &KvStore, bound
             tracing::warn!(%error, "retired exec namespace recovery deferred");
             0
         }
+    }
+}
+
+async fn wait_for_next_pass_or_cleanup(
+    state: &SharedState,
+    interval: Duration,
+    poll_interval: Duration,
+) -> bool {
+    tokio::select! {
+        shutdown = wait_for_next_pass_or_shutdown(&state.shutdown_requested, interval, poll_interval) => shutdown,
+        () = retirement_wake().notified() => state.shutdown_requested.load(Ordering::Acquire),
     }
 }

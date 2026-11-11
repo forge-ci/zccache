@@ -127,9 +127,8 @@ pub(super) fn persist_staged_generation(
                 .map_err(|error| publish_error(StagedPublishFailure::DurableDigest, error))?;
             // #1774: reuse the digest just computed above instead of having
             // the sidecar writer hash `destination` a second time.
-            write_authoritative_blob_digest_for_precomputed(digest_bytes, &destination)
-                .map(|digest| digest.commit())
-                .map_err(|error| {
+            write_authoritative_blob_digest_for_precomputed(digest_bytes, &destination).map_err(
+                |error| {
                     publish_error(
                         StagedPublishFailure::DurableDigest,
                         io::Error::new(
@@ -140,7 +139,8 @@ pub(super) fn persist_staged_generation(
                             ),
                         ),
                     )
-                })?;
+                },
+            )?;
             outputs.push(StagedOutput {
                 index,
                 size,

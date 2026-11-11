@@ -8,7 +8,6 @@ use super::*;
 /// Monotonic counter ensuring each `DaemonServer` instance gets unique
 /// artifact and depfile directories, even within the same process.
 pub(super) static SERVER_INSTANCE: AtomicU64 = AtomicU64::new(0);
-pub(super) static ARTIFACT_PERSIST_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl DaemonServer {
     /// Create a new daemon server bound to the given endpoint, using the

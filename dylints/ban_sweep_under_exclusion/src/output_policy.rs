@@ -72,6 +72,7 @@ pub(super) fn check_expr(cx: &LateContext<'_>, expr: &Expr<'_>) {
                     "OutputScope::output",
                     "PrivateOutputNamespace::output",
                     "OutputDestination::sibling_temporary",
+                    "OutputDestination::fresh_temporary",
                 ],
                 Some("scope") => &["OutputScope::for_state"],
                 Some("private") => &["PrivateOutputNamespace::create"],

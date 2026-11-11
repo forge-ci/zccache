@@ -74,6 +74,14 @@ impl PublicationBarrier {
         }
     }
 
+    /// Defer maintenance immediately while an existing reader owns the barrier.
+    pub fn try_write(&self) -> Option<PublicationCommitPermit> {
+        self.inner
+            .try_write()
+            .ok()
+            .map(|permit| PublicationCommitPermit { _permit: permit })
+    }
+
     /// Exclude publishers for a bounded checkpoint or orderly shutdown.
     #[track_caller]
     pub fn drain_for(

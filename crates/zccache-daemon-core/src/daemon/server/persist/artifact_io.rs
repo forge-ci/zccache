@@ -6,59 +6,36 @@ use super::*;
 
 /// Keeps a pre-existing digest sidecar intact if this publish attempt fails.
 struct DigestSidecarGuard {
-    path: PathBuf,
     previous: Option<Vec<u8>>,
-    touched: bool,
+    published: Option<std::fs::File>,
 }
-
 impl DigestSidecarGuard {
     fn for_blob(blob_path: &Path) -> std::io::Result<Self> {
-        let name = blob_path.file_name().unwrap_or_default().to_string_lossy();
-        let path = blob_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                ".cowhash-{}",
-                kernal_api::hash::blake3_bytes(name.as_bytes()).to_hex()
-            ));
-        let previous = match std::fs::read(&path) {
+        let path = zccache_artifact::blob_digest::sidecar_path(blob_path);
+        let previous = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
         };
         Ok(Self {
-            path,
             previous,
-            touched: false,
+            published: None,
         })
     }
-
     fn write_for(&mut self, hash_source: &Path, named_as: &Path) -> std::io::Result<()> {
-        // A write can truncate an existing sidecar before reporting an error.
-        self.touched = true;
-        write_authoritative_blob_digest_for(hash_source, named_as)
+        self.published = Some(
+            super::link_registry::write_authoritative_blob_digest_for_pinned(
+                hash_source,
+                named_as,
+            )?,
+        );
+        Ok(())
     }
-
-    fn restore_on_failure(&self, blob_path: &Path) {
-        if !self.touched {
-            return;
-        }
-        match &self.previous {
-            Some(bytes) => {
-                let _ = std::fs::write(&self.path, bytes);
-            }
-            None => remove_authoritative_blob_digest(blob_path),
+    fn defer_rollback(&mut self, blob_path: &Path) {
+        if let Some(published) = self.published.take() {
+            queue_digest_rollback(blob_path, published, self.previous.take());
         }
     }
-}
-
-pub(in crate::daemon::server) fn artifact_persist_tmp_path(cache_path: &Path) -> PathBuf {
-    let counter = ARTIFACT_PERSIST_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let name = cache_path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| "artifact".into());
-    cache_path.with_file_name(format!(".{name}.tmp-{}-{counter}", std::process::id()))
 }
 
 pub(in crate::daemon::server) fn persist_artifact_output(
@@ -68,7 +45,9 @@ pub(in crate::daemon::server) fn persist_artifact_output(
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| enrich_persist_err(e, None, cache_path))?;
     }
-    let tmp_path = artifact_persist_tmp_path(cache_path);
+    let (temporary, destination) =
+        OutputDestination::fresh_temporary(cache_path.parent().unwrap_or_else(|| Path::new(".")))?;
+    let tmp_path: &Path = temporary.as_ref();
     let mut digest = DigestSidecarGuard::for_blob(cache_path)
         .map_err(|e| enrich_persist_err(e, None, cache_path))?;
     let result = (|| {
@@ -86,8 +65,8 @@ pub(in crate::daemon::server) fn persist_artifact_output(
     })();
     if let Err(e) = result {
         let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
-        let _ = std::fs::remove_file(&tmp_path);
-        digest.restore_on_failure(cache_path);
+        let _ = destination.unlink();
+        digest.defer_rollback(cache_path);
         return Err(enrich_persist_err(e, None, cache_path));
     }
     Ok(())
@@ -262,7 +241,9 @@ pub(in crate::daemon::server) fn persist_artifact_file(
             .map_err(|e| enrich_persist_err(e, Some(source_path), cache_path))?;
     }
 
-    let tmp_path = artifact_persist_tmp_path(cache_path);
+    let (temporary, destination) =
+        OutputDestination::fresh_temporary(cache_path.parent().unwrap_or_else(|| Path::new(".")))?;
+    let tmp_path: &Path = temporary.as_ref();
     let mut digest = DigestSidecarGuard::for_blob(cache_path)
         .map_err(|e| enrich_persist_err(e, Some(source_path), cache_path))?;
     // Tier order: reflink (true COW, cheapest) -> hardlink (shared inode,
@@ -277,6 +258,9 @@ pub(in crate::daemon::server) fn persist_artifact_file(
     // promise that no build-tree output shares the cache blob's inode, so
     // they never hardlink the compiler output in; COPY does not clone it.
     let store_plan = plan_store_tiers(mode);
+    // Reflink and hardlink both require an absent destination. The unique
+    // TempPath continues to own this name throughout all attempts.
+    destination.unlink()?;
     let result = (|| {
         if store_plan.reflink
             && kernal_api::platform::fs::reflink_file(source_path, &tmp_path).is_ok()
@@ -292,7 +276,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         // A failed reflink attempt may have left a partial tmp file behind
         // (platform-dependent); clear it defensively before the next tier,
         // since std::fs::hard_link fails if the destination already exists.
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = destination.unlink();
         if store_plan.hardlink && std::fs::hard_link(source_path, &tmp_path).is_ok() {
             // The hardlink shares the compiler output's inode. Changing its
             // read-only bit through `tmp_path` would also make the still-live
@@ -310,7 +294,7 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         }
         // The byte-copy tier creates its destination exclusively; clear any
         // leftover temporary (e.g. from a crashed store) first.
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = destination.unlink();
         let copy_bytes = mode.copy_file(source_path, &tmp_path)?;
         crate::platform::fs::permissions::set_cache_blob_sealed(&tmp_path, readonly_enabled())?;
         digest.write_for(&tmp_path, cache_path)?;
@@ -325,8 +309,8 @@ pub(in crate::daemon::server) fn persist_artifact_file(
         Ok(stats) => Ok(stats),
         Err(e) => {
             let _ = crate::platform::fs::permissions::make_writable(&tmp_path);
-            let _ = std::fs::remove_file(&tmp_path);
-            digest.restore_on_failure(cache_path);
+            let _ = destination.unlink();
+            digest.defer_rollback(cache_path);
             Err(enrich_persist_err(e, Some(source_path), cache_path))
         }
     }

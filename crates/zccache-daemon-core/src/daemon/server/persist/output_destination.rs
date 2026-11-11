@@ -102,6 +102,16 @@ impl AsRef<Path> for OutputDestination {
 }
 
 impl OutputDestination {
+    /// Mint authority only for a file this operation just created exclusively.
+    pub(super) fn fresh_temporary(parent: &Path) -> io::Result<(tempfile::TempPath, Self)> {
+        let parent = NormalizedPath::new(parent);
+        let temporary = tempfile::NamedTempFile::new_in(&parent)?.into_temp_path();
+        let destination = Self {
+            path: NormalizedPath::new(&temporary),
+        };
+        Ok((temporary, destination))
+    }
+
     pub(super) fn unlink(&self) -> io::Result<()> {
         std::fs::remove_file(&self.path)
     }
@@ -173,8 +183,9 @@ pub(in crate::daemon::server) fn write_payloads_par_observed_for_state<P: AsRef<
     payloads: &[CachedPayload],
     mode: MaterializationMode,
 ) -> MaterializationResult<StagedMaterializationStats> {
-    checked_output_destinations(state, targets)
-        .and_then(|targets| write_payloads_par_observed_scoped(&targets, payloads, mode))
+    let result = checked_output_destinations(state, targets)
+        .and_then(|targets| write_payloads_par_observed_scoped(&targets, payloads, mode));
+    finish_delivery(state, result)
 }
 pub(in crate::daemon::server) fn write_payloads_par_with_delivery_for_state<P: AsRef<Path>>(
     state: &SharedState,
@@ -183,9 +194,10 @@ pub(in crate::daemon::server) fn write_payloads_par_with_delivery_for_state<P: A
     mode: MaterializationMode,
     delivery: impl Fn(&Path) -> crate::compiler::DeliveryPolicy + Sync,
 ) -> MaterializationResult<StagedMaterializationStats> {
-    checked_output_destinations(state, targets).and_then(|targets| {
+    let result = checked_output_destinations(state, targets).and_then(|targets| {
         write_payloads_par_with_delivery_scoped(&targets, payloads, mode, delivery)
-    })
+    });
+    finish_delivery(state, result)
 }
 pub(in crate::daemon::server) fn write_payloads_par_with_modes_for_state<P: AsRef<Path>>(
     state: &SharedState,
@@ -194,8 +206,9 @@ pub(in crate::daemon::server) fn write_payloads_par_with_modes_for_state<P: AsRe
     mode: MaterializationMode,
     modes: &[u32],
 ) -> MaterializationResult<StagedMaterializationStats> {
-    checked_output_destinations(state, targets)
-        .and_then(|targets| write_payloads_par_with_modes_scoped(&targets, payloads, mode, modes))
+    let result = checked_output_destinations(state, targets)
+        .and_then(|targets| write_payloads_par_with_modes_scoped(&targets, payloads, mode, modes));
+    finish_delivery(state, result)
 }
 pub(in crate::daemon::server) fn write_payloads_par_with_mtime_floor_and_policies_observed_for_state<
     P: AsRef<Path>,
@@ -208,11 +221,12 @@ pub(in crate::daemon::server) fn write_payloads_par_with_mtime_floor_and_policie
     policies: &[crate::compiler::DeliveryPolicy],
     mode: MaterializationMode,
 ) -> MaterializationResult<StagedMaterializationStats> {
-    checked_output_destinations(state, targets).and_then(|targets| {
+    let result = checked_output_destinations(state, targets).and_then(|targets| {
         write_payloads_par_with_mtime_floor_and_policies_observed_scoped(
             &targets, payloads, floors, policies, mode,
         )
-    })
+    });
+    finish_delivery(state, result)
 }
 pub(in crate::daemon::server) fn write_provisional_payloads_par_with_mtime_floor_observed_for_state<
     P: AsRef<Path>,
@@ -225,13 +239,26 @@ pub(in crate::daemon::server) fn write_provisional_payloads_par_with_mtime_floor
     policies: &[crate::compiler::DeliveryPolicy],
     mode: MaterializationMode,
 ) -> MaterializationResult<StagedMaterializationStats> {
-    checked_output_destinations(state, targets).and_then(|targets| {
+    let result = checked_output_destinations(state, targets).and_then(|targets| {
         write_provisional_payloads_par_with_mtime_floor_observed_scoped(
             &targets, payloads, floors, policies, mode,
         )
-    })
+    });
+    finish_delivery(state, result)
 }
 
 #[cfg(test)]
 #[path = "output_destination_tests.rs"]
 mod tests;
+
+fn finish_delivery<T>(
+    state: &SharedState,
+    result: MaterializationResult<T>,
+) -> MaterializationResult<T> {
+    if let Err(MaterializationFailure::CacheBlobMissing(missing)) = &result {
+        if verified_corruption(&missing.error) {
+            queue_corrupt_blob(state.artifact_dir.as_path(), missing.path.as_path());
+        }
+    }
+    result
+}
