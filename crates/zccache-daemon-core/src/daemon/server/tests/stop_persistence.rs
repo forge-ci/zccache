@@ -230,3 +230,46 @@ async fn stop_persistence_disk_failure_returns_typed_error() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn stop_persistence_accepts_durable_legacy_packed_hits() {
+    let cache = tempfile::tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut server = super::bind_isolated_server_at(&endpoint, cache.path());
+    let state = server.test_state_arc();
+    let key = "ab".repeat(32);
+    let bytes = Arc::new(b"durable legacy object".to_vec());
+    let metadata = ArtifactIndex::new(
+        vec!["object.o".into()],
+        vec![bytes.len() as u64],
+        Vec::new(),
+        Vec::new(),
+        0,
+    );
+    std::fs::create_dir_all(&state.artifact_dir).unwrap();
+    std::fs::write(
+        pack_path_for(&state.artifact_dir, &key),
+        build_pack(&[bytes]),
+    )
+    .unwrap();
+    let cached = CachedArtifact::from_index(metadata.clone());
+    let payloads =
+        ensure_payloads_with_staged_policy(&cached, &state.artifact_dir, &key, false).unwrap();
+    assert!(
+        matches!(&payloads[0], CachedPayload::Bytes(_)),
+        "legacy packs decode to resident bytes"
+    );
+    state.artifact_store.insert(&key, &metadata);
+    state.artifacts.insert(key, cached);
+    let task = tokio::spawn(async move { server.run(0).await.unwrap() });
+    let mut client = crate::ipc::connect(&endpoint).await.unwrap();
+    client.send(&Request::Shutdown).await.unwrap();
+    assert_eq!(
+        client.recv::<Response>().await.unwrap(),
+        Some(Response::ShuttingDown)
+    );
+    tokio::time::timeout(crate::core::wait::HELPER_JOIN, task)
+        .await
+        .unwrap()
+        .unwrap();
+}
