@@ -1,13 +1,15 @@
 //! Batch artifact-index deltas into checksummed per-entry disk commits.
 
 use super::*;
+use crate::core::cache_root_lock::CacheRootWriterLease;
+use std::io;
 
 pub(super) enum IndexWriterCommand {
     Insert(String, ArtifactIndex),
     /// Refresh retention age without replacing newer artifact metadata.
     Touch(String, u64),
     Remove(Vec<String>),
-    Clear(kernal_api::async_engine::OneshotSender<()>),
+    ClearBlocking(IndexClearReceiver),
     Flush(kernal_api::async_engine::OneshotSender<()>),
     /// Blocking startup reconciliation needs proof that queued rows are committed.
     FlushForReconciliation(std::sync::mpsc::SyncSender<bool>),
@@ -86,7 +88,7 @@ const PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration =
 pub(super) async fn drain_durable_state_for_shutdown(
     state: &SharedState,
     index_writer_handle: Option<kernal_api::async_engine::Task<()>>,
-) -> crate::core::sync::WritePermit {
+) -> crate::core::sync::PublicationDrainPermit {
     // 1. Deferred persist tasks (#799).
     //
     // zccache#1775: this drain is invisible unless it times out, so a long
@@ -99,7 +101,7 @@ pub(super) async fn drain_durable_state_for_shutdown(
     // 2. Block all publishers for the remainder of shutdown.
     let publication_guard = state
         .artifact_publication
-        .write_for(crate::core::sync::OPERATION_TIMEOUT)
+        .drain_for(crate::core::sync::OPERATION_TIMEOUT)
         .await;
 
     // 3. Deterministic WAL drain. The standalone daemon previously went
@@ -284,8 +286,13 @@ pub(super) async fn run_index_writer(
     mut rx: kernal_api::async_engine::UnboundedReceiver<IndexWriterCommand>,
     store: Arc<ArtifactStore>,
     shutdown: Arc<kernal_api::async_engine::Notify>,
+    root: CacheRootWriterLease,
 ) {
     use std::collections::HashMap;
+    // The actor owns its service claim; each accepted write gets an independent
+    // strong reference before launching, so cancelling the actor cannot release
+    // the native claim while a detached blocking write is still executing.
+    let root = Arc::new(root);
     let flush_interval = wal_flush_interval();
     let max_pending = wal_max_pending();
     let mut wal: HashMap<String, ArtifactIndex> = HashMap::with_capacity(max_pending);
@@ -317,37 +324,60 @@ pub(super) async fn run_index_writer(
             kernal_api::async_engine::FairRace3::First(msg) => {
                 match msg {
                     Ok(command) => {
-                        process_index_writer_command(command, &store, &mut wal, max_pending).await;
+                        process_index_writer_command(
+                            command,
+                            &store,
+                            &mut wal,
+                            max_pending,
+                            &root,
+                            &mut rx,
+                        )
+                        .await;
                         // Drain whatever else is already queued in this tick.
                         while let Ok(command) = rx.try_recv() {
-                            process_index_writer_command(command, &store, &mut wal, max_pending)
-                                .await;
+                            process_index_writer_command(
+                                command,
+                                &store,
+                                &mut wal,
+                                max_pending,
+                                &root,
+                                &mut rx,
+                            )
+                            .await;
                         }
                     }
                     Err(kernal_api::async_engine::RecvTimeoutError::TimedOut) => continue,
                     Err(kernal_api::async_engine::RecvTimeoutError::Disconnected) => {
                         // Channel closed (last sender dropped). Final flush.
-                        flush_wal_to_disk(&store, &mut wal).await;
+                        flush_wal_to_disk(&store, &mut wal, &root).await;
                         return;
                     }
                 }
             }
             kernal_api::async_engine::FairRace3::Second(()) => {
                 if !wal.is_empty() || store.has_pending_entries() || store.needs_checkpoint() {
-                    flush_wal_to_disk(&store, &mut wal).await;
+                    flush_wal_to_disk(&store, &mut wal, &root).await;
                 }
             }
             kernal_api::async_engine::FairRace3::Third(()) => {
                 // Daemon-initiated graceful shutdown. Drain anything still
                 // queued and flush before the runtime aborts us.
                 while let Ok(command) = rx.try_recv() {
-                    process_index_writer_command(command, &store, &mut wal, max_pending).await;
+                    process_index_writer_command(
+                        command,
+                        &store,
+                        &mut wal,
+                        max_pending,
+                        &root,
+                        &mut rx,
+                    )
+                    .await;
                 }
                 tracing::info!(
                     pending = wal.len(),
                     "index-writer shutdown signal received, draining and flushing"
                 );
-                flush_wal_to_disk(&store, &mut wal).await;
+                flush_wal_to_disk(&store, &mut wal, &root).await;
                 return;
             }
         }
@@ -359,12 +389,14 @@ async fn process_index_writer_command(
     store: &Arc<ArtifactStore>,
     wal: &mut std::collections::HashMap<String, ArtifactIndex>,
     max_pending: usize,
+    root: &Arc<CacheRootWriterLease>,
+    rx: &mut kernal_api::async_engine::UnboundedReceiver<IndexWriterCommand>,
 ) {
     match command {
         IndexWriterCommand::Insert(k, v) => {
             wal.insert(k, v);
             if wal.len() >= max_pending {
-                flush_wal_to_disk(store, wal).await;
+                flush_wal_to_disk(store, wal, root).await;
             }
         }
         IndexWriterCommand::Touch(k, stored_at_secs) => {
@@ -375,7 +407,7 @@ async fn process_index_writer_command(
                 wal.insert(k, meta);
             }
             if wal.len() >= max_pending {
-                flush_wal_to_disk(store, wal).await;
+                flush_wal_to_disk(store, wal, root).await;
             }
         }
         IndexWriterCommand::Remove(keys) => {
@@ -384,30 +416,93 @@ async fn process_index_writer_command(
             }
             let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
             let removed = store.remove_batch(&refs);
-            match Arc::clone(store).flush_incremental_async().await {
+            match launch_index_flush(store, root)
+                .await
+                .unwrap_or_else(|error| Err(io::Error::other(error)))
+            {
                 Ok(()) => tracing::info!(removed, "artifact-index removals flushed to disk"),
                 Err(error) => {
                     tracing::warn!(removed, %error, "artifact-index removal flush failed")
                 }
             }
         }
-        IndexWriterCommand::Clear(ack) => {
+        IndexWriterCommand::ClearBlocking(receiver) => {
+            // Reserve the actor before Clear acquires publication. In particular,
+            // any previous disk flush finishes before ready is acknowledged.
+            let Some((publication, ordered, flushed)) = receiver
+                .receive_for(OPERATION_TIMEOUT.saturating_mul(2))
+                .await
+            else {
+                return;
+            };
+            // Clear now owns publication. Everything already queued belongs to
+            // the old namespace; no publisher can enqueue a post-Clear command
+            // until the ordered acknowledgement below releases that exclusion.
+            let mut flush_acks = Vec::new();
+            let mut reconciliation_acks = Vec::new();
+            while let Ok(command) = rx.try_recv() {
+                match command {
+                    IndexWriterCommand::Flush(ack) => flush_acks.push(ack),
+                    IndexWriterCommand::FlushForReconciliation(ack) => {
+                        reconciliation_acks.push(ack)
+                    }
+                    _ => {}
+                }
+            }
             wal.clear();
             store.clear();
-            if let Err(error) = Arc::clone(store).flush_incremental_async().await {
+            // All older index commands have been retired. The publication
+            // commit may end now; disk completion has its own acknowledgement.
+            drop(publication);
+            let _ = ordered.try_send(());
+            let result = launch_index_flush(store, root)
+                .await
+                .unwrap_or_else(|error| Err(io::Error::other(error)));
+            if let Err(error) = &result {
                 tracing::warn!(%error, "cleared artifact index flush failed");
             }
-            let _ = ack.send(());
+            let _ = flushed.try_send(result.is_ok());
+            for ack in reconciliation_acks {
+                let _ = ack.try_send(result.is_ok());
+            }
+            for ack in flush_acks {
+                let _ = ack.send(());
+            }
         }
         IndexWriterCommand::Flush(ack) => {
-            flush_wal_to_disk(store, wal).await;
+            flush_wal_to_disk(store, wal, root).await;
             let _ = ack.send(());
         }
         IndexWriterCommand::FlushForReconciliation(ack) => {
-            flush_wal_to_disk(store, wal).await;
+            flush_wal_to_disk(store, wal, root).await;
             let _ = ack.try_send(wal.is_empty() && !store.has_pending_entries());
         }
     }
+}
+
+// Nonblocking construction: the service owns the returned, cancellation-safe
+// job. Its request acknowledgements have separate explicit wait budgets.
+fn launch_index_flush(
+    store: &Arc<ArtifactStore>,
+    root: &Arc<CacheRootWriterLease>,
+) -> kernal_api::async_engine::Task<io::Result<()>> {
+    let store = Arc::clone(store);
+    let root = Arc::clone(root);
+    kernal_api::async_engine::launch_blocking(move || {
+        // Root is captured last, then bound first: both queued cancellation
+        // and normal/unwind teardown release the store before native ownership.
+        let _ = &store;
+        let _root = root;
+        let writer_store = store;
+        #[cfg(test)]
+        persist::StagedHookGuard::pause_index_flush(&writer_store);
+        if writer_store.needs_checkpoint() {
+            writer_store.flush()
+        } else {
+            writer_store.flush_incremental()
+        }
+    })
+    .detach_on_drop()
 }
 
 pub(super) async fn flush_index_writer(
@@ -424,23 +519,139 @@ pub(super) async fn flush_index_writer(
     )
 }
 
-pub(super) async fn clear_index_writer(
+pub(super) struct PendingIndexClear {
+    flushed: std::sync::mpsc::Receiver<bool>,
+}
+
+/// Sealed transfer state; only the reserved sender constructs this value.
+/// Dylint checks construction, unsealing and the receive owner's lack of I/O.
+pub(super) struct IndexClearCommit {
+    publication: crate::core::sync::PublicationCommitPermit,
+}
+
+impl IndexClearCommit {
+    fn new(publication: crate::core::sync::PublicationCommitPermit) -> Self {
+        Self { publication }
+    }
+
+    fn into_publication(self) -> crate::core::sync::PublicationCommitPermit {
+        self.publication
+    }
+}
+
+pub(super) struct IndexClearReceiver {
+    ready: std::sync::mpsc::SyncSender<()>,
+    commit: kernal_api::async_engine::OneshotReceiver<IndexClearCommit>,
+    ordered: std::sync::mpsc::SyncSender<()>,
+    flushed: std::sync::mpsc::SyncSender<bool>,
+    #[cfg(test)]
+    receive_gate: Option<Arc<Notify>>,
+}
+
+impl IndexClearReceiver {
+    async fn receive_for(
+        self,
+        bound: Duration,
+    ) -> Option<(
+        crate::core::sync::PublicationCommitPermit,
+        std::sync::mpsc::SyncSender<()>,
+        std::sync::mpsc::SyncSender<bool>,
+    )> {
+        // Before ready, no sender can possess a reserved commit capability.
+        // After ready, this sealed owner only waits and immediately unseals.
+        self.ready.try_send(()).ok()?;
+        #[cfg(test)]
+        if let Some(gate) = &self.receive_gate {
+            kernal_api::async_engine::timeout(bound, gate.notified())
+                .await
+                .ok()?;
+        }
+        let token = kernal_api::async_engine::timeout(bound, self.commit)
+            .await
+            .ok()?
+            .ok()?;
+        Some((token.into_publication(), self.ordered, self.flushed))
+    }
+}
+
+pub(super) struct ReservedIndexClear {
+    commit: kernal_api::async_engine::OneshotSender<IndexClearCommit>,
+    ordered: std::sync::mpsc::Receiver<()>,
+    flushed: std::sync::mpsc::Receiver<bool>,
+}
+
+impl ReservedIndexClear {
+    /// The reserved actor performs only memory work before acknowledging this
+    /// commit; no earlier or current disk operation is awaited under exclusion.
+    pub(super) fn commit_for(
+        self,
+        publication: crate::core::sync::PublicationCommitPermit,
+        timeout: Duration,
+    ) -> Option<PendingIndexClear> {
+        // The actor owns exclusion even if this waiter times out or unwinds;
+        // it can never apply a late Clear to a newer publication.
+        self.commit.send(IndexClearCommit::new(publication)).ok()?;
+        crate::core::wait::recv_for(&self.ordered, timeout).ok()?;
+        Some(PendingIndexClear {
+            flushed: self.flushed,
+        })
+    }
+}
+
+impl PendingIndexClear {
+    pub(super) fn wait_for(self, timeout: Duration) -> bool {
+        matches!(
+            crate::core::wait::recv_for(&self.flushed, timeout),
+            Ok(true)
+        )
+    }
+}
+
+pub(super) fn reserve_index_clear_blocking(
     tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
     timeout: std::time::Duration,
+) -> Option<ReservedIndexClear> {
+    let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (commit, commit_rx) = kernal_api::async_engine::oneshot_channel();
+    let (ordered_tx, ordered_rx) = std::sync::mpsc::sync_channel(1);
+    let (flushed, flushed_rx) = std::sync::mpsc::sync_channel(1);
+    tx.send(IndexWriterCommand::ClearBlocking(IndexClearReceiver {
+        ready,
+        commit: commit_rx,
+        ordered: ordered_tx,
+        flushed,
+        #[cfg(test)]
+        receive_gate: None,
+    }))
+    .ok()?;
+    crate::core::wait::recv_for(&ready_rx, timeout).ok()?;
+    Some(ReservedIndexClear {
+        commit,
+        ordered: ordered_rx,
+        flushed: flushed_rx,
+    })
+}
+
+#[cfg(test)]
+fn clear_index_writer_blocking(
+    tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
+    timeout: Duration,
 ) -> bool {
-    let (ack_tx, ack_rx) = kernal_api::async_engine::oneshot_channel();
-    if tx.send(IndexWriterCommand::Clear(ack_tx)).is_err() {
-        return false;
-    }
-    matches!(
-        kernal_api::async_engine::timeout(timeout, ack_rx).await,
-        Ok(Ok(()))
-    )
+    reserve_index_clear_blocking(tx, crate::core::wait::PROBE)
+        .and_then(|reserved| {
+            reserved.commit_for(
+                crate::core::sync::PublicationBarrier::new()
+                    .blocking_write_for(crate::core::wait::PROBE),
+                crate::core::wait::PROBE,
+            )
+        })
+        .is_some_and(|pending| pending.wait_for(timeout))
 }
 
 pub(super) async fn flush_wal_to_disk(
     store: &Arc<ArtifactStore>,
     wal: &mut std::collections::HashMap<String, ArtifactIndex>,
+    root: &Arc<CacheRootWriterLease>,
 ) {
     if wal.is_empty() && !store.has_pending_entries() && !store.needs_checkpoint() {
         return;
@@ -451,11 +662,9 @@ pub(super) async fn flush_wal_to_disk(
     // do the disk write off the runtime thread so the flush doesn't block
     // request handlers.
     store.insert_many(drained);
-    let res = if store.needs_checkpoint() {
-        Arc::clone(store).flush_async().await
-    } else {
-        Arc::clone(store).flush_incremental_async().await
-    };
+    let res = launch_index_flush(store, root)
+        .await
+        .unwrap_or_else(|error| Err(io::Error::other(error)));
     match res {
         Ok(()) => tracing::info!(committed = count, "WAL flushed to disk"),
         Err(e) => tracing::warn!(count, "WAL flush to disk failed: {e}"),
@@ -465,6 +674,160 @@ pub(super) async fn flush_wal_to_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_receive_releases_a_queued_clear_permit_without_acknowledging_reset() {
+        crate::test_support::test_timeout(async {
+            let barrier = crate::core::sync::PublicationBarrier::new();
+            let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let (commit, commit_rx) = kernal_api::async_engine::oneshot_channel();
+            let (ordered, ordered_rx) = std::sync::mpsc::sync_channel(1);
+            let (flushed, flushed_rx) = std::sync::mpsc::sync_channel(1);
+            let receiver = IndexClearReceiver {
+                ready,
+                commit: commit_rx,
+                ordered,
+                flushed,
+                receive_gate: Some(Arc::new(Notify::new())),
+            };
+            let receiving = tokio::spawn(receiver.receive_for(Duration::from_secs(5)));
+            tokio::task::spawn_blocking(move || {
+                crate::core::wait::recv_for(&ready_rx, Duration::from_secs(5)).unwrap();
+            })
+            .await
+            .unwrap();
+            let publication = barrier.blocking_write_for(Duration::from_secs(5));
+            assert!(commit.send(IndexClearCommit::new(publication)).is_ok());
+            assert!(
+                barrier.try_read_owned().is_err(),
+                "queued commit lost exclusion"
+            );
+            receiving.abort();
+            let cancelled = tokio::time::timeout(Duration::from_secs(5), receiving)
+                .await
+                .unwrap();
+            assert!(matches!(cancelled, Err(error) if error.is_cancelled()));
+            assert!(
+                barrier.try_read_owned().is_ok(),
+                "cancelled receive leaked exclusion"
+            );
+            assert!(matches!(
+                ordered_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ));
+            assert!(matches!(
+                flushed_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_index_writer_keeps_root_until_timed_out_clear_write_finishes() {
+        crate::test_support::test_timeout(async {
+            let directory = tempfile::tempdir().unwrap();
+            let cache_dir = NormalizedPath::new(directory.path());
+            let endpoint = crate::ipc::unique_test_endpoint();
+            let mut server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+            // Seed a durable old row so reopening after the incremental Clear
+            // proves its journal checkpoint supersedes the legacy index.
+            server.state.artifact_store.insert(
+                "old",
+                &ArtifactIndex::new(vec!["old.o".into()], vec![1], vec![], vec![], 0),
+            );
+            server.state.artifact_store.flush().unwrap();
+            let hook = persist::StagedHookGuard::arm_index_flush(&server.state.artifact_store);
+            let writer = tokio::spawn(run_index_writer(
+                server.index_writer_rx.take().unwrap(),
+                Arc::clone(&server.state.artifact_store),
+                Arc::clone(&server.state.index_writer_shutdown),
+                server
+                    .state
+                    .cache_root_lock
+                    .lease_for(STATE_TIMEOUT)
+                    .unwrap(),
+            ));
+            let tx = server.state.index_writer_tx.clone();
+            let clear = tokio::task::spawn_blocking(move || {
+                clear_index_writer_blocking(&tx, Duration::from_millis(5))
+            });
+            let hook = tokio::task::spawn_blocking(move || {
+                hook.wait_until_reached_for(Duration::from_secs(10));
+                hook
+            })
+            .await
+            .unwrap();
+            let acknowledged = tokio::time::timeout(Duration::from_secs(5), clear)
+                .await
+                .unwrap()
+                .unwrap();
+            writer.abort();
+            let cancelled = tokio::time::timeout(Duration::from_secs(5), writer)
+                .await
+                .unwrap()
+                .unwrap_err()
+                .is_cancelled();
+            server.state.cache_root_lock.release();
+            let path = directory.path().to_path_buf();
+            let excluded = tokio::task::spawn_blocking(move || {
+                match crate::core::cache_root_lock::CacheRootWriterLock::acquire(&path) {
+                    Err(error) => error.kind() == io::ErrorKind::WouldBlock,
+                    Ok(contender) => {
+                        drop(contender);
+                        false
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            hook.resume();
+            // Root reuse, rather than the legacy index.bin rename, observes
+            // completion of either a journal commit or a full checkpoint.
+            let path = directory.path().to_path_buf();
+            let next = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let path = path.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        crate::core::cache_root_lock::CacheRootWriterLock::acquire(&path)
+                    })
+                    .await
+                    .unwrap()
+                    {
+                        Ok(next) => break next,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        Err(error) => panic!("root reuse failed: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("finished WAL write must release native ownership");
+            let reopened = ArtifactStore::open(
+                crate::core::config::index_path_from_cache_dir(&cache_dir).as_path(),
+            )
+            .unwrap();
+            assert!(
+                reopened.get("old").is_none(),
+                "Clear must durably supersede the old row"
+            );
+            drop(next);
+            assert!(
+                !acknowledged,
+                "Clear must report the acknowledgement timeout"
+            );
+            assert!(
+                cancelled,
+                "the actor waiter must cancel while disk work is paused"
+            );
+            assert!(
+                excluded,
+                "the detached WAL write lost native root ownership"
+            );
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn wal_timer_accepts_a_legacy_long_interval_without_env_mutation() {
@@ -478,8 +841,12 @@ mod tests {
     #[tokio::test]
     async fn access_touch_merges_into_newest_pending_verdict_row() {
         let temp = tempfile::tempdir().expect("temporary index directory");
+        let controller =
+            crate::core::cache_root_lock::CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let root = Arc::new(controller.lease_for(STATE_TIMEOUT).unwrap());
         let store = Arc::new(ArtifactStore::open_empty(&temp.path().join("index.bin")));
         let mut wal = std::collections::HashMap::new();
+        let (_tx, mut rx) = kernal_api::async_engine::unbounded_channel();
         let key = "b".repeat(64);
         let mut stale = ArtifactIndex::new(
             vec!["output.rmeta".to_string()],
@@ -505,6 +872,8 @@ mod tests {
             &store,
             &mut wal,
             usize::MAX,
+            &root,
+            &mut rx,
         )
         .await;
         process_index_writer_command(
@@ -512,6 +881,8 @@ mod tests {
             &store,
             &mut wal,
             usize::MAX,
+            &root,
+            &mut rx,
         )
         .await;
 
@@ -524,9 +895,13 @@ mod tests {
     #[tokio::test]
     async fn remove_cancels_pending_insert_and_persists_deletion() {
         let temp = tempfile::tempdir().expect("temporary index directory");
+        let controller =
+            crate::core::cache_root_lock::CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let root = Arc::new(controller.lease_for(STATE_TIMEOUT).unwrap());
         let index_path = temp.path().join("index.bin");
         let store = Arc::new(ArtifactStore::open_empty(&index_path));
         let mut wal = std::collections::HashMap::new();
+        let (_tx, mut rx) = kernal_api::async_engine::unbounded_channel();
         let key = "a".repeat(64);
         let meta = ArtifactIndex::new(
             vec!["output.o".to_string()],
@@ -541,6 +916,8 @@ mod tests {
             &store,
             &mut wal,
             usize::MAX,
+            &root,
+            &mut rx,
         )
         .await;
         assert!(wal.contains_key(&key));
@@ -550,6 +927,8 @@ mod tests {
             &store,
             &mut wal,
             usize::MAX,
+            &root,
+            &mut rx,
         )
         .await;
 

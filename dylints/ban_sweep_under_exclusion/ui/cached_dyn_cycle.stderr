@@ -1,0 +1,22 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/cached_dyn_cycle.rs:19:5
+   |
+LL |     drop(first);
+   |     ^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/cached_dyn_cycle.rs:20:5
+   |
+LL |     drop(second);
+   |     ^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/cached_dyn_cycle.rs:22:1
+   |
+LL | }
+   | ^
+
+error: aborting due to 3 previous errors
+

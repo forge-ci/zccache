@@ -1,0 +1,265 @@
+//! Retired names still consume the cache budget until unlink succeeds.
+use super::*;
+
+#[test]
+fn fresh_integrity_sidecars_preserve_payload_retention_age() {
+    let root = tempfile::tempdir().unwrap();
+    let payload = root.path().join(format!("{}_0", "a".repeat(64)));
+    std::fs::write(&payload, vec![3u8; 8192]).unwrap();
+    let now = SystemTime::now();
+    let stale = kernal_api::platform::fs::FileTime::from_system_time(now - EXPIRE_AGE - DAY);
+    kernal_api::platform::fs::set_file_mtime(&payload, stale).unwrap();
+    let before = scan_artifacts(root.path()).unwrap();
+    let digest = crate::artifact::blob_digest::sidecar_path(&payload);
+    std::fs::write(&digest, vec![7u8; 4096]).unwrap();
+    let after = scan_artifacts(root.path()).unwrap();
+
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].last_access, before[0].last_access);
+    let allocated = [payload.as_path(), digest.as_path()]
+        .into_iter()
+        .map(|path| {
+            crate::platform::fs::volume::allocated_bytes(path, &std::fs::metadata(path).unwrap())
+        })
+        .sum::<u64>();
+    assert_eq!(after[0].allocated_bytes, allocated);
+    let plan = plan_maintenance(
+        bytes_policy(GIB),
+        MaintenanceKind::Full,
+        now,
+        FilesystemSpace {
+            capacity_bytes: 1000 * GIB,
+            free_bytes: 500 * GIB,
+        },
+        &after,
+        0,
+    );
+    assert_eq!(plan.pressure, MaintenancePressure::None);
+    assert_eq!(plan.selected, vec!["a".repeat(64)]);
+}
+
+#[test]
+fn legacy_payload_sweep_releases_publication_and_accounts_sidecars() {
+    use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = root.path().join("artifacts");
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    let payload = artifact_dir.join(format!("{}_0", "a".repeat(64)));
+    std::fs::write(&payload, vec![3u8; 8192]).unwrap();
+    let digest = crate::artifact::blob_digest::sidecar_path(&payload);
+    std::fs::write(&digest, vec![7u8; 4096]).unwrap();
+    let allocated = [payload.as_path(), digest.as_path()]
+        .into_iter()
+        .map(|path| {
+            crate::platform::fs::volume::allocated_bytes(path, &std::fs::metadata(path).unwrap())
+        })
+        .sum::<u64>();
+    let barrier = Arc::new(crate::core::sync::PublicationBarrier::new());
+    let hook = StagedHookGuard::arm(&artifact_dir, StagedHookPoint::TreeSweep);
+    let worker_barrier = Arc::clone(&barrier);
+    let worker_dir = artifact_dir.clone();
+    let index_path = root.path().join("index.bin");
+    let worker = std::thread::spawn(move || {
+        let store = ArtifactStore::open_empty(&index_path);
+        maintain_disk_artifacts_with_barrier(
+            MaintenancePass {
+                artifact_dir: &worker_dir,
+                artifacts: &DashMap::new(),
+                artifact_store: &store,
+                index_writer_tx: None,
+                dep_graph: &DepGraph::new(),
+                pending_write_bytes: 0,
+                policy: bytes_policy(GIB),
+                kind: MaintenanceKind::Full,
+                environment: &FixedEnvironment {
+                    now: SystemTime::now() + EXPIRE_AGE + Duration::from_secs(1),
+                    space: FilesystemSpace {
+                        capacity_bytes: 1000 * GIB,
+                        free_bytes: 500 * GIB,
+                    },
+                },
+                retired_top_level: None,
+            },
+            Some(&worker_barrier),
+            None,
+        )
+    });
+    hook.wait_until_reached_for(Duration::from_secs(10));
+    let publication_permitted = barrier.try_read_owned().is_ok();
+    let detached = !payload.exists() && !digest.exists();
+    hook.resume();
+    let report = crate::core::wait::join_for(worker, Duration::from_secs(10))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        publication_permitted,
+        "legacy cleanup retained publication exclusion"
+    );
+    assert!(
+        detached,
+        "legacy payload or digest remained live during sweep"
+    );
+    assert_eq!(report.artifacts_removed, 1);
+    assert_eq!(report.usage_before_bytes, allocated);
+    assert_eq!(report.usage_after_bytes, 0);
+    assert!(report.bytes_reclaimed > 0);
+}
+
+#[test]
+fn deferred_trash_counts_against_usage_until_recovered() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = root.path().join("artifacts");
+    let trash = artifact_dir.join(".staged-v2/.trash/abandoned");
+    std::fs::create_dir_all(&trash).unwrap();
+    let payload = trash.join("payload");
+    std::fs::write(&payload, vec![7u8; 16 * 1024]).unwrap();
+    let allocated = crate::platform::fs::volume::allocated_bytes(
+        &payload,
+        &std::fs::metadata(&payload).unwrap(),
+    );
+    assert!(allocated > 0);
+    let store = ArtifactStore::open_empty(&root.path().join("index.bin"));
+    let report = maintain_disk_artifacts(MaintenancePass {
+        artifact_dir: &artifact_dir,
+        artifacts: &DashMap::new(),
+        artifact_store: &store,
+        index_writer_tx: None,
+        dep_graph: &DepGraph::new(),
+        pending_write_bytes: 17,
+        policy: bytes_policy(GIB),
+        kind: MaintenanceKind::Full,
+        environment: &FixedEnvironment {
+            now: SystemTime::now(),
+            space: FilesystemSpace {
+                capacity_bytes: 1000 * GIB,
+                free_bytes: 500 * GIB,
+            },
+        },
+        retired_top_level: None,
+    })
+    .unwrap();
+    assert_eq!(
+        report.usage_before_bytes,
+        allocated + 17,
+        "durable trash disappeared from accounted usage before unlink"
+    );
+    assert_eq!(report.usage_after_bytes, 17);
+    assert!(!payload.exists());
+    assert_eq!(report.artifacts_removed, 0);
+}
+
+#[test]
+fn a_failed_unlink_remains_accounted_while_successful_siblings_are_credited() {
+    use crate::daemon::server::persist::{StagedFaultGuard, StagedFaultPoint};
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = root.path().join("artifacts");
+    let trash = artifact_dir.join(".staged-v2/.trash/abandoned");
+    std::fs::create_dir_all(&trash).unwrap();
+    let failed = trash.join("failed");
+    let removed = trash.join("removed");
+    std::fs::write(&failed, vec![1u8; 8192]).unwrap();
+    std::fs::write(&removed, vec![2u8; 16384]).unwrap();
+    let allocation = |path: &Path| {
+        crate::platform::fs::volume::allocated_bytes(path, &std::fs::metadata(path).unwrap())
+    };
+    let failed_bytes = allocation(&failed);
+    let removed_bytes = allocation(&removed);
+    let expected_credit = if crate::core::config::file_may_free_space_on_removal(&removed) {
+        removed_bytes
+    } else {
+        0
+    };
+    let fault = StagedFaultGuard::arm(&failed, [StagedFaultPoint::TrashDelete]);
+    let report = pass(&artifact_dir, root.path());
+    fault.assert_all_consumed();
+    assert_eq!(report.usage_before_bytes, failed_bytes + removed_bytes + 17);
+    assert_eq!(report.usage_after_bytes, failed_bytes + 17);
+    assert_eq!(report.bytes_reclaimed, expected_credit);
+    assert!(failed.exists());
+    assert!(!removed.exists());
+    drop(fault);
+    let retry = pass(&artifact_dir, root.path());
+    assert_eq!(retry.usage_before_bytes, failed_bytes + 17);
+    assert_eq!(retry.usage_after_bytes, 17);
+    assert!(!failed.exists());
+}
+
+#[test]
+fn live_and_retired_hardlinks_are_counted_once_without_promising_free_space() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = root.path().join("artifacts");
+    let trash = artifact_dir.join(".staged-v2/.trash/abandoned");
+    std::fs::create_dir_all(&trash).unwrap();
+    let live = artifact_dir.join("retained_0");
+    let retired = trash.join("same-inode");
+    std::fs::write(&live, vec![3u8; 8192]).unwrap();
+    std::fs::hard_link(&live, &retired).unwrap();
+    let allocated =
+        crate::platform::fs::volume::allocated_bytes(&live, &std::fs::metadata(&live).unwrap());
+    let report = pass(&artifact_dir, root.path());
+    assert_eq!(report.usage_before_bytes, allocated + 17);
+    assert_eq!(report.usage_after_bytes, allocated + 17);
+    assert_eq!(report.bytes_reclaimed, 0);
+    assert!(live.exists());
+    assert!(!retired.exists());
+}
+
+fn pass(artifact_dir: &Path, root: &Path) -> DiskMaintenanceReport {
+    let store = ArtifactStore::open_empty(&root.join("index.bin"));
+    maintain_disk_artifacts(MaintenancePass {
+        artifact_dir,
+        artifacts: &DashMap::new(),
+        artifact_store: &store,
+        index_writer_tx: None,
+        dep_graph: &DepGraph::new(),
+        pending_write_bytes: 17,
+        policy: bytes_policy(GIB),
+        kind: MaintenanceKind::Full,
+        environment: &FixedEnvironment {
+            now: SystemTime::now(),
+            space: FilesystemSpace {
+                capacity_bytes: 1000 * GIB,
+                free_bytes: 500 * GIB,
+            },
+        },
+        retired_top_level: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn physical_accounting_expires_before_visiting_a_retired_tree() {
+    let root = tempfile::tempdir().unwrap();
+    let trash = root.path().join(".staged-v2/.trash/retired");
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("payload"), b"retained").unwrap();
+    let mut usage = artifact("retired", 0, SystemTime::UNIX_EPOCH, Duration::ZERO);
+    let error = accounting::add_tree_for(&trash, &mut usage, &mut HashSet::new(), Duration::ZERO)
+        .expect_err("an expired accounting walk must not chase newly retired names");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
+fn physical_accounting_budget_includes_paused_subtrees() {
+    use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+    let root = tempfile::tempdir().unwrap();
+    let trash = root.path().join(".staged-v2/.trash/retired");
+    std::fs::create_dir_all(&trash).unwrap();
+    let payload = trash.join("payload");
+    std::fs::write(&payload, b"retained").unwrap();
+    let hook = StagedHookGuard::arm(&payload, StagedHookPoint::ScanEntryListed);
+    let bound = Duration::from_secs(2);
+    let worker = std::thread::spawn(move || {
+        let mut usage = artifact("retired", 0, SystemTime::UNIX_EPOCH, Duration::ZERO);
+        accounting::add_tree_for(root.path(), &mut usage, &mut HashSet::new(), bound)
+    });
+    hook.wait_until_reached_for(Duration::from_secs(5));
+    std::thread::sleep(bound + Duration::from_millis(20));
+    hook.resume();
+    let error = crate::core::wait::join_for(worker, Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .expect_err("subtrees must share the original accounting budget");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}

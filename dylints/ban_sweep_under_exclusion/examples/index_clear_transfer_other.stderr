@@ -1,0 +1,165 @@
+error: index Clear receive permits only its bounded commit wait
+  --> $DIR/index_clear_transfer_other.rs:8:79
+   |
+LL |                   async fn receive_for(self) -> Option<PublicationCommitPermit> {
+   |  _______________________________________________________________________________^
+LL | |                     self.ready.try_send(()).ok()?;
+LL | |                     let _ = kernal_api::async_engine::timeout(
+LL | |                         Duration::from_secs(1),
+...  |
+LL | |                     Some(token.into_publication())
+LL | |                 }
+   | |_________________^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/index_clear_transfer_other.rs:17:29
+   |
+LL |                     let _ = std::fs::remove_file("retired");
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear receive must await its bounded commit channel directly
+  --> $DIR/index_clear_transfer_other.rs:10:29
+   |
+LL |                       let _ = kernal_api::async_engine::timeout(
+   |  _____________________________^
+LL | |                         Duration::from_secs(1),
+LL | |                         std::future::pending::<()>(),
+LL | |                     )
+LL | |                     .await;
+   | |__________________________^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:15:34
+   |
+LL |                     let hidden = async { std::fs::read("nested") };
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/index_clear_transfer_other.rs:15:42
+   |
+LL |                     let hidden = async { std::fs::read("nested") };
+   |                                          ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear receive must await its bounded commit channel directly
+  --> $DIR/index_clear_transfer_other.rs:18:33
+   |
+LL |                       let token = kernal_api::async_engine::timeout(
+   |  _________________________________^
+LL | |                         Duration::from_secs(1),
+LL | |                         delayed(self.commit),
+LL | |                     )
+LL | |                     .await
+   | |__________________________^
+
+error: short publication or store exclusion must not cross suspension
+  --> $DIR/index_clear_transfer_other.rs:32:73
+   |
+LL |                 kernal_api::async_engine::sleep(Duration::from_secs(1)).await;
+   |                                                                         ^^^^^
+
+error: short publication or store exclusion must not cross suspension
+  --> $DIR/index_clear_transfer_other.rs:33:24
+   |
+LL |                 commit.await
+   |                        ^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:36:25
+   |
+LL |                 let _ = IndexClearCommit::new(permit);
+   |                         ^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:39:25
+   |
+LL |                 let _ = IndexClearCommit { publication };
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:42:22
+   |
+LL |                 drop(token.publication);
+   |                      ^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:45:21
+   |
+LL |                 let IndexClearCommit { publication } = token;
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:50:25
+   |
+LL |                 let _ = Alias { publication };
+   |                         ^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:53:21
+   |
+LL |                 let Alias { publication } = token;
+   |                     ^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:58:21
+   |
+LL |                     Self { publication }
+   |                     ^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:61:25
+   |
+LL |                     let Self { publication } = self;
+   |                         ^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:66:25
+   |
+LL |                 let _ = receiver.ready.try_send(());
+   |                         ^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:69:33
+   |
+LL |                 let construct = IndexClearCommit::new;
+   |                                 ^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:73:22
+   |
+LL |                 drop(token.into_publication());
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: index Clear transfer belongs to its sealed phase owner
+  --> $DIR/index_clear_transfer_other.rs:76:22
+   |
+LL |                 drop(receiver.receive_for());
+   |                      ^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/index_clear_transfer_other.rs:79:17
+   |
+LL |                 std::mem::forget(token);
+   |                 ^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/index_clear_transfer_other.rs:82:25
+   |
+LL |                 let _ = Box::new(token) as Box<dyn std::any::Any>;
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/index_clear_transfer_other.rs:82:25
+   |
+LL |                 let _ = Box::new(token) as Box<dyn std::any::Any>;
+   |                         ^^^^^^^^^^^^^^^
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/index_clear_transfer_other.rs:87:25
+   |
+LL |                 let _ = std::fs::read("still protected");
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 24 previous errors
+

@@ -25,7 +25,7 @@ pub(super) struct PreparedLinkMiss {
 }
 
 pub(super) struct LinkMissPreparationRequest<'a> {
-    pub(super) staging_dir: &'a Path,
+    pub(super) staging: &'a StagingRoot,
     pub(super) args: &'a [String],
     pub(super) output_path: &'a NormalizedPath,
     pub(super) secondary_outputs: &'a [NormalizedPath],
@@ -102,7 +102,7 @@ pub(super) fn should_prepare_link_miss_during_hash(
 
 pub(super) fn prepare_link_miss(request: LinkMissPreparationRequest<'_>) -> PreparedLinkMiss {
     let LinkMissPreparationRequest {
-        staging_dir,
+        staging,
         args,
         output_path,
         secondary_outputs,
@@ -112,15 +112,15 @@ pub(super) fn prepare_link_miss(request: LinkMissPreparationRequest<'_>) -> Prep
         sibling_input_names,
     } = request;
     let planning_started = std::time::Instant::now();
-    let directory_plan_result = is_directory_bundle
-        .then(|| StagedDirectoryPlan::dsymutil(staging_dir, args, output_path, cwd));
+    let directory_plan_result =
+        is_directory_bundle.then(|| StagedDirectoryPlan::dsymutil(staging, args, output_path, cwd));
     let directory_plan_enabled = matches!(
         directory_plan_result.as_ref(),
         Some(StagedPlanOutcome::Enabled(_))
     );
-    let staged_plan_result = directory_plan_result
-        .is_none()
-        .then(|| StagedCompilePlan::link(staging_dir, args, output_path, secondary_outputs, cwd));
+    let staged_plan_result = directory_plan_result.is_none().then(|| {
+        StagedCompilePlan::link(staging.path(), args, output_path, secondary_outputs, cwd)
+    });
     let planning_ns = planning_started.elapsed().as_nanos() as u64;
     let dir_snapshot_result = (!directory_plan_enabled).then(|| {
         crate::daemon::side_effect::snapshot_directory_excluding(output_dir, sibling_input_names)

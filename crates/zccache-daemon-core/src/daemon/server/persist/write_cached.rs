@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Evidence that a cache payload disappeared after its metadata was selected.
+/// Evidence that a selected payload disappeared or failed durable verification.
 /// Only this type authorizes a caller to invalidate a depgraph entry.
 #[derive(Debug)]
 pub(in crate::daemon::server) struct CacheBlobMissing {
@@ -96,7 +96,7 @@ pub(in crate::daemon::server) fn write_cached_output(
     data: &[u8],
 ) -> std::io::Result<()> {
     if !cache_file.exists() {
-        remove_materialized_output(out_path)?;
+        remove_materialized_output(&OutputDestination::for_test(out_path))?;
         return std::fs::write(out_path, data);
     }
     materialize_cached_file(
@@ -155,8 +155,8 @@ pub(in crate::daemon::server) fn materialize_cached_file_with_mode(
     force_observation: bool,
 ) -> std::io::Result<StagedMaterializationStats> {
     verify_registered_blob(cache_file)?;
-    materialize_verified_cached_file_observed(
-        out_path,
+    materialize_verified_cached_file_observed_scoped(
+        &OutputDestination::for_test(out_path),
         cache_file,
         delivery,
         mode,
@@ -165,14 +165,15 @@ pub(in crate::daemon::server) fn materialize_cached_file_with_mode(
     )
 }
 
-pub(in crate::daemon::server) fn materialize_verified_cached_file_observed(
-    out_path: &Path,
+pub(in crate::daemon::server) fn materialize_verified_cached_file_observed_scoped(
+    destination: &OutputDestination,
     cache_file: &Path,
     delivery: crate::compiler::DeliveryPolicy,
     mode: MaterializationMode,
     force_observation: bool,
     pass: SiblingFloorPass,
 ) -> std::io::Result<StagedMaterializationStats> {
+    let out_path = destination.as_ref();
     // A legacy cache-file hit can restore a Cargo build-script executable. Hold
     // the same exclusion as staged delivery through every materialization tier:
     // otherwise a daemon child can inherit a write descriptor and Cargo may
@@ -181,7 +182,7 @@ pub(in crate::daemon::server) fn materialize_verified_cached_file_observed(
     let result = {
         let _materialize_guard = crate::daemon::spawn_exclusion::materialize_exclusive();
         materialize_verified_cached_file_tiers(
-            out_path,
+            destination,
             cache_file,
             delivery,
             mode,
@@ -196,13 +197,14 @@ pub(in crate::daemon::server) fn materialize_verified_cached_file_observed(
 }
 
 fn materialize_verified_cached_file_tiers(
-    out_path: &Path,
+    destination: &OutputDestination,
     cache_file: &Path,
     delivery: crate::compiler::DeliveryPolicy,
     mode: MaterializationMode,
     force_observation: bool,
     pass: SiblingFloorPass,
 ) -> std::io::Result<StagedMaterializationStats> {
+    let out_path = destination.as_ref();
     let staged = is_staged_artifact_path(cache_file);
     let observe = force_observation || staged;
     let observed = |reflink_count, hardlink_count, copy_count, copy_bytes| {
@@ -234,20 +236,20 @@ fn materialize_verified_cached_file_tiers(
             // (LINK -> COPY) cannot leave it older than its siblings
             // (#466/#467).
             let hit = resolve_hit_mtime(out_path, cache_file, pass)?;
-            detach_with_floored_mtime(out_path, cache_file, hit.mtime, mode)?;
+            detach_with_floored_mtime(destination, cache_file, hit.mtime, mode)?;
             return Ok(observed(0, 0, 1, bytes));
         }
         crate::platform::fs::permissions::set_cache_blob_sealed(cache_file, readonly_enabled())?;
         let hit = resolve_hit_mtime(out_path, cache_file, pass)?;
         if hit.raised {
             let bytes = std::fs::metadata(cache_file)?.len();
-            detach_with_floored_mtime(out_path, cache_file, hit.mtime, mode)?;
+            detach_with_floored_mtime(destination, cache_file, hit.mtime, mode)?;
             return Ok(observed(0, 0, 1, bytes));
         }
         register_hardlink(cache_file, out_path)?;
         return Ok(observed(0, 1, 0, 0));
     }
-    remove_materialized_output(out_path)?;
+    remove_materialized_output(destination)?;
     // One mtime for this hit in every tier (#1771): the cache object's, raised
     // by the sibling floor. A raised hit cannot share the cache inode, so the
     // hardlink tier below is skipped for it, exactly as the same-inode branch
@@ -330,7 +332,7 @@ fn materialize_verified_cached_file_tiers(
                             error = %error,
                             "hardlink protection failed after creation; falling back to copy"
                         );
-                        let _ = cleanup_failed_hardlink(registration, cache_file, out_path);
+                        let _ = cleanup_failed_hardlink(registration, cache_file, destination);
                     } else {
                         match commit_hardlink_registration(registration, out_path) {
                             Ok(()) => return Ok(observed(0, 1, 0, 0)),
@@ -348,7 +350,8 @@ fn materialize_verified_cached_file_tiers(
                                     error = %error,
                                     "hardlink registration commit failed after a successful hardlink; falling back to copy"
                                 );
-                                let _ = cleanup_failed_hardlink(registration, cache_file, out_path);
+                                let _ =
+                                    cleanup_failed_hardlink(registration, cache_file, destination);
                             }
                         }
                     }
@@ -391,12 +394,13 @@ pub(in crate::daemon::server) fn write_cached_file_observed(
 fn cleanup_failed_hardlink(
     registration: crate::platform::fs::FileIdentity,
     cache_file: &Path,
-    out_path: &Path,
+    destination: &OutputDestination,
 ) -> std::io::Result<()> {
+    let out_path = destination.as_ref();
     cancel_hardlink_registration(registration, out_path);
 
     let removed = match crate::platform::fs::permissions::make_writable(out_path) {
-        Ok(()) => remove_output_file(out_path),
+        Ok(()) => remove_output_file_scoped(destination),
         Err(error) => Err(error),
     }
     .or_else(|error| {
@@ -427,14 +431,15 @@ fn cleanup_failed_hardlink(
 /// cache blob itself, and every other output still hardlinked to it, is
 /// left untouched.
 fn detach_with_floored_mtime(
-    out_path: &Path,
+    destination: &OutputDestination,
     cache_file: &Path,
     floor: kernal_api::platform::fs::FileTime,
     mode: MaterializationMode,
 ) -> std::io::Result<()> {
+    let out_path = destination.as_ref();
     let registration = prepare_registered_detach(out_path);
     crate::platform::fs::permissions::make_writable(out_path)?;
-    remove_output_file(out_path)?;
+    remove_output_file_scoped(destination)?;
     mode.copy_file(cache_file, out_path)?;
     crate::platform::fs::permissions::make_writable(out_path)?;
     let result = set_materialized_mtime(out_path, floor);
@@ -445,7 +450,8 @@ fn detach_with_floored_mtime(
     result
 }
 
-fn remove_materialized_output(path: &Path) -> std::io::Result<()> {
+fn remove_materialized_output(destination: &OutputDestination) -> std::io::Result<()> {
+    let path = destination.as_ref();
     match std::fs::symlink_metadata(path) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -453,7 +459,7 @@ fn remove_materialized_output(path: &Path) -> std::io::Result<()> {
     }
     let registration = prepare_registered_detach(path);
     crate::platform::fs::permissions::make_writable(path)?;
-    if let Err(error) = remove_output_file(path) {
+    if let Err(error) = remove_output_file_scoped(destination) {
         if let Some((_, blob_path)) = &registration {
             let _ = crate::platform::fs::permissions::set_cache_blob_sealed(
                 blob_path,
@@ -475,19 +481,20 @@ fn remove_materialized_output(path: &Path) -> std::io::Result<()> {
 /// Deliver a payload, restoring captured link permissions before returning.
 /// `pass` indicates whether a batch mtime floor follows delivery.
 fn write_cached_payload_with_floor(
-    out_path: &Path,
+    destination: &OutputDestination,
     payload: &CachedPayload,
     delivery: crate::compiler::DeliveryPolicy,
     mode: MaterializationMode,
     pass: SiblingFloorPass,
     output_mode: Option<u32>,
 ) -> MaterializationResult<StagedMaterializationStats> {
+    let out_path = destination.as_ref();
     match payload {
         CachedPayload::Bytes(data) => {
             // Inline payloads can also be executable outputs. Keep their direct
             // write out of every daemon child fork-to-exec window (#1597).
             let _materialize_guard = crate::daemon::spawn_exclusion::materialize_exclusive();
-            remove_materialized_output(out_path)
+            remove_materialized_output(destination)
                 .map_err(|error| destination_write_failure(out_path, error))?;
             std::fs::write(out_path, data.as_slice())
                 .map_err(|error| destination_write_failure(out_path, error))?;
@@ -499,8 +506,13 @@ fn write_cached_payload_with_floor(
         }
         CachedPayload::File(path) => {
             verify_registered_blob(path).map_err(|error| classify_cache_read_error(path, error))?;
-            let observed = materialize_verified_cached_file_observed(
-                out_path, path, delivery, mode, false, pass,
+            let observed = materialize_verified_cached_file_observed_scoped(
+                destination,
+                path,
+                delivery,
+                mode,
+                false,
+                pass,
             )
             .map_err(|error| classify_file_materialization_error(out_path, path, error))?;
             if let Some(output_mode) = output_mode {
@@ -514,43 +526,34 @@ fn write_cached_payload_with_floor(
 
 pub(in crate::daemon::server) const PAR_WRITE_THRESHOLD: usize = 4;
 
-pub(in crate::daemon::server) fn write_payloads_par_observed<P>(
-    targets: &[P],
+pub(in crate::daemon::server) fn write_payloads_par_observed_scoped(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     mode: MaterializationMode,
-) -> MaterializationResult<StagedMaterializationStats>
-where
-    P: AsRef<Path> + Sync,
-{
-    write_payloads_par_with_delivery(targets, payloads, mode, |_| {
+) -> MaterializationResult<StagedMaterializationStats> {
+    write_payloads_par_with_delivery_scoped(targets, payloads, mode, |_| {
         crate::compiler::DeliveryPolicy::IndependentOnly
     })
 }
 
 /// Deliver `payloads` with a per-target delivery policy and no mtime floor.
 /// `delivery` maps each target path to its policy; the mode can only demote it.
-pub(in crate::daemon::server) fn write_payloads_par_with_delivery<P>(
-    targets: &[P],
+pub(in crate::daemon::server) fn write_payloads_par_with_delivery_scoped(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     mode: MaterializationMode,
     delivery: impl Fn(&Path) -> crate::compiler::DeliveryPolicy + Sync,
-) -> MaterializationResult<StagedMaterializationStats>
-where
-    P: AsRef<Path> + Sync,
-{
+) -> MaterializationResult<StagedMaterializationStats> {
     write_payloads_par_with_metadata(targets, payloads, mode, delivery, None)
 }
 
 /// Link payload bytes carry their original permissions separately in the index.
-pub(in crate::daemon::server) fn write_payloads_par_with_modes<P>(
-    targets: &[P],
+pub(in crate::daemon::server) fn write_payloads_par_with_modes_scoped(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     mode: MaterializationMode,
     output_modes: &[u32],
-) -> MaterializationResult<StagedMaterializationStats>
-where
-    P: AsRef<Path> + Sync,
-{
+) -> MaterializationResult<StagedMaterializationStats> {
     if targets.len() != output_modes.len() {
         return Err(payload_count_mismatch(targets.len(), output_modes.len()));
     }
@@ -563,31 +566,28 @@ where
     )
 }
 
-fn write_payloads_par_with_metadata<P>(
-    targets: &[P],
+fn write_payloads_par_with_metadata(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     mode: MaterializationMode,
     delivery: impl Fn(&Path) -> crate::compiler::DeliveryPolicy + Sync,
     output_modes: Option<&[u32]>,
-) -> MaterializationResult<StagedMaterializationStats>
-where
-    P: AsRef<Path> + Sync,
-{
+) -> MaterializationResult<StagedMaterializationStats> {
     if targets.len() != payloads.len() {
         return Err(payload_count_mismatch(targets.len(), payloads.len()));
     }
     let write_one = |index: usize,
-                     out: &Path,
+                     out: &OutputDestination,
                      payload: &CachedPayload|
      -> MaterializationResult<StagedMaterializationStats> {
-        if let Some(parent) = out.parent() {
+        if let Some(parent) = out.as_ref().parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|error| destination_write_failure(out, error))?;
+                .map_err(|error| destination_write_failure(out.as_ref(), error))?;
         }
         write_cached_payload_with_floor(
             out,
             payload,
-            delivery(out),
+            delivery(out.as_ref()),
             mode,
             SiblingFloorPass::PerFile,
             output_modes.map(|modes| modes[index]),
@@ -596,7 +596,7 @@ where
     if targets.len() < PAR_WRITE_THRESHOLD {
         let mut observed = StagedMaterializationStats::default();
         for (index, (out, payload)) in targets.iter().zip(payloads).enumerate() {
-            observed.add(write_one(index, out.as_ref(), payload)?);
+            observed.add(write_one(index, out, payload)?);
         }
         return Ok(observed);
     }
@@ -605,7 +605,7 @@ where
         .par_iter()
         .zip(payloads.par_iter())
         .enumerate()
-        .map(|(index, (out, payload))| write_one(index, out.as_ref(), payload))
+        .map(|(index, (out, payload))| write_one(index, out, payload))
         .try_reduce(StagedMaterializationStats::default, |mut total, one| {
             total.add(one);
             Ok(total)
@@ -647,15 +647,16 @@ where
     .is_ok()
 }
 
-pub(in crate::daemon::server) fn write_payloads_par_with_mtime_floor_and_policies_observed<P, R>(
-    targets: &[P],
+pub(in crate::daemon::server) fn write_payloads_par_with_mtime_floor_and_policies_observed_scoped<
+    R,
+>(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     floor_paths: &[R],
     policies: &[crate::compiler::DeliveryPolicy],
     mode: MaterializationMode,
 ) -> MaterializationResult<StagedMaterializationStats>
 where
-    P: AsRef<Path> + Sync,
     R: AsRef<Path>,
 {
     write_payloads_par_with_mtime_floor_and_policies_observed_impl(
@@ -669,7 +670,7 @@ where
     )
 }
 
-/// [`write_payloads_par_with_mtime_floor_and_policies_observed`] with the
+/// [`write_payloads_par_with_mtime_floor_and_policies_observed_scoped`] with the
 /// batch floor's `now()` seed pinned, so the mode-invariance contract can be
 /// asserted on exact mtimes (#1771).
 #[cfg(test)]
@@ -689,7 +690,10 @@ where
     R: AsRef<Path>,
 {
     write_payloads_par_with_mtime_floor_and_policies_observed_impl(
-        targets,
+        &targets
+            .iter()
+            .map(|p| OutputDestination::for_test(p.as_ref()))
+            .collect::<Vec<_>>(),
         payloads,
         floor_paths,
         policies,
@@ -703,15 +707,16 @@ where
 /// been registered. These sources are protected by the payload guard's plan
 /// ownership, so they must use independent reflink/copy delivery and must not
 /// pass through durable-blob digest verification or hardlink registration.
-pub(in crate::daemon::server) fn write_provisional_payloads_par_with_mtime_floor_observed<P, R>(
-    targets: &[P],
+pub(in crate::daemon::server) fn write_provisional_payloads_par_with_mtime_floor_observed_scoped<
+    R,
+>(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     floor_paths: &[R],
     policies: &[crate::compiler::DeliveryPolicy],
     mode: MaterializationMode,
 ) -> MaterializationResult<StagedMaterializationStats>
 where
-    P: AsRef<Path> + Sync,
     R: AsRef<Path>,
 {
     write_payloads_par_with_mtime_floor_and_policies_observed_impl(
@@ -725,8 +730,8 @@ where
     )
 }
 
-fn write_payloads_par_with_mtime_floor_and_policies_observed_impl<P, R>(
-    targets: &[P],
+fn write_payloads_par_with_mtime_floor_and_policies_observed_impl<R>(
+    targets: &[OutputDestination],
     payloads: &[CachedPayload],
     floor_paths: &[R],
     policies: &[crate::compiler::DeliveryPolicy],
@@ -735,7 +740,6 @@ fn write_payloads_par_with_mtime_floor_and_policies_observed_impl<P, R>(
     batch_seed: std::time::SystemTime,
 ) -> MaterializationResult<StagedMaterializationStats>
 where
-    P: AsRef<Path> + Sync,
     R: AsRef<Path>,
 {
     if targets.len() != payloads.len() {
@@ -754,7 +758,7 @@ where
             ),
         ));
     }
-    let write_one = |out: &Path,
+    let write_one = |out: &OutputDestination,
                      payload: &CachedPayload,
                      policy: crate::compiler::DeliveryPolicy|
      -> MaterializationResult<StagedMaterializationStats> {
@@ -765,7 +769,7 @@ where
     let observed = if targets.len() < PAR_WRITE_THRESHOLD {
         let mut observed = StagedMaterializationStats::default();
         for ((out, payload), policy) in targets.iter().zip(payloads).zip(policies) {
-            observed.add(write_one(out.as_ref(), payload, *policy)?);
+            observed.add(write_one(out, payload, *policy)?);
         }
         observed
     } else {
@@ -774,7 +778,7 @@ where
             .par_iter()
             .zip(payloads.par_iter())
             .zip(policies.par_iter())
-            .map(|((out, payload), policy)| write_one(out.as_ref(), payload, *policy))
+            .map(|((out, payload), policy)| write_one(out, payload, *policy))
             .try_reduce(StagedMaterializationStats::default, |mut total, one| {
                 total.add(one);
                 Ok(total)
@@ -823,31 +827,32 @@ where
 }
 
 /// Deliver one cached payload to one requested output path. Split out of
-/// [`write_payloads_par_with_mtime_floor_and_policies_observed`] so the whole
+/// [`write_payloads_par_with_mtime_floor_and_policies_observed_scoped`] so the whole
 /// delivery — parent creation, blob materialization, mtime stamping — can be
 /// retried as a unit through a scanner window.
 fn deliver_one_output(
-    out: &Path,
+    destination: &OutputDestination,
     payload: &CachedPayload,
     policy: crate::compiler::DeliveryPolicy,
     mode: MaterializationMode,
     provisional_staged: bool,
 ) -> MaterializationResult<StagedMaterializationStats> {
+    let out = destination.as_ref();
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|error| destination_write_failure(out, error))?;
     }
     if provisional_staged {
         if let CachedPayload::File(path) = payload {
-            return crate::daemon::server::persist::materialize_independent_with_mode(
+            return crate::daemon::server::persist::materialize_independent_with_mode_scoped(
                 path.as_path(),
-                out,
+                destination,
                 mode,
             )
             .map_err(|error| classify_file_materialization_error(out, path, error));
         }
     }
     write_cached_payload_with_floor(
-        out,
+        destination,
         payload,
         policy,
         mode,
@@ -894,7 +899,7 @@ fn retry_transient_scan_window<T>(
 /// contract is testable without a Windows scanner.
 pub(in crate::daemon::server) fn retry_while<T>(
     attempt: &mut impl FnMut() -> MaterializationResult<T>,
-    retryable: &dyn Fn(&MaterializationFailure) -> bool,
+    retryable: &impl Fn(&MaterializationFailure) -> bool,
 ) -> MaterializationResult<T> {
     const DELAYS: [std::time::Duration; 4] = [
         std::time::Duration::from_millis(50),
@@ -952,7 +957,10 @@ pub(in crate::daemon::server) fn cache_read_failure(
     })
 }
 
-fn destination_write_failure(path: &Path, error: std::io::Error) -> MaterializationFailure {
+pub(super) fn destination_write_failure(
+    path: &Path,
+    error: std::io::Error,
+) -> MaterializationFailure {
     MaterializationFailure::DestinationWrite(DestinationWriteFailure {
         path: path.into(),
         error,
@@ -964,6 +972,9 @@ fn classify_file_materialization_error(
     cache_path: &Path,
     error: std::io::Error,
 ) -> MaterializationFailure {
+    if verified_corruption(&error) {
+        return cache_blob_missing(cache_path, error);
+    }
     match std::fs::metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)
@@ -973,6 +984,9 @@ fn classify_file_materialization_error(
 }
 
 fn classify_cache_read_error(cache_path: &Path, error: std::io::Error) -> MaterializationFailure {
+    if verified_corruption(&error) {
+        return cache_blob_missing(cache_path, error);
+    }
     match std::fs::metadata(cache_path) {
         Err(source_error) if source_error.kind() == std::io::ErrorKind::NotFound => {
             cache_blob_missing(cache_path, source_error)

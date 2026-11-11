@@ -236,7 +236,12 @@ pub(super) fn spawn_index_writer(server: &mut DaemonServer) -> kernal_api::async
         .expect("index_writer_rx must not already be taken");
     let store = std::sync::Arc::clone(&server.state.artifact_store);
     let shutdown = std::sync::Arc::clone(&server.state.index_writer_shutdown);
-    kernal_api::async_engine::launch(run_index_writer(rx, store, shutdown))
+    let root = server
+        .state
+        .cache_root_lock
+        .lease_for(STATE_TIMEOUT)
+        .unwrap();
+    kernal_api::async_engine::launch(run_index_writer(rx, store, shutdown, root))
 }
 
 /// Graceful-shutdown equivalent for this harness: run the EXACT production

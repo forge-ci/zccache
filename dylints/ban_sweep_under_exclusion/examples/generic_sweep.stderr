@@ -1,0 +1,12 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/generic_sweep.rs:9:5
+   |
+LL | /     invoke(|| {
+LL | |         let _ = retired.sweep_for(Duration::from_secs(1));
+LL | |     });
+   | |______^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: aborting due to 1 previous error
+

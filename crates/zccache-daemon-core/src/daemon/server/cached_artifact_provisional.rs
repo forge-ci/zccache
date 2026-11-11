@@ -30,8 +30,8 @@ impl ProvisionalArtifact {
         &self,
         artifacts: &DashMap<String, CachedArtifact>,
         key: String,
-    ) {
-        artifacts.insert(key, self.cached.clone());
+    ) -> Option<CachedArtifact> {
+        artifacts.insert(key, self.cached.clone())
     }
 
     /// Call only after successful payload/index publication. Payload discovery

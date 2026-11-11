@@ -78,7 +78,7 @@ pub(in crate::daemon::server) async fn settle_publication(state: &SharedState) {
     drop(
         state
             .artifact_publication
-            .write_for(crate::core::sync::OPERATION_TIMEOUT)
+            .drain_for(crate::core::sync::OPERATION_TIMEOUT)
             .await,
     );
 }

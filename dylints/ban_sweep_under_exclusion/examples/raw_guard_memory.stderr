@@ -1,0 +1,34 @@
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/raw_guard_memory.rs:6:5
+   |
+LL |     overwrite_value(slot, replacement);
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/raw_guard_memory.rs:9:16
+   |
+LL |     let read = std::ptr::read::<PublicationReadPermit>;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/raw_guard_memory.rs:10:10
+   |
+LL |     drop(read(source));
+   |          ^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/raw_guard_memory.rs:13:5
+   |
+LL |     std::ptr::copy_nonoverlapping(source, destination, 1);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/raw_guard_memory.rs:16:5
+   |
+LL |     Vec::set_len(guards, 0);
+   |     ^^^^^^^^^^^^
+
+error: aborting due to 5 previous errors
+

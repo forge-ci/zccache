@@ -1,5 +1,7 @@
 //! Private staging plan for one unit of a multi-source C/C++ invocation.
 
+#[path = "staged_multi_materialize.rs"]
+mod materialization;
 use super::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -343,50 +345,6 @@ impl StagedMultiUnitPlan {
         })
     }
 
-    pub(in crate::daemon::server) fn materialize(
-        &self,
-        mode: MaterializationMode,
-    ) -> std::io::Result<StagedMaterializationStats> {
-        let mut observed = StagedMaterializationStats::default();
-        let requested_outputs = self
-            .outputs
-            .iter()
-            .map(|output| output.requested.clone())
-            .collect::<Vec<_>>();
-        for (fault_index, output) in self.outputs.iter().enumerate() {
-            #[cfg(not(test))]
-            let _ = fault_index;
-            #[cfg(test)]
-            {
-                inject_staged_fault(
-                    output.requested.as_path(),
-                    StagedFaultPoint::MaterializeOutput(fault_index),
-                )
-                .map_err(|error| materialization_error(error, observed))?;
-            }
-            if let Some(parent) = output.requested.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|error| materialization_error(error, observed))?;
-            }
-            let output_stats = materialize_independent_with_mode(
-                output.staged.as_path(),
-                output.requested.as_path(),
-                mode,
-            )
-            .map_err(|error| materialization_error(error, observed))?;
-            observed.reflink_count = observed
-                .reflink_count
-                .saturating_add(output_stats.reflink_count);
-            observed.copy_count = observed.copy_count.saturating_add(output_stats.copy_count);
-            observed.copy_bytes = observed.copy_bytes.saturating_add(output_stats.copy_bytes);
-            if output.role == StagedOutputRole::Depfile {
-                rehydrate_logical_depfile(output.requested.as_path(), &requested_outputs)
-                    .map_err(|error| materialization_error(error, observed))?;
-            }
-        }
-        Ok(observed)
-    }
-
     pub(in crate::daemon::server) fn rewrite_logical_side_outputs(&self) -> std::io::Result<()> {
         for (fault_index, output) in self.outputs.iter().enumerate() {
             if output.role != StagedOutputRole::Depfile {
@@ -435,14 +393,10 @@ impl StagedMultiUnitPlan {
             .collect()
     }
 
+    /// Retire the private root; the staging sweeper removes it (#1964).
     pub(in crate::daemon::server) fn cleanup(&self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+        crate::daemon::server::detach_private_root(self.root.as_path());
+        Ok(())
     }
 }
 
@@ -562,8 +516,10 @@ fn rewrite_msvc_output(args: Vec<String>, staged: &NormalizedPath) -> Vec<String
 }
 
 impl Drop for StagedMultiUnitPlan {
+    // Retire by rename only: the owner may drop under publication or store
+    // exclusion, so the staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        crate::daemon::server::detach_private_root(self.root.as_path());
     }
 }
 

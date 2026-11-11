@@ -96,7 +96,8 @@ fn overflow_still_rejects_a_blob_poisoned_through_its_alias() {
         "a blob mutated through its alias must be marked suspect by the sweep"
     );
 
-    let error = verify_registered_blob(&blob).expect_err("overflow poison must be rejected");
+    let error =
+        verify_then_retire_blob_for_test(&blob).expect_err("overflow poison must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!blob.exists(), "a poisoned blob must be evicted");
 }

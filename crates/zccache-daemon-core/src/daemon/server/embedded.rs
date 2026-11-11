@@ -55,7 +55,12 @@ impl EmbeddedDaemon {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.state.launch_blocking(operation)
+        let root = self
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .expect("test work requires native cache-root ownership");
+        self.state.launch_blocking_with_root(root, operation)
     }
 
     #[cfg(test)]
@@ -143,7 +148,12 @@ impl EmbeddedDaemon {
         if let Some(rx) = self.index_writer_rx.take() {
             let store = Arc::clone(&self.state.artifact_store);
             let shutdown = Arc::clone(&self.state.index_writer_shutdown);
-            let task = run_index_writer(rx, store, shutdown);
+            let root = self
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .expect("index writer startup requires an owned cache root");
+            let task = run_index_writer(rx, store, shutdown, root);
             // zccache#922: when the embedded host supplied a canonical handle,
             // route the persistent index-writer spawn through it. Otherwise
             // fall back to the ambient runtime (the calling runtime is the
@@ -698,7 +708,7 @@ async fn flush_embedded_state(
         Some(
             state
                 .artifact_publication
-                .write_for(crate::core::sync::OPERATION_TIMEOUT)
+                .drain_for(crate::core::sync::OPERATION_TIMEOUT)
                 .await,
         )
     } else {
@@ -706,7 +716,7 @@ async fn flush_embedded_state(
             EMBEDDED_PUBLICATION_BARRIER_TIMEOUT,
             state
                 .artifact_publication
-                .write_for(crate::core::sync::OPERATION_TIMEOUT),
+                .drain_for(crate::core::sync::OPERATION_TIMEOUT),
         )
         .await
         .ok()

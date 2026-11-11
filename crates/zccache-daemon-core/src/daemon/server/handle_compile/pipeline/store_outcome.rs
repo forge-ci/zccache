@@ -554,7 +554,10 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
             StagedBytes, StagedCounter, StagedFailure, StagedTiming,
         };
         let started = std::time::Instant::now();
-        match plan.materialize(state_arc.non_rustc_materialization_mode(client_env)) {
+        match plan.materialize_for_state(
+            state_arc,
+            state_arc.non_rustc_materialization_mode(client_env),
+        ) {
             Ok(materialized) => {
                 staged_materialization_ns = started.elapsed().as_nanos() as u64;
                 state.profiler.staged.add_count(
@@ -601,61 +604,62 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
     // run before requested-output materialization so the plan's sources could
     // not disappear underneath the durable store. Materialize first without
     // cleanup, then transfer plan ownership to the detached publisher.
-    let staged_rust_persist_plan = if let Some(plan) =
-        is_rustc.then(|| staged_plan.take()).flatten()
-    {
-        use crate::daemon::staged_stats::{
-            StagedBytes, StagedCounter, StagedFailure, StagedTiming,
+    let staged_rust_persist_plan =
+        if let Some(plan) = is_rustc.then(|| staged_plan.take()).flatten() {
+            use crate::daemon::staged_stats::{
+                StagedBytes, StagedCounter, StagedFailure, StagedTiming,
+            };
+            let started = std::time::Instant::now();
+            match plan.materialize_without_cleanup_for_state(
+                state_arc,
+                state_arc.non_rustc_materialization_mode(client_env),
+            ) {
+                Ok(materialized) => {
+                    staged_materialization_ns = started.elapsed().as_nanos() as u64;
+                    state.profiler.staged.add_count(
+                        StagedCounter::MaterializeReflink,
+                        materialized.reflink_count,
+                    );
+                    state
+                        .profiler
+                        .staged
+                        .add_count(StagedCounter::MaterializeCopy, materialized.copy_count);
+                    state
+                        .profiler
+                        .staged
+                        .bytes(StagedBytes::Materialization, materialized.copy_bytes);
+                    state
+                        .profiler
+                        .staged
+                        .timing(StagedTiming::MissMaterialization, staged_materialization_ns);
+                    compiler_output_path = output_path.clone();
+                    state
+                        .cache_system
+                        .apply_changes(plan.requested_output_paths());
+                    Some(plan)
+                }
+                Err(error) => {
+                    staged_materialization_ns = started.elapsed().as_nanos() as u64;
+                    state
+                        .profiler
+                        .staged
+                        .count(StagedCounter::MaterializeFailure);
+                    state
+                        .profiler
+                        .staged
+                        .failure(StagedFailure::RequestedMaterialization);
+                    state
+                        .profiler
+                        .staged
+                        .timing(StagedTiming::MissMaterialization, staged_materialization_ns);
+                    return Some(Response::Error {
+                        message: format!("failed to materialize compiler output: {error}"),
+                    });
+                }
+            }
+        } else {
+            None
         };
-        let started = std::time::Instant::now();
-        match plan.materialize_without_cleanup(state_arc.non_rustc_materialization_mode(client_env))
-        {
-            Ok(materialized) => {
-                staged_materialization_ns = started.elapsed().as_nanos() as u64;
-                state.profiler.staged.add_count(
-                    StagedCounter::MaterializeReflink,
-                    materialized.reflink_count,
-                );
-                state
-                    .profiler
-                    .staged
-                    .add_count(StagedCounter::MaterializeCopy, materialized.copy_count);
-                state
-                    .profiler
-                    .staged
-                    .bytes(StagedBytes::Materialization, materialized.copy_bytes);
-                state
-                    .profiler
-                    .staged
-                    .timing(StagedTiming::MissMaterialization, staged_materialization_ns);
-                compiler_output_path = output_path.clone();
-                state
-                    .cache_system
-                    .apply_changes(plan.requested_output_paths());
-                Some(plan)
-            }
-            Err(error) => {
-                staged_materialization_ns = started.elapsed().as_nanos() as u64;
-                state
-                    .profiler
-                    .staged
-                    .count(StagedCounter::MaterializeFailure);
-                state
-                    .profiler
-                    .staged
-                    .failure(StagedFailure::RequestedMaterialization);
-                state
-                    .profiler
-                    .staged
-                    .timing(StagedTiming::MissMaterialization, staged_materialization_ns);
-                return Some(Response::Error {
-                    message: format!("failed to materialize compiler output: {error}"),
-                });
-            }
-        }
-    } else {
-        None
-    };
     let synchronous_persist = synchronous_persist
         && staged_cc_materialization.is_none()
         && staged_rust_persist_plan.is_none();

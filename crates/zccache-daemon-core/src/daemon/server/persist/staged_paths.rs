@@ -1,11 +1,13 @@
 //! Stable path identities for privately staged compiler outputs.
 
-use super::break_output_hardlink_before_compile;
+use super::{
+    break_output_hardlink_before_compile, break_output_hardlink_before_compile_scoped,
+    OutputDestination,
+};
 use crate::core::path::NormalizedPath;
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Collision-resistant logical root used only for staged compiler outputs.
 ///
@@ -17,7 +19,6 @@ pub(in crate::daemon::server) const STAGED_OUTPUT_REMAP_ROOT: &str =
     "/__zccache_staged_output_7b6d6f0c5a944e8ba1c7e9634b287d91__";
 const STAGED_OUTPUT_REMAP_ROOT_WINDOWS: &str =
     r"\__zccache_staged_output_7b6d6f0c5a944e8ba1c7e9634b287d91__";
-static DEPFILE_REWRITE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn canonical_output_path(requested: &NormalizedPath) -> String {
     requested.file_name().map_or_else(
@@ -185,17 +186,25 @@ pub(in crate::daemon::server) fn canonicalize_logical_depfile(
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::daemon::server) fn rehydrate_logical_depfile(
     path: &Path,
     requested_outputs: &[NormalizedPath],
 ) -> io::Result<()> {
-    let bytes = std::fs::read(path)?;
+    rehydrate_logical_depfile_scoped(&OutputDestination::for_test(path), requested_outputs)
+}
+
+pub(super) fn rehydrate_logical_depfile_scoped(
+    destination: &OutputDestination,
+    requested_outputs: &[NormalizedPath],
+) -> io::Result<()> {
+    let bytes = std::fs::read(destination)?;
     let rewritten = rehydrate_logical_depfile_bytes(&bytes, requested_outputs);
     if rewritten != bytes {
-        // This is a compiler-visible output, not the durable published copy.
-        // The compiler would not fsync its depfile either; only the rename is
-        // needed to keep readers from observing a partial rewrite.
-        atomic_replace_bytes(path, &rewritten)?;
+        // Compiler-visible depfiles need atomic replacement, not durable fsync.
+        atomic_replace_bytes_with(destination.as_ref(), &rewritten, || {
+            break_output_hardlink_before_compile_scoped(destination)
+        })?;
     }
     Ok(())
 }
@@ -288,7 +297,7 @@ pub(in crate::daemon::server) fn rehydrate_rustc_out_dir_depfile(
         ));
     }
     // Compiler-visible dep-info for the current build, not durable cache
-    // state: only the rename is needed (see `rehydrate_logical_depfile`).
+    // state: only the rename is needed (see `rehydrate_logical_depfile_scoped`).
     atomic_replace_bytes(path, &rewritten)
 }
 
@@ -301,56 +310,36 @@ pub(in crate::daemon::server) fn replace_depfile_bytes(
 }
 
 fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_replace_bytes_with(path, bytes, || break_output_hardlink_before_compile(path))
+}
+
+fn atomic_replace_bytes_with(
+    path: &Path,
+    bytes: &[u8],
+    detach: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "depfile replacement requires a parent directory",
         )
     })?;
-    let name = path
-        .file_name()
-        .map_or_else(|| "depfile".into(), |name| name.to_string_lossy());
-    let sequence = DEPFILE_REWRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(
-        ".{name}.zccache-rehydrate-{}-{sequence}.tmp",
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
+    // Preserve OpenOptions' normal creation mode while owning error cleanup.
+    let mut temporary = tempfile::Builder::new().make_in(parent, |path| {
+        std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        drop(file);
-        // The destination depfile is often the COW-lite hardlink materialized
-        // for the current build's output (persist/hardlink.rs marks
-        // materialized destinations read-only to protect the shared cache
-        // blob, and a hardlinked destination shares that read-only bit with
-        // the blob's inode/MFT record). `MoveFileExW(...,
-        // MOVEFILE_REPLACE_EXISTING)` fails with ERROR_ACCESS_DENIED on
-        // Windows when the existing destination is read-only. Naively
-        // clearing the attribute in place would also clear it on the shared
-        // blob; use the existing detach helper instead, which — when the
-        // destination is actually hardlinked to a blob — copies the content
-        // out, breaks the link, and restores read-only on the blob
-        // afterward. When not shared, it just clears the local bit.
-        //
-        // `std::fs::rename` (the non-Windows `replace_path`) needs no such
-        // dance: POSIX rename() only requires write access to the
-        // containing directory, never to the target file being replaced, so
-        // it already swaps the directory entry without touching the shared
-        // inode. Gate the detach to Windows to avoid the extra metadata
-        // stat + hard-link-count check on the Linux/macOS hot path.
-        if crate::platform::host::is_windows() {
-            let _ = break_output_hardlink_before_compile(path);
-        }
-        replace_path(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+            .open(path)
+    })?;
+    temporary.write_all(bytes)?;
+    let temporary = temporary.into_temp_path();
+    // Windows replacement rejects a read-only destination. Detach shared
+    // hardlinks before clearing that bit so the cached blob stays sealed.
+    // POSIX rename replaces the directory entry without touching the inode.
+    if crate::platform::host::is_windows() {
+        let _ = detach();
     }
-    result
+    replace_path(&temporary, path)
 }
 
 /// Quote one path token using the Make depfile spelling emitted by Clang and

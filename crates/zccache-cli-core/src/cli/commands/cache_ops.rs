@@ -409,8 +409,11 @@ pub(crate) fn warm_target_with_mode(
     // exposed window is the entire index scan (1k-5k entries), not a few
     // syscalls. `_if_present` keeps a cache that never staged anything on the
     // unlocked path instead of creating an empty `.staged-v2` as a side effect.
-    let _staged_guard = crate::artifact::StagedReadGuard::acquire_if_present(artifact_dir)
-        .map_err(|error| format!("failed to lock staged artifact store: {error}"))?;
+    let _staged_guard = crate::artifact::StagedReadGuard::acquire_if_present_for(
+        artifact_dir,
+        zccache_core::wait::PROBE,
+    )
+    .map_err(|error| format!("failed to lock staged artifact store: {error}"))?;
 
     // Resolve the layout once, then flatten artifact/output nesting so
     // workers receive payload capabilities rather than inferred cache paths.

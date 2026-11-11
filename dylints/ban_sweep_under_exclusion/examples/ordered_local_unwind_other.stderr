@@ -1,0 +1,10 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/ordered_local_unwind_other.rs:28:1
+   |
+LL | }
+   | ^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: aborting due to 1 previous error
+

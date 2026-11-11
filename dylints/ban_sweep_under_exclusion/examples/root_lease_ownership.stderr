@@ -1,0 +1,58 @@
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:5:5
+   |
+LL |     discard(lease);
+   |     ^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:11:5
+   |
+LL |     forget_value(lease);
+   |     ^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:14:43
+   |
+LL |     let _erased: Box<dyn std::any::Any> = Box::new(lease);
+   |                                           ^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:17:19
+   |
+LL |     let _hidden = std::mem::ManuallyDrop::new(lease);
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:20:5
+   |
+LL |     std::ptr::write(slot, replacement);
+   |     ^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:26:19
+   |
+LL |     let _erased = erase_value(lease);
+   |                   ^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:30:5
+   |
+LL |     std::mem::forget(lease);
+   |     ^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:33:5
+   |
+LL |     forget_value(lease);
+   |     ^^^^^^^^^^^^^^^^^^^
+
+error: exclusion ownership must not be leaked or erased
+  --> $DIR/root_lease_ownership.rs:36:43
+   |
+LL |     let _erased: Box<dyn std::any::Any> = Box::new(lease);
+   |                                           ^^^^^^^^^^^^^^^
+
+error: aborting due to 9 previous errors
+

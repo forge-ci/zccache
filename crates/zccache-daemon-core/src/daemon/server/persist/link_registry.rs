@@ -48,7 +48,7 @@ fn output_ids() -> &'static dashmap::DashMap<NormalizedPath, FileIdentity> {
     OUTPUT_IDS.get_or_init(dashmap::DashMap::new)
 }
 
-fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
+pub(super) fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
     use std::io::Read;
 
     #[cfg(test)]
@@ -77,13 +77,10 @@ pub(in crate::daemon::server) fn write_authoritative_blob_digest_for(
     hash_source: &Path,
     named_as: &Path,
 ) -> std::io::Result<()> {
-    write_authoritative_blob_digest_for_with_cleanup(hash_source, named_as).map(|digest| {
-        digest.commit();
-    })
+    write_authoritative_blob_digest_for_pinned(hash_source, named_as).map(drop)
 }
 
-/// Same contract as [`write_authoritative_blob_digest_for_with_cleanup`], but
-/// for a caller that already hashed `named_as`'s bytes (e.g. staged
+/// Writes a digest for a caller that already hashed `named_as`'s bytes (e.g. staged
 /// publication's own output digest). Reusing that digest instead of hashing
 /// the file a second time is the fix for #1774: publication used to hash
 /// each output once for its own manifest and a second time here for the
@@ -91,8 +88,8 @@ pub(in crate::daemon::server) fn write_authoritative_blob_digest_for(
 pub(in crate::daemon::server) fn write_authoritative_blob_digest_for_precomputed(
     digest: [u8; 32],
     named_as: &Path,
-) -> std::io::Result<AuthoritativeBlobDigest> {
-    write_digest_sidecar(digest, named_as)
+) -> std::io::Result<()> {
+    write_digest_sidecar(digest, named_as).map(drop)
 }
 
 #[cfg(test)]
@@ -132,113 +129,34 @@ pub(in crate::daemon::server) fn register_trusted_blob_for_test(
 
 /// Owns the digest sidecar published by one artifact-write attempt.
 ///
-/// Dropping an uncommitted guard removes only the sidecar installed by that
-/// attempt. This lets artifact_io clean up after a later blob-rename failure
-/// without deleting a sidecar that existed before the attempt started.
-pub(in crate::daemon::server) struct AuthoritativeBlobDigest {
-    path: Option<NormalizedPath>,
-    digest: [u8; 32],
-}
-
-impl AuthoritativeBlobDigest {
-    /// Keep the sidecar after its blob has been published successfully.
-    pub(in crate::daemon::server) fn commit(mut self) {
-        self.path = None;
-    }
-}
-
-impl Drop for AuthoritativeBlobDigest {
-    fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
-            let matches = std::fs::read(&path)
-                .map(|bytes| bytes.as_slice() == self.digest.as_slice())
-                .unwrap_or(false);
-            if matches {
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
-}
-
-/// Writes and atomically publishes an authoritative digest sidecar, returning
-/// an ownership guard for cleanup if the subsequent blob publication fails.
-/// The final sidecar is never opened for writing, so a partial write cannot
-/// truncate an existing valid sidecar.
-pub(in crate::daemon::server) fn write_authoritative_blob_digest_for_with_cleanup(
+/// Return a pinned identity for a later, maintenance-owned rollback.
+pub(super) fn write_authoritative_blob_digest_for_pinned(
     hash_source: &Path,
     named_as: &Path,
-) -> std::io::Result<AuthoritativeBlobDigest> {
-    let digest = hash_file(hash_source)?;
-    write_digest_sidecar(digest, named_as)
+) -> std::io::Result<std::fs::File> {
+    write_digest_sidecar(hash_file(hash_source)?, named_as)
 }
 
-/// Shared sidecar-write body for both the hash-here and hash-already-known
-/// callers.
-///
-/// #1774: the sidecar is not fsynced. It merely mirrors the blake3 digest the
-/// manifest (or the artifact index) already records durably, so a lost
-/// sidecar after a crash costs nothing but an eviction — the next lookup
-/// re-hashes and misses. Fsyncing it on every publication bought no
-/// additional durability for that cost.
-fn write_digest_sidecar(
-    digest: [u8; 32],
-    named_as: &Path,
-) -> std::io::Result<AuthoritativeBlobDigest> {
+/// The unpublished name belongs to NamedTempFile. Final sidecar rollback is
+/// queued separately and revalidates the pinned published file on maintenance.
+fn write_digest_sidecar(digest: [u8; 32], named_as: &Path) -> std::io::Result<std::fs::File> {
     use std::io::Write;
-
     let final_path = digest_path(named_as);
-
-    // `create_new` prevents two writers from sharing a temporary file. A
-    // retry also handles a stale file left by an interrupted prior attempt
-    // (including a reused process id) without falling back to the final path.
-    let (temp_path, result) = loop {
-        let counter = ARTIFACT_PERSIST_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp_path = final_path.with_file_name(format!(
-            ".{}.tmp-{}-{}",
-            final_path.file_name().unwrap_or_default().to_string_lossy(),
-            std::process::id(),
-            counter
-        ));
-        let mut temp = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
-            Ok(temp) => temp,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = (|| {
-            temp.write_all(&digest)?;
-            drop(temp);
-            replace_digest_sidecar(&temp_path, &final_path)
-        })();
-        break (temp_path, result);
-    };
-    if let Err(error) = result {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
-
-    Ok(AuthoritativeBlobDigest {
-        path: Some(final_path),
-        digest,
-    })
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&digest)?;
+    let published = temporary.as_file().try_clone()?;
+    replace_digest_sidecar(temporary.path(), &final_path)?;
+    Ok(published)
 }
 
 fn replace_digest_sidecar(temp_path: &Path, final_path: &Path) -> std::io::Result<()> {
     crate::platform::fs::replace::atomic_replace(temp_path, final_path)
 }
 
-/// Best-effort cleanup of a blob's digest sidecar. Used when a publish
-/// attempt fails after the digest was already written but before (or during)
-/// the rename that would have made the blob visible — avoids leaving a
-/// stray digest sidecar with no corresponding blob.
-pub(in crate::daemon::server) fn remove_authoritative_blob_digest(blob_path: &Path) {
-    let _ = std::fs::remove_file(digest_path(blob_path));
-}
-
-fn read_authoritative_blob_digest(blob_path: &Path) -> std::io::Result<Option<[u8; 32]>> {
+pub(super) fn read_authoritative_blob_digest(
+    blob_path: &Path,
+) -> std::io::Result<Option<[u8; 32]>> {
     match std::fs::read(digest_path(blob_path)) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut digest = [0_u8; 32];
@@ -515,10 +433,9 @@ pub(in crate::daemon::server) fn verify_registered_blob(blob_path: &Path) -> std
                 "link_count": link_count,
             }),
         );
-        remove_registered_blob(blob_path)?;
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "unregistered cache blob failed durable verification",
+            CorruptBlobError,
         ));
     };
     if !record.suspect
@@ -571,13 +488,9 @@ pub(in crate::daemon::server) fn verify_registered_blob(blob_path: &Path) -> std
         }),
     );
     drop(record);
-    remove_registered_blob(blob_path)?;
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        format!(
-            "cache blob {} was modified through a hardlink",
-            blob_path.display()
-        ),
+        CorruptBlobError,
     ))
 }
 
@@ -761,5 +674,24 @@ pub(in crate::daemon::server) fn forget_blob_registration_for_restart_test(blob_
         for output in record.outputs {
             output_ids().remove(&output);
         }
+    }
+}
+
+#[cfg(test)]
+mod retirement_regressions {
+    use super::*;
+
+    #[test]
+    fn corruption_verification_preserves_the_leased_blob() {
+        let directory = tempfile::tempdir().unwrap();
+        let blob = directory.path().join("blob");
+        std::fs::write(&blob, b"original").unwrap();
+        write_authoritative_blob_digest(&blob).unwrap();
+        std::fs::write(&blob, b"corrupted").unwrap();
+        assert!(verify_registered_blob(&blob).is_err());
+        assert!(
+            blob.exists(),
+            "verification must retain a leased cache name until maintenance detaches it"
+        );
     }
 }

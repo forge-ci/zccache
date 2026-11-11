@@ -8,7 +8,6 @@ use super::*;
 /// Monotonic counter ensuring each `DaemonServer` instance gets unique
 /// artifact and depfile directories, even within the same process.
 pub(super) static SERVER_INSTANCE: AtomicU64 = AtomicU64::new(0);
-pub(super) static ARTIFACT_PERSIST_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl DaemonServer {
     /// Create a new daemon server bound to the given endpoint, using the
@@ -308,7 +307,7 @@ pub(super) fn new_shared_state(
             )
             .0,
             depgraph_persistence: Arc::new(Gate::new()),
-            artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
+            artifact_publication: Arc::new(crate::core::sync::PublicationBarrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
             staged_materialization_init: Arc::new(Gate::new()),
             persist_semaphore: Arc::new(Gate::with_capacity(persist_workers_default())),

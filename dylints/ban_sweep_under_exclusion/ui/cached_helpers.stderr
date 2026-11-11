@@ -1,0 +1,16 @@
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/cached_helpers.rs:9:5
+   |
+LL |     invoke(|| { let _ = std::fs::read_dir("owned-cache"); });
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/cached_helpers.rs:10:5
+   |
+LL |     invoke(|| { let _ = std::fs::read_dir("owned-cache"); });
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

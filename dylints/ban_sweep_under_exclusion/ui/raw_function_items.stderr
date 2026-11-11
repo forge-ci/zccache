@@ -1,0 +1,28 @@
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/raw_function_items.rs:4:18
+   |
+LL |     let direct = std::fs::remove_dir_all::<String>;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/raw_function_items.rs:6:53
+   |
+LL |     let erased: fn(String) -> std::io::Result<()> = std::fs::remove_dir_all::<String>;
+   |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/raw_function_items.rs:8:13
+   |
+LL |     let _ = disk::remove_dir("owned-cache");
+   |             ^^^^^^^^^^^^^^^^
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/raw_function_items.rs:9:13
+   |
+LL |     let _ = alias::erase("owned-cache");
+   |             ^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

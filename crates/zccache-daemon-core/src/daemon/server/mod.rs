@@ -183,6 +183,10 @@ impl EmbeddedFlushReport {
 
 mod cache_trim;
 mod cached_artifact;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use cached_artifact::contract::{TestMaterializationLease, TestMaterializationOwner};
+mod cached_artifact_retirement;
 mod client_env;
 mod compile_concurrency;
 mod compile_progress;
@@ -198,6 +202,7 @@ mod disk_maintenance_progress;
 pub use disk_maintenance_progress::DiskMaintenanceProgress;
 mod embedded;
 mod embedded_bringup;
+mod exec_publication;
 mod handle_clear;
 mod handle_compile;
 mod handle_compile_ephemeral;
@@ -217,6 +222,7 @@ mod link_helpers;
 mod link_process;
 mod loaders;
 mod maintenance_schedule;
+mod multi_publication;
 mod orphan_reconcile;
 mod out_dir;
 mod pch;
@@ -270,6 +276,7 @@ use out_dir::*;
 use pch::*;
 use persist::*;
 
+#[cfg(test)]
 pub(crate) fn remove_cow_blob(path: &Path) -> std::io::Result<()> {
     remove_registered_blob(path)
 }

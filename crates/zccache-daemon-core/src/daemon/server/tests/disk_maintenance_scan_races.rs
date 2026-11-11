@@ -10,7 +10,6 @@ use crate::daemon::server::persist::{
     persist_staged_artifact_payloads, scan_v2_disk_artifacts, StagedHookGuard, StagedHookPoint,
 };
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Runs `scan`, deleting `victim` at the moment the scan has listed it but not
@@ -21,14 +20,16 @@ fn with_entry_removed_after_listing<T: Send + 'static>(
 ) -> T {
     let hook = StagedHookGuard::arm(victim, StagedHookPoint::ScanEntryListed);
     let worker = std::thread::spawn(scan);
-    hook.wait_until_reached();
+    hook.wait_until_reached_for(Duration::from_secs(5));
     if victim.is_dir() {
         std::fs::remove_dir_all(victim).unwrap();
     } else {
         std::fs::remove_file(victim).unwrap();
     }
     hook.resume();
-    worker.join().unwrap()
+    crate::core::wait::join_for(worker, Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
 }
 
 fn staged_fixture() -> (tempfile::TempDir, PathBuf, String, PathBuf) {
@@ -113,7 +114,12 @@ fn accounting_walk_skips_a_file_removed_after_listing() {
 
     let (result, artifact) = with_entry_removed_after_listing(&victim, move || {
         let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
-        let result = add_tree(&tree, &mut artifact, &mut HashSet::new());
+        let result = add_tree(
+            &tree,
+            &mut artifact,
+            &mut HashSet::new(),
+            crate::core::wait::PROBE,
+        );
         (result, artifact)
     });
 
@@ -125,37 +131,50 @@ fn accounting_walk_skips_a_file_removed_after_listing() {
 }
 
 /// The production shape, without an injected pause: real publications racing
-/// real scans over the live store. Bounded by attempts, not a wall-clock wait.
+/// real scans over the live store. Pair each scan with one publication: a
+/// producer that runs until scans finish can continually extend the trash walk.
 #[test]
 fn scans_survive_concurrent_staged_publication() {
     let root = tempfile::tempdir().unwrap();
     let artifact_dir = root.path().to_path_buf();
-    let stop = Arc::new(AtomicBool::new(false));
+    let (publish, requests) = std::sync::mpsc::channel();
+    let (published, completions) = std::sync::mpsc::channel();
+    persist_staged_artifact_payloads(
+        &artifact_dir,
+        &format!("{:064x}", 0),
+        &[Arc::new(0_u32.to_le_bytes().to_vec())],
+    )
+    .unwrap();
     let publisher = {
         let artifact_dir = artifact_dir.clone();
-        let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let mut round = 0_u32;
-            while !stop.load(Ordering::Acquire) {
+            for round in 0_u32..500 {
+                if crate::core::wait::recv_for(&requests, crate::core::wait::PROBE).is_err() {
+                    break;
+                }
                 // One payload per key: a key republished with different bytes
                 // fails closed by design, which is not what this exercises.
                 let key_index = round % 64;
                 let key = format!("{key_index:064x}");
                 let payload = Arc::new(key_index.to_le_bytes().to_vec());
                 persist_staged_artifact_payloads(&artifact_dir, &key, &[payload]).unwrap();
-                round += 1;
+                published.send(()).unwrap();
             }
         })
     };
     let mut outcome = Ok(());
     for _ in 0..500 {
+        publish.send(()).unwrap();
         outcome = scan_artifacts(&artifact_dir).map(|_| ());
+        crate::core::wait::recv_for(&completions, crate::core::wait::PROBE).unwrap();
         if outcome.is_err() {
             break;
         }
     }
-    stop.store(true, Ordering::Release);
-    publisher.join().unwrap();
+    drop(publish);
+    crate::core::wait::join_for(publisher, crate::core::wait::PROBE)
+        .unwrap()
+        .unwrap();
     outcome.expect("a scan racing publication must not fail");
 }
 
@@ -306,7 +325,13 @@ fn persistently_unreadable_directory_is_not_treated_as_vanished() {
     assert!(error.to_string().contains("tree"), "{error}");
 
     let mut artifact = artifact("key", 0, SystemTime::now(), Duration::ZERO);
-    let error = add_tree(&tree, &mut artifact, &mut HashSet::new()).unwrap_err();
+    let error = add_tree(
+        &tree,
+        &mut artifact,
+        &mut HashSet::new(),
+        crate::core::wait::PROBE,
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 

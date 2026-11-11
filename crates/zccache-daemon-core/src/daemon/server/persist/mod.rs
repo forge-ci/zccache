@@ -33,6 +33,7 @@ mod layout;
 mod link_registry;
 mod mtime;
 mod object_store;
+mod output_destination;
 mod pack;
 mod staged_link_args;
 mod staged_multi;
@@ -41,6 +42,8 @@ mod staged_plan;
 mod staged_plan_observed;
 mod staged_store;
 mod write_cached;
+#[cfg(test)]
+mod write_cached_test_api;
 
 pub(in crate::daemon::server) use artifact_io::*;
 pub(in crate::daemon::server) use delivery_mode::*;
@@ -51,6 +54,7 @@ pub(in crate::daemon::server) use layout::*;
 pub(in crate::daemon::server) use link_registry::*;
 pub(in crate::daemon::server) use mtime::*;
 pub(in crate::daemon::server) use object_store::*;
+pub(in crate::daemon::server) use output_destination::*;
 pub(in crate::daemon::server) use pack::*;
 pub(in crate::daemon::server) use staged_multi::*;
 #[cfg(test)]
@@ -60,6 +64,8 @@ pub(in crate::daemon::server) use staged_paths::*;
 pub(in crate::daemon::server) use staged_plan::*;
 pub(in crate::daemon::server) use staged_store::*;
 pub(in crate::daemon::server) use write_cached::*;
+#[cfg(test)]
+pub(in crate::daemon::server) use write_cached_test_api::*;
 
 pub(crate) type V2DiskArtifact = staged_store::StagedDiskArtifact;
 
@@ -78,8 +84,12 @@ pub(crate) fn evict_v2_artifact_keys(
 pub(crate) fn evict_v2_artifact_keys_if_unchanged(
     artifact_dir: &Path,
     expected: &std::collections::HashMap<String, Option<String>>,
-) -> std::io::Result<std::collections::HashSet<String>> {
-    staged_store::evict_staged_artifact_keys_if_unchanged(artifact_dir, expected)
+) -> std::io::Result<DetachedStagedEviction> {
+    staged_store::detach_staged_artifact_keys_if_unchanged(
+        artifact_dir,
+        expected,
+        std::time::Duration::from_secs(2),
+    )
 }
 
 #[cfg(test)]

@@ -103,12 +103,18 @@ pub(super) async fn materialize_cached_compile_hit_offloaded(
     request: OwnedCachedHitMaterializeRequest,
 ) -> Result<Response, CachedHitFailure> {
     let launcher = Arc::clone(&request.state);
+    let Some(root) = launcher.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        return Ok(Response::Error {
+            message: "compile cache lookup declined because cache-root ownership was released"
+                .into(),
+        });
+    };
     // The blocking materializer runs outside this task's scope, so the
     // embedded admission observation (#1550) reads the served size here.
     let observed_key =
         test_harness_admission::observing().then(|| request.artifact_key_hex.clone());
     let result = match launcher
-        .launch_blocking(move || {
+        .launch_blocking_with_root(root, move || {
             materialize_cached_compile_hit(CachedHitMaterializeRequest {
                 state: &request.state,
                 sid: &request.sid,
@@ -240,8 +246,11 @@ pub(super) fn materialize_cached_compile_hit(
         report_materialization_failure(&state.cache_dir, key, "compile-hit", &failure);
         failure.into()
     };
-    let cached = lookup_artifact_with_disk_fallback(state, artifact_key_hex)
-        .ok_or_else(|| missing_entry(artifact_key_hex))?;
+    let (publication_guard, cached) = lookup_artifact_with_disk_fallback(state, artifact_key_hex)
+        .ok_or_else(|| missing_entry(artifact_key_hex))?
+        .into_parts();
+    // Last declared: unwind releases publication before the cached record.
+    let publication = publication_guard;
     let verdict = verdict_keys
         .map(|keys| {
             keys.lookup(&cached.meta.rustc_verdicts)
@@ -284,6 +293,7 @@ pub(super) fn materialize_cached_compile_hit(
         let t1 = Instant::now();
         let artifact_lookup_ns = (t1 - t0).as_nanos() as u64;
         crate::daemon::server::inner_trace::record_ns("cache_load", artifact_lookup_ns);
+        drop(publication);
         drop(cached);
 
         if record_compilation {
@@ -349,7 +359,8 @@ pub(super) fn materialize_cached_compile_hit(
 
     let names = Arc::clone(&cached.meta.output_names);
     let artifact_bytes = cached.meta.total_size;
-    drop(cached);
+    // Delivery borrows the owned record, while publication ends before copy.
+    drop(publication);
 
     // #1952: a cached clang PCH is served only when its recorded inputs
     // match the workspace; the guard is held until the PCH is written.
@@ -488,7 +499,8 @@ pub(super) fn materialize_cached_compile_hit(
     };
     payloads.record_staged_pre_materialization(&state.profiler.staged);
     let observed_result = if provisional_staged {
-        write_provisional_payloads_par_with_mtime_floor_observed(
+        write_provisional_payloads_par_with_mtime_floor_observed_for_state(
+            state,
             &targets,
             &payloads_to_write,
             floor_paths,
@@ -496,7 +508,8 @@ pub(super) fn materialize_cached_compile_hit(
             materialization_mode,
         )
     } else {
-        write_payloads_par_with_mtime_floor_and_policies_observed(
+        write_payloads_par_with_mtime_floor_and_policies_observed_for_state(
+            state,
             &targets,
             &payloads_to_write,
             floor_paths,
@@ -506,6 +519,7 @@ pub(super) fn materialize_cached_compile_hit(
     };
     payloads.record_staged_lock_timings(&state.profiler.staged);
     drop(payloads);
+    drop(cached);
     let observed = match observed_result {
         Ok(observed) => observed,
         Err(error) => {

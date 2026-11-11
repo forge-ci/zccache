@@ -208,7 +208,7 @@ pub(super) async fn handle_link_ephemeral(
                 || hash_link_inputs(state, tool_path, &inputs, profile_enabled),
                 || {
                     prepare_link_miss(LinkMissPreparationRequest {
-                        staging_dir: state.staging.path(),
+                        staging: &state.staging,
                         args,
                         output_path: &output_path,
                         secondary_outputs: &parsed_tool.secondary_outputs,
@@ -303,8 +303,14 @@ pub(super) async fn handle_link_ephemeral(
         parsed_tool.output_kind == crate::compiler::parse_linker::LinkOutputKind::DirectoryBundle;
     let hit_warning = nd_warning.clone();
     let hit_mode = link_mode;
+    let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        discard_speculative_archive(&mut speculative_archive);
+        return Response::Error {
+            message: "link cache lookup declined because cache-root ownership was released".into(),
+        };
+    };
     let hit_outcome = state
-        .launch_blocking(move || {
+        .launch_blocking_with_root(root, move || {
             materialize_link_cache_hit(
                 &hit_state,
                 &hit_key,
@@ -382,9 +388,7 @@ pub(super) async fn handle_link_ephemeral(
         prepared_directory_plan_result
     } else {
         (parsed_tool.output_kind == crate::compiler::parse_linker::LinkOutputKind::DirectoryBundle)
-            .then(|| {
-                StagedDirectoryPlan::dsymutil(state.staging.path(), args, &output_path, cwd_path)
-            })
+            .then(|| StagedDirectoryPlan::dsymutil(&state.staging, args, &output_path, cwd_path))
     };
     let staged_plan_result = if prepared_during_hash {
         prepared_staged_plan_result
@@ -554,7 +558,7 @@ pub(super) async fn handle_link_ephemeral(
     if parsed_tool.is_archive {
         if let Some(plan) = staged_plan.take() {
             let started = std::time::Instant::now();
-            match plan.materialize(link_mode) {
+            match plan.materialize_for_state(state, link_mode) {
                 Ok(materialized) => {
                     state.profiler.staged.add_count(
                         StagedCounter::MaterializeReflink,
@@ -856,7 +860,7 @@ pub(super) async fn handle_link_ephemeral(
                     }
                 } else {
                     let sem = Arc::clone(&state.persist_semaphore);
-                    cached.publish(&state.artifacts, key_hex.clone());
+                    let _retired = cached.publish(&state.artifacts, key_hex.clone());
                     let published = cached.clone();
                     let persist_state = Arc::clone(state);
                     let publication_guard_for_task = publication_guard

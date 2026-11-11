@@ -215,6 +215,68 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib daemon::process:: --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec::coalesce_tests --locked"
 
+[task.staged-sweep-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib sweep_tests --locked"
+
+# Reuse the gate's owned volumes for the compiler-fixture feedback loop. The
+# Cargo shim mirrors CI: even the Dylint driver's nested builds go through soldr.
+[task.staged-clear-transfer-ui]
+stack = "gate"
+cmd = '''
+set -eu
+task_prepare=$(env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1)
+printf '%s\n' "$task_prepare"
+task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: tool bin dir //p' | paste -sd: -)
+mkdir -p /target/dylint-ui-shim
+printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
+chmod +x /target/dylint-ui-shim/cargo
+export PATH="/target/dylint-ui-shim:/home/gate/.soldr/bin:$task_tools:$PATH"
+export RUSTUP_TOOLCHAIN=nightly-2026-08-15
+export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
+export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
+export CARGO_TARGET_DIR=/target/dylint-ui
+export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
+soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --lib
+'''
+
+[task.staged-cleanup-product-dylint]
+stack = "gate"
+cmd = '''
+set -eu
+task_prepare=$(env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1)
+printf '%s\n' "$task_prepare"
+task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: tool bin dir //p' | paste -sd: -)
+mkdir -p /target/dylint-ui-shim
+printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
+chmod +x /target/dylint-ui-shim/cargo
+export PATH="/target/dylint-ui-shim:/home/gate/.soldr/bin:$task_tools:$PATH"
+export RUSTUP_TOOLCHAIN=nightly-2026-08-15
+export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
+export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
+export CARGO_TARGET_DIR=/target/dylint-ui
+export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
+unset RUSTUP_TOOLCHAIN RUSTC
+set +e
+: > /target/1964-effects-trace.log
+SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 ZCCACHE_DYLINT_EXPLAIN=1 ZCCACHE_DYLINT_EXPLAIN_TRACE=/target/1964-effects-trace.log SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
+task_status=$?
+head -n 100 /target/1964-effects-trace.log
+exit "$task_status"
+'''
+
+[task.clear-index-detach-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_clear_releases_publication_before_index_flush --locked"
+
+[task.kv-retirement-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib kv:: --locked"
+
+[task.staged-store-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cached_artifact --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib clear_handler --locked -- --include-ignored"
+
 [task.bounded-gate-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_staged_materialization_leases_share_the_store_lock --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::link_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store_wait_does_not_hold_state_mutex --locked"
@@ -227,3 +289,98 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features zccache-b
 [task.sysroot-argfile-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-compiler --lib --locked && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache-depgraph --lib --locked && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache --features test-support --test cache_rust --locked -- --test-threads=1 && CARGO_TARGET_DIR=/target/1930-uncached soldr --trust-inherited-soldr-env --no-cache cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test --locked -- --ignored --test-threads=1"
+[task.staged-accounting-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance::tests::trash --locked"
+
+[task.staged-coordination-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib staged_lock --locked"
+
+[task.staged-consumer-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib snapshot --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features cli --lib warm_waits_for_the_staged_store_lock_before_materializing --locked"
+
+[task.staged-control-plane-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_real_cache_hits_leave_embedded_control_plane_responsive --locked"
+
+[task.staged-private-cleanup-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib clear_releases_publication_before_last_provisional_owner_cleanup --locked"
+
+[task.publication-miss-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_publication_diagnostic_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compile_multi --locked"
+
+[task.error-verdict-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib error_cache --locked"
+
+[task.lookup-retirement-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib artifact_store_deferred --locked"
+
+[task.exec-publication-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib exec_publication:: --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec:: --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib error_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cache_root_writer_tests --locked"
+
+[task.materialization-consumer-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::link_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib handle_exec:: --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compile_multi --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cached_hit --locked"
+
+[task.multi-publication-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib multi_publication --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compile_multi --locked"
+
+[task.maintenance-commit-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance::tests --locked"
+
+[task.wal-root-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib wal::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib run::accept_watchdog_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib run::memory_eviction_controller_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib embedded_flush --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib multi_restart_context_key --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_multi_visibility_stays_inside_queued_clear_barrier --locked"
+
+[task.activity-root-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib clear_handler::provisional --locked"
+
+[task.root-launch-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib released_root --locked"
+
+[task.migration-detach-regression]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib legacy_migration_publishes_only_durable_payloads --locked"
+
+[task.output-destination-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib output_destination::tests --locked"
+
+[task.output-destination-dotdot-regression]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib output_scope_dotdot_checks_the_exact_normalized_mutation_path --locked"
+
+[task.compiler-hash-durability-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compiler_hash --locked"
+
+[task.private-output-namespace-regression]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib private_namespace_normalizes_before_claiming_a_new_directory --locked"
+
+[task.delivery-retry-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib delivery_retry_ladder --locked"
+
+[task.corruption-retirement-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib retirement_regressions --locked"
+
+[task.cached-delivery-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::write_cached --locked"
+
+[task.watcher-retirement-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib watcher_lifecycle --locked"
