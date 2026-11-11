@@ -528,7 +528,10 @@ pub(super) fn explain_trace(line: std::fmt::Arguments<'_>) {
         .append(true)
         .open(path)
     {
-        let _ = writeln!(file, "{line}");
+        // Parallel UI compilers share this file. Append each complete record
+        // in one write so formatting fragments cannot interleave.
+        let record = format!("{line}\n");
+        let _ = file.write_all(record.as_bytes());
     }
 }
 
