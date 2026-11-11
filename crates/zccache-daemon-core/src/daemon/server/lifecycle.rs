@@ -328,6 +328,7 @@ pub(super) fn new_shared_state(
             artifact_store_loaded: AtomicBool::new(false),
             shutdown_event_logged: AtomicBool::new(false),
             shutdown_requested: AtomicBool::new(false),
+            shutdown_completion: shutdown_completion::Completion::default(),
             index_writer_gone: AtomicBool::new(false),
             fingerprint: FingerprintManager::new(),
             dep_graph_persisted: AtomicBool::new(false),

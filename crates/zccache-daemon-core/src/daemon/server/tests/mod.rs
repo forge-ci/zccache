@@ -60,6 +60,7 @@ mod session_staged_attribution;
 mod shutdown_dirty_state;
 mod staged_compiler_sets;
 pub(crate) mod staged_env;
+mod stop_persistence;
 mod store_mode;
 mod system_includes_deferred;
 mod watch_registration_rollback;

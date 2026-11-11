@@ -206,11 +206,12 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
                                 eprintln!(
                                     "daemon process {pid} terminated after IPC connection failed"
                                 );
-                                return if wait_for_daemon_teardown(endpoint).await {
-                                    ExitCode::SUCCESS
-                                } else {
-                                    ExitCode::FAILURE
-                                };
+                                // Forced termination cannot prove session persistence.
+                                let _ = wait_for_daemon_teardown(endpoint).await;
+                                eprintln!(
+                                    "zccache[err][D]: forced stop; cache state may be incomplete"
+                                );
+                                return ExitCode::FAILURE;
                             }
                             Ok(false) => {}
                             Err(error) => {
@@ -255,12 +256,8 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
     };
     match recv_result {
         Some(crate::protocol::Response::ShuttingDown) => {
-            // The daemon acknowledges `Shutdown` immediately and continues
-            // teardown asynchronously. On Windows the redb index lock is held
-            // until the daemon process actually exits and `Drop` fires. Wait
-            // for the IPC endpoint to drop and for `index.redb` to be
-            // openable (i.e. no exclusive share lock) so callers like the CI
-            // post-step tar do not race the daemon. See issue #182.
+            // The existing response now follows the daemon's persistence drain.
+            // Also await endpoint teardown so an immediate restart can bind it.
             if !wait_for_daemon_teardown(endpoint).await {
                 return ExitCode::FAILURE;
             }
@@ -273,6 +270,10 @@ pub(crate) async fn cmd_stop(endpoint: &str) -> ExitCode {
             }
             eprintln!("daemon stopped");
             ExitCode::SUCCESS
+        }
+        Some(crate::protocol::Response::Error { message }) => {
+            eprintln!("zccache[err][D]: {message}");
+            ExitCode::FAILURE
         }
         None => {
             eprintln!("{LOST_CONNECTION_MSG}");

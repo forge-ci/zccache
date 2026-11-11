@@ -43,7 +43,7 @@ pub(super) async fn dispatch_request(
     let (response, journal_ctx): (Response, Option<PendingJournalContext>) = match request {
         Request::Ping => (Response::Pong, None),
         Request::Shutdown => {
-            send_response_for_wire(conn, response_wire, &Response::ShuttingDown).await?;
+            let _reply = state.shutdown_completion.reply();
             // Record graceful exit alongside the existing "spawn"
             // event so a single parse of `daemon-lifecycle.log`
             // reconstructs the daemon's full lifetime. Pairs with
@@ -68,6 +68,8 @@ pub(super) async fn dispatch_request(
             }
             state.shutdown_requested.store(true, Ordering::Release);
             state.shutdown.notify_waiters();
+            let response = state.shutdown_completion.response().await;
+            send_response_for_wire(conn, response_wire, &response).await?;
             return Ok(None);
         }
         Request::Status => {

@@ -820,7 +820,7 @@ pub(super) async fn handle_compile_multi(
         // src/dst failures already enriched by `persist::enrich_persist_err`).
         let t_persist_enqueue = std::time::Instant::now();
         // Track this deferred persist in pending_cache_writes so the
-        // shutdown drain (wal::drain_durable_state_for_shutdown) awaits it
+        // shutdown drain (shutdown_drain::drain_durable_state_for_shutdown) awaits it
         // — the single-file path registers its deferred persist the same
         // way (miss_store.rs). Untracked, a 2-core host can shut down
         // between the compile response and persist_artifact_payloads,

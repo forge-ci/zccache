@@ -69,3 +69,16 @@ impl ProvisionalArtifact {
         }
     }
 }
+
+impl CachedArtifact {
+    /// Remaining resident/private payloads after quiescence mean publication
+    /// failed. Disk-backed hits never perform this shutdown-only inspection.
+    pub(in crate::daemon::server) fn is_provisional(&self) -> bool {
+        self._provisional_staged_owner.is_some()
+            || self.payloads.get().is_some_and(|payloads| {
+                payloads
+                    .iter()
+                    .any(|payload| matches!(payload, CachedPayload::Bytes(_)))
+            })
+    }
+}
