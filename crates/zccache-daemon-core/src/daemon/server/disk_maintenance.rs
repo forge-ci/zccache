@@ -6,7 +6,7 @@
 use super::*;
 #[path = "disk_maintenance_accounting.rs"]
 mod accounting;
-use accounting::add_tree;
+use accounting::add_tree_for as add_tree;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
@@ -624,7 +624,12 @@ fn scan_artifact_usage(artifact_dir: &Path) -> io::Result<(Vec<DiskArtifact>, u6
         artifact.staged = true;
         artifact.staged_generation = staged.generation;
         artifact.last_access = artifact.last_access.max(staged.mtime);
-        add_tree(&staged_root.join(&key), artifact, &mut seen)?;
+        add_tree(
+            &staged_root.join(&key),
+            artifact,
+            &mut seen,
+            crate::core::wait::PROBE,
+        )?;
         add_file(
             &staged_root.join(format!("{key}.current")),
             artifact,
@@ -656,7 +661,7 @@ fn scan_artifact_usage(artifact_dir: &Path) -> io::Result<(Vec<DiskArtifact>, u6
                     "refusing cache accounting through linked trash",
                 ));
             }
-            add_tree(&trash, &mut pending, &mut seen)?;
+            add_tree(&trash, &mut pending, &mut seen, crate::core::wait::PROBE)?;
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),

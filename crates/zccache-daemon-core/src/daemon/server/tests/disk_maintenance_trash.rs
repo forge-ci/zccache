@@ -227,3 +227,39 @@ fn pass(artifact_dir: &Path, root: &Path) -> DiskMaintenanceReport {
     })
     .unwrap()
 }
+
+#[test]
+fn physical_accounting_expires_before_visiting_a_retired_tree() {
+    let root = tempfile::tempdir().unwrap();
+    let trash = root.path().join(".staged-v2/.trash/retired");
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("payload"), b"retained").unwrap();
+    let mut usage = artifact("retired", 0, SystemTime::UNIX_EPOCH, Duration::ZERO);
+    let error = accounting::add_tree_for(&trash, &mut usage, &mut HashSet::new(), Duration::ZERO)
+        .expect_err("an expired accounting walk must not chase newly retired names");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
+fn physical_accounting_budget_includes_paused_subtrees() {
+    use crate::daemon::server::persist::{StagedHookGuard, StagedHookPoint};
+    let root = tempfile::tempdir().unwrap();
+    let trash = root.path().join(".staged-v2/.trash/retired");
+    std::fs::create_dir_all(&trash).unwrap();
+    let payload = trash.join("payload");
+    std::fs::write(&payload, b"retained").unwrap();
+    let hook = StagedHookGuard::arm(&payload, StagedHookPoint::ScanEntryListed);
+    let bound = Duration::from_secs(2);
+    let worker = std::thread::spawn(move || {
+        let mut usage = artifact("retired", 0, SystemTime::UNIX_EPOCH, Duration::ZERO);
+        accounting::add_tree_for(root.path(), &mut usage, &mut HashSet::new(), bound)
+    });
+    hook.wait_until_reached_for(Duration::from_secs(5));
+    std::thread::sleep(bound + Duration::from_millis(20));
+    hook.resume();
+    let error = crate::core::wait::join_for(worker, Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .expect_err("subtrees must share the original accounting budget");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
