@@ -62,10 +62,9 @@ async fn drain(
     save_compiler_hashes(state).await;
     save_system_includes(state).await;
     drop(publication);
-    let depfile_tmpdir = state.depfile_tmpdir.clone();
-    let _ =
-        kernal_api::async_engine::launch_blocking(move || std::fs::remove_dir_all(&depfile_tmpdir))
-            .await;
+    if let Some(retirer) = state.staging.retirer() {
+        retirer.retire(state.depfile_tmpdir.as_path());
+    }
     if state.shutdown_completion.failed.load(Ordering::Acquire) {
         return Err(ShutdownError::Persistence);
     }
