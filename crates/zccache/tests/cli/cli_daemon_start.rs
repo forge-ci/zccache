@@ -284,6 +284,8 @@ impl Drop for IsolatedDaemon {
 
 /// `zccache stop` must still terminate the daemon when IPC is unreachable but
 /// the lock file points at the live, identity-verified daemon process.
+/// Forced termination must report failure because it cannot prove that session
+/// persistence completed (#1984).
 ///
 /// Unix only: removing the socket path makes a live daemon unreachable, and a
 /// Windows named pipe has no equivalent.
@@ -309,10 +311,17 @@ fn stop_kills_locked_process_when_ipc_is_unreachable() {
     std::fs::remove_file(daemon.endpoint()).expect("remove daemon socket");
     let output = daemon.command("stop").output().expect("run zccache stop");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "zccache stop failed: {stderr}");
+    assert!(
+        !output.status.success(),
+        "forced stop cannot report successful persistence: {stderr}"
+    );
     assert!(
         stderr.contains("terminated after IPC connection failed"),
         "stop must take the forced-kill path, not an IPC shutdown: {stderr}"
+    );
+    assert!(
+        stderr.contains("zccache[err][D]: forced stop; cache state may be incomplete"),
+        "forced stop must explain that durability could not be established: {stderr}"
     );
 
     let deadline = Instant::now() + Duration::from_secs(10);
