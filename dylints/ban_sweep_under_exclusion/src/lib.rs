@@ -262,6 +262,15 @@ fn ui() {
         "the generic callback body must be analyzed once across all three instantiations: {}",
         trace.display()
     );
+    assert_eq!(
+        summaries
+            .lines()
+            .filter(|line| { line.starts_with("drop analysis ") && line.ends_with("CycleCleanup") })
+            .count(),
+        1,
+        "a complete destructor summary must be reused across recursive roots: {}",
+        trace.display()
+    );
     match previous_trace {
         Some(value) => std::env::set_var("ZCCACHE_DYLINT_EXPLAIN_TRACE", value),
         None => std::env::remove_var("ZCCACHE_DYLINT_EXPLAIN_TRACE"),

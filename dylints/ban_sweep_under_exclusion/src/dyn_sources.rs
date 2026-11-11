@@ -40,8 +40,8 @@ thread_local! {
     // One driver invocation lints one crate. Sites are plain HIR ids; types
     // are recomputed from the cached typeck query on demand.
     static SITES: RefCell<Option<Vec<(LocalDefId, Site)>>> = const { RefCell::new(None) };
-    /// `None` while a trait is being resolved, then its effects.
-    static RESOLVED: RefCell<HashMap<Option<String>, Option<u8>>> = RefCell::new(HashMap::new());
+    /// `None` while active, then (effects, complete). Partial answers cannot enter the drop cache.
+    static RESOLVED: RefCell<HashMap<Option<String>, Option<(u8, bool)>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn drop_effects<'tcx>(
@@ -51,9 +51,18 @@ pub(super) fn drop_effects<'tcx>(
     active: &mut Vec<ty::Ty<'tcx>>,
 ) -> u8 {
     let principal = principal(cx, object);
+    let epoch = summaries.incomplete_epoch;
     match RESOLVED.with(|resolved| resolved.borrow().get(&principal).copied()) {
-        Some(Some(effects)) => return effects,
-        Some(None) => return 0,
+        Some(Some((effects, complete))) => {
+            if !complete {
+                summaries.incomplete_epoch += 1;
+            }
+            return effects;
+        }
+        Some(None) => {
+            summaries.incomplete_epoch += 1;
+            return 0;
+        }
         None => {}
     }
     RESOLVED.with(|resolved| resolved.borrow_mut().insert(principal.clone(), None));
@@ -108,7 +117,12 @@ pub(super) fn drop_effects<'tcx>(
             effects |= super::effects::UNKNOWN;
         }
     }
-    RESOLVED.with(|resolved| resolved.borrow_mut().insert(principal, Some(effects)));
+    let complete = summaries.incomplete_epoch == epoch;
+    RESOLVED.with(|resolved| {
+        resolved
+            .borrow_mut()
+            .insert(principal, Some((effects, complete)))
+    });
     effects
 }
 

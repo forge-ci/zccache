@@ -2,7 +2,7 @@
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_lint::LateContext;
 use rustc_middle::{mir, ty};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(super) const BULK: u8 = 1;
 pub(super) const SWEEP: u8 = 2;
@@ -16,6 +16,9 @@ pub(super) struct Cache<'tcx> {
     entries: Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
     indices: HashMap<(DefId, ty::GenericArgsRef<'tcx>), usize>,
     depth: usize,
+    pub(super) incomplete_epoch: usize,
+    incomplete_functions: HashSet<usize>,
+    drops: HashMap<(ty::Ty<'tcx>, ty::TypingEnv<'tcx>), u8>,
     targets: HashMap<LocalDefId, Vec<Target<'tcx>>>,
     guards: HashMap<(ty::Ty<'tcx>, super::guard_types::Scope), bool>,
 }
@@ -36,6 +39,8 @@ impl<'tcx> Cache<'tcx> {
         self.entries.clear();
         self.indices.clear();
         self.depth = 0;
+        self.incomplete_epoch = 0;
+        self.incomplete_functions.clear();
         self
     }
 }
@@ -88,13 +93,18 @@ fn function<'tcx>(
     seen: &mut Cache<'tcx>,
 ) -> u8 {
     if let Some(index) = seen.indices.get(&(definition, arguments)) {
+        if seen.entries[*index].2.is_none() || seen.incomplete_functions.contains(index) {
+            seen.incomplete_epoch += 1;
+        }
         return seen.entries[*index].2.unwrap_or(0);
     }
     if seen.depth >= 128 {
+        seen.incomplete_epoch += 1;
         explain_trace(format_args!("call depth limit at {definition:?}"));
         return UNKNOWN;
     }
     let index = seen.entries.len();
+    let epoch = seen.incomplete_epoch;
     seen.entries.push((definition, arguments, None));
     seen.indices.insert((definition, arguments), index);
     seen.depth += 1;
@@ -240,6 +250,9 @@ fn function<'tcx>(
         })
     })();
     seen.entries[index].2 = Some(result);
+    if seen.incomplete_epoch != epoch {
+        seen.incomplete_functions.insert(index);
+    }
     seen.depth -= 1;
     result
 }
@@ -357,14 +370,24 @@ pub(super) fn drop_value<'tcx>(
             }
         }
     }
+    let key = (value, cx.typing_env());
+    if let Some(effects) = summaries.drops.get(&key) {
+        return *effects;
+    }
     if active.contains(&value) {
+        summaries.incomplete_epoch += 1;
         return 0;
     }
     if active.len() >= 128 {
+        summaries.incomplete_epoch += 1;
         explain_trace(format_args!("drop depth limit at {value}"));
         return UNKNOWN;
     }
+    let epoch = summaries.incomplete_epoch;
     active.push(value);
+    if std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE").is_some() {
+        explain_trace(format_args!("drop analysis {value}"));
+    }
     let effects = match value.kind() {
         ty::Adt(definition, arguments) => {
             let name = cx.tcx.item_name(definition.did());
@@ -481,6 +504,11 @@ pub(super) fn drop_value<'tcx>(
         _ => 0,
     };
     active.pop();
+    // A back edge contributes zero only within its current recursion. Never
+    // retain that partial answer for a later root or generic typing context.
+    if summaries.incomplete_epoch == epoch {
+        summaries.drops.insert(key, effects);
+    }
     effects
 }
 
