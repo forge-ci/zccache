@@ -46,7 +46,7 @@ async fn drain(
     // Every detached compile/link/exec owns a publication read permit through
     // its payload/index send. Compile continuations also have pending-write
     // registrations. Directory links publish synchronously under that permit.
-    let _publication = drain_durable_state_for_shutdown(state, writer).await?;
+    let publication = drain_durable_state_for_shutdown(state, writer).await?;
     if state
         .artifacts
         .iter()
@@ -61,7 +61,11 @@ async fn drain(
     save_metadata(state).await;
     save_compiler_hashes(state).await;
     save_system_includes(state).await;
-    let _ = std::fs::remove_dir_all(&state.depfile_tmpdir);
+    drop(publication);
+    let depfile_tmpdir = state.depfile_tmpdir.clone();
+    let _ =
+        kernal_api::async_engine::launch_blocking(move || std::fs::remove_dir_all(&depfile_tmpdir))
+            .await;
     if state.shutdown_completion.failed.load(Ordering::Acquire) {
         return Err(ShutdownError::Persistence);
     }
@@ -137,8 +141,13 @@ async fn save_system_includes(state: &Arc<SharedState>) {
         })
         .await;
     if let Some(includes) = includes {
+        let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+            record_shutdown_shortfall(state, "system includes lost cache-root ownership");
+            return;
+        };
         let path = state.system_includes_cache_path.clone();
         let result = kernal_api::async_engine::launch_blocking(move || {
+            let _root = root;
             includes.save_to_disk(path.as_path())
         })
         .await

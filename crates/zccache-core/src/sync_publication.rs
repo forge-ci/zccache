@@ -83,6 +83,17 @@ impl PublicationBarrier {
     }
 
     /// Exclude publishers for a bounded checkpoint or orderly shutdown.
+    pub async fn try_drain_for(
+        &self,
+        bound: Duration,
+    ) -> Result<PublicationDrainPermit, super::sync::LockTimeout> {
+        self.inner
+            .try_write_for(bound)
+            .await
+            .map(|permit| PublicationDrainPermit { _permit: permit })
+    }
+
+    /// Exclude publishers for a bounded checkpoint or orderly shutdown.
     #[track_caller]
     pub fn drain_for(
         &self,

@@ -12,13 +12,13 @@ const PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) async fn drain_durable_state_for_shutdown(
     state: &SharedState,
     writer: Option<kernal_api::async_engine::Task<()>>,
-) -> Result<crate::core::sync::WritePermit, ShutdownError> {
+) -> Result<crate::core::sync::PublicationDrainPermit, ShutdownError> {
     if !drain_pending_writes(state, PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT).await {
         return Err(ShutdownError::BudgetExceeded);
     }
     let publication = state
         .artifact_publication
-        .try_write_for(crate::core::sync::OPERATION_TIMEOUT)
+        .try_drain_for(crate::core::sync::OPERATION_TIMEOUT)
         .await
         .map_err(|_| ShutdownError::BudgetExceeded)?;
     let flush_result =
@@ -49,8 +49,18 @@ pub(super) async fn drain_durable_state_for_shutdown(
     // Include direct store inserts and retry any journal rows retained after a
     // failed periodic publication. Do not consume the dirty bit before success.
     if state.artifact_store.is_dirty() || state.artifact_store.has_pending_entries() {
-        if let Err(error) = Arc::clone(&state.artifact_store).flush_async().await {
-            record_shutdown_shortfall(state, &format!("artifact journal flush failed: {error}"));
+        let root = state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .ok_or(ShutdownError::Persistence)?;
+        let store = Arc::clone(&state.artifact_store);
+        let result = kernal_api::async_engine::launch_blocking(move || {
+            let _root = root;
+            store.flush()
+        })
+        .await;
+        if !matches!(result, Ok(Ok(()))) {
+            record_shutdown_shortfall(state, "artifact journal final flush failed");
         }
     }
     flush_result?;

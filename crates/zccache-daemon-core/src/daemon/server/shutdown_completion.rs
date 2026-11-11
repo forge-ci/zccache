@@ -48,6 +48,16 @@ impl Default for Completion {
 
 pub(super) struct Reply<'a>(&'a Completion);
 
+pub(super) struct UnwindFailure<'a>(&'a Completion);
+
+impl Drop for UnwindFailure<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.fail();
+        }
+    }
+}
+
 impl Drop for Reply<'_> {
     fn drop(&mut self) {
         self.0.replies.fetch_sub(1, Ordering::AcqRel);
@@ -56,6 +66,10 @@ impl Drop for Reply<'_> {
 }
 
 impl Completion {
+    pub(super) fn watch_unwind(&self) -> UnwindFailure<'_> {
+        UnwindFailure(self)
+    }
+
     pub(super) fn fail(&self) {
         self.failed.store(true, Ordering::Release);
     }

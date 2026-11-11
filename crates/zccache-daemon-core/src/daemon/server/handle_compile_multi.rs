@@ -840,7 +840,10 @@ pub(super) async fn handle_compile_multi(
                 let gap_ms = t_persist_enqueue.elapsed().as_millis() as u64;
                 match persist_artifact_payloads(&artifact_dir, &key_hex, &payloads) {
                     Ok(()) => {
-                        if index_writer_tx.send(IndexWriterCommand::Insert(key_hex, persist_meta)).is_err() {
+                        if index_writer_tx
+                            .send(IndexWriterCommand::Insert(key_hex, persist_meta))
+                            .is_err()
+                        {
                             _guard.state.shutdown_completion.fail();
                         }
                     }

@@ -163,17 +163,23 @@ pub(super) async fn discover_system_includes(
             if let Some(snapshot) = inserted_snapshot {
                 if state.system_includes_loaded.load(Ordering::Acquire) {
                     if let Some(publication) = begin_artifact_publication(state).await {
-                        let path = state.system_includes_cache_path.clone();
-                        kernal_api::async_engine::launch_blocking(move || {
-                            let _publication = publication;
-                            if let Err(e) = snapshot.save_to_disk(path.as_path()) {
-                                tracing::warn!(
-                                    path = %path.display(),
-                                    "system include cache write-through failed: {e}"
-                                );
-                            }
-                        })
-                        .detach();
+                        if let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) {
+                            let path = state.system_includes_cache_path.clone();
+                            kernal_api::async_engine::launch_blocking(move || {
+                                let _ = &publication;
+                                let _root = root;
+                                let _publication = publication;
+                                if let Err(e) = snapshot.save_to_disk(path.as_path()) {
+                                    tracing::warn!(
+                                        path = %path.display(),
+                                        "system include cache write-through failed: {e}"
+                                    );
+                                }
+                            })
+                            .detach();
+                        } else {
+                            state.shutdown_completion.fail();
+                        }
                     }
                 }
             }
