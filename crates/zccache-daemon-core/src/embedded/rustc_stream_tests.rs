@@ -59,8 +59,11 @@ fn write_source(temp: &TempDir) {
     std::fs::create_dir(temp.path().join("out")).unwrap();
 }
 
-fn metadata_line(bytes: &[u8]) -> Option<std::path::PathBuf> {
-    bytes.split(|byte| *byte == b'\n').find_map(|line| {
+fn metadata_line(bytes: &[u8], scanned: &mut usize) -> Option<std::path::PathBuf> {
+    let unread = &bytes[*scanned..];
+    let end = unread.iter().rposition(|byte| *byte == b'\n')? + 1;
+    *scanned += end;
+    unread[..end].split(|byte| *byte == b'\n').find_map(|line| {
         let value: serde_json::Value = serde_json::from_slice(line).ok()?;
         (value.get("emit")?.as_str()? == "metadata").then(|| {
             value
@@ -92,6 +95,7 @@ async fn perf_rustc_metadata_precedes_exit_and_hit_replays_identically() {
     let metadata = temp.path().join("out/libstreamcrate.rmeta");
     let library = temp.path().join("out/libstreamcrate.rlib");
     let mut stderr = Vec::new();
+    let mut scanned = 0;
     let mut delivered = None;
     let mut early_bytes = None;
     let mut outcome = None;
@@ -101,7 +105,7 @@ async fn perf_rustc_metadata_precedes_exit_and_hit_replays_identically() {
             CompileChunk::Stderr(bytes) => {
                 stderr.extend(bytes);
                 if delivered.is_none() {
-                    if let Some(path) = metadata_line(&stderr) {
+                    if let Some(path) = metadata_line(&stderr, &mut scanned) {
                         assert_eq!(path, metadata, "live JSON must name the requested path");
                         early_bytes = Some(
                             std::fs::read(path).expect("complete metadata before notification"),
@@ -163,12 +167,13 @@ async fn rustc_failure_after_metadata_does_not_publish_a_successful_entry() {
     ));
     for _ in 0..2 {
         let mut stderr = Vec::new();
+        let mut scanned = 0;
         let mut saw_metadata = false;
         service
             .compile_streaming(request.clone(), |chunk| match chunk {
                 CompileChunk::Stderr(bytes) => {
                     stderr.extend(bytes);
-                    if let Some(path) = metadata_line(&stderr) {
+                    if let Some(path) = metadata_line(&stderr, &mut scanned) {
                         assert_eq!(path, temp.path().join("out/libstreamcrate.rmeta"));
                         assert!(!std::fs::read(path).unwrap().is_empty());
                         saw_metadata = true;
