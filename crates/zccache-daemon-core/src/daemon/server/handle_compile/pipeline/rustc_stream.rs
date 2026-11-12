@@ -24,7 +24,7 @@ pub(super) async fn consume(
             .ok_or_else(|| io::Error::other("missing Rust staging plan"))?,
     );
     let (sender, live_receiver) = kernal_api::async_engine::channel(8);
-    let capture = compile_output::consume(receiver, context.redirect(sender), filter);
+    let capture = compile_output::consume_rustc(receiver, context.redirect(sender), filter);
     let relay = relay(live_receiver, &context, &plan, state, mode);
     let (captured, delivered) = tokio::join!(capture, relay);
     let mut plan = Arc::try_unwrap(plan)
@@ -131,7 +131,21 @@ async fn publish_metadata(
         if let Some(parent) = output.requested.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        materialize_independent_with_mode_scoped(output.staged.as_path(), &destination, mode)?;
+        let stats =
+            materialize_independent_with_mode_scoped(output.staged.as_path(), &destination, mode)?;
+        use crate::daemon::staged_stats::{StagedBytes, StagedCounter};
+        state
+            .profiler
+            .staged
+            .add_count(StagedCounter::MaterializeReflink, stats.reflink_count);
+        state
+            .profiler
+            .staged
+            .add_count(StagedCounter::MaterializeCopy, stats.copy_count);
+        state
+            .profiler
+            .staged
+            .bytes(StagedBytes::Materialization, stats.copy_bytes);
         state.cache_system.apply_changes(vec![output.requested]);
         Ok::<_, io::Error>(())
     })

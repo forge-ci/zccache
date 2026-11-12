@@ -37,6 +37,10 @@ pub(in crate::daemon::server) fn canonicalize_staged_output_bytes(
     bytes: &[u8],
     private_root: &Path,
 ) -> Vec<u8> {
+    rewrite_artifact_paths(bytes, |bytes| canonicalize_path_bytes(bytes, private_root))
+}
+
+fn canonicalize_path_bytes(bytes: &[u8], private_root: &Path) -> Vec<u8> {
     let native_root = private_root.to_string_lossy();
     let mut rewritten = replace_all(
         bytes,
@@ -51,13 +55,27 @@ pub(in crate::daemon::server) fn canonicalize_staged_output_bytes(
             STAGED_OUTPUT_REMAP_ROOT.as_bytes(),
         );
     }
-    rewritten
+    if native_root.contains('\\') {
+        replace_all(
+            &rewritten,
+            format!("{STAGED_OUTPUT_REMAP_ROOT}\\").as_bytes(),
+            format!("{STAGED_OUTPUT_REMAP_ROOT}/").as_bytes(),
+        )
+    } else {
+        rewritten
+    }
 }
 
 pub(in crate::daemon::server) fn rehydrate_staged_output_bytes(
     bytes: &[u8],
     requested_outputs: &[NormalizedPath],
 ) -> Vec<u8> {
+    rewrite_artifact_paths(bytes, |bytes| {
+        rehydrate_path_bytes(bytes, requested_outputs)
+    })
+}
+
+fn rehydrate_path_bytes(bytes: &[u8], requested_outputs: &[NormalizedPath]) -> Vec<u8> {
     let mut rewritten = bytes.to_vec();
     let mut requested_outputs = requested_outputs.iter().collect::<Vec<_>>();
     // Exact canonical output names can overlap (`foo` and `foo.d`). Replace
@@ -94,6 +112,42 @@ pub(in crate::daemon::server) fn rehydrate_staged_output_bytes(
         STAGED_OUTPUT_REMAP_ROOT_WINDOWS.as_bytes(),
         requested_parent.as_bytes(),
     )
+}
+
+/// JSON artifact paths are decoded before substitution and encoded afterwards.
+/// Raw substitution would miss Windows escapes or insert invalid JSON when a
+/// requested path contains quotes/backslashes. Non-artifact bytes stay raw.
+fn rewrite_artifact_paths(bytes: &[u8], rewrite: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+    if !bytes
+        .windows(b"\"artifact\"".len())
+        .any(|bytes| bytes == b"\"artifact\"")
+    {
+        return rewrite(bytes);
+    }
+    let mut output = Vec::with_capacity(bytes.len());
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let object = line
+            .windows(b"\"artifact\"".len())
+            .any(|bytes| bytes == b"\"artifact\"")
+            .then(|| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .flatten();
+        if let Some(mut object) = object {
+            if let Some(path) = object.get_mut("artifact") {
+                if let Some(decoded) = path.as_str() {
+                    *path = serde_json::Value::String(
+                        String::from_utf8_lossy(&rewrite(decoded.as_bytes())).into_owned(),
+                    );
+                    output.extend_from_slice(object.to_string().as_bytes());
+                    if line.last() == Some(&b'\n') {
+                        output.push(b'\n');
+                    }
+                    continue;
+                }
+            }
+        }
+        output.extend(rewrite(line));
+    }
+    output
 }
 
 pub(in crate::daemon::server) fn rehydrate_logical_depfile_bytes(
@@ -412,6 +466,10 @@ fn replace_all(bytes: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 #[path = "staged_paths_perf_tests.rs"]
 mod perf_tests;
+
+#[cfg(test)]
+#[path = "staged_paths_json_tests.rs"]
+mod json_tests;
 
 #[cfg(test)]
 mod tests {

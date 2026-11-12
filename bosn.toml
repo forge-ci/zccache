@@ -106,7 +106,7 @@ cmd = "bash ci/docker/gate/run_gate_tests.sh"
 
 [task.rustc-metadata-stream-test]
 stack = "gate"
-cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core --features test-support -E 'test(rustc_stream_tests)' --test-threads 2 --status-level fail --final-status-level fail --failure-output immediate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core --features test-support -E 'test(rustc_stream_tests) | test(staged_paths::json_tests) | test(compile_output::)' --test-threads 2 --no-fail-fast --status-level fail --final-status-level fail --failure-output immediate"
 
 # #1954: full store contracts plus daemon crash/WAL/orphan and CLI readers.
 [task.incremental-persistence-test]

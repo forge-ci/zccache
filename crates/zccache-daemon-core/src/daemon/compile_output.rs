@@ -12,6 +12,9 @@ use kernal_api::async_engine::{Receiver, Sender};
 const DEFAULT_CAPTURE_LIMIT: usize = 1024 * 1024;
 const CAPTURE_LIMIT_ENV: &str = "ZCCACHE_STREAM_CAPTURE_LIMIT_BYTES";
 
+#[path = "compile_output_rustc.rs"]
+mod rustc_capture;
+
 #[derive(Debug)]
 pub(crate) enum OutputChunk {
     Stdout(Vec<u8>),
@@ -143,13 +146,30 @@ impl DependencyParser {
 }
 
 pub(crate) async fn consume(
-    mut receiver: Receiver<RawOutputChunk>,
+    receiver: Receiver<RawOutputChunk>,
     context: OutputContext,
     output_filter: OutputFilter<'_>,
 ) -> io::Result<CapturedOutput> {
+    consume_inner(receiver, context, output_filter, false).await
+}
+
+pub(crate) async fn consume_rustc(
+    receiver: Receiver<RawOutputChunk>,
+    context: OutputContext,
+    output_filter: OutputFilter<'_>,
+) -> io::Result<CapturedOutput> {
+    consume_inner(receiver, context, output_filter, true).await
+}
+
+async fn consume_inner(
+    mut receiver: Receiver<RawOutputChunk>,
+    context: OutputContext,
+    output_filter: OutputFilter<'_>,
+    rustc: bool,
+) -> io::Result<CapturedOutput> {
     context.mark_live();
-    let mut stdout = BoundedCapture::new(context.capture_limit, "stdout");
-    let mut stderr = BoundedCapture::new(context.capture_limit, "stderr");
+    let mut stdout = rustc_capture::StreamCapture::new(context.capture_limit, "stdout", false);
+    let mut stderr = rustc_capture::StreamCapture::new(context.capture_limit, "stderr", rustc);
     let parser_reads_stdout = output_filter.reads_stdout();
     let strips_scanned_lines = output_filter.strips_scanned_lines();
     let mut dependency_parser = match output_filter {
@@ -215,7 +235,7 @@ pub(crate) async fn consume(
                 } else {
                     bytes
                 };
-                if let Some(bytes) = stdout.push(&bytes) {
+                for bytes in stdout.push(&bytes)? {
                     send(&context.sender, OutputChunk::Stdout(bytes)).await?;
                 }
             }
@@ -230,7 +250,7 @@ pub(crate) async fn consume(
                         bytes,
                     )
                 };
-                if let Some(bytes) = stderr.push(&bytes) {
+                for bytes in stderr.push(&bytes)? {
                     send(&context.sender, OutputChunk::Stderr(bytes)).await?;
                 }
             }
@@ -249,7 +269,7 @@ pub(crate) async fn consume(
             } else {
                 &mut stderr
             };
-            if let Some(bytes) = capture.push(&residue) {
+            for bytes in capture.push(&residue)? {
                 let chunk = if parser_reads_stdout {
                     OutputChunk::Stdout(bytes)
                 } else {
@@ -263,10 +283,10 @@ pub(crate) async fn consume(
         None
     };
 
-    if let Some(bytes) = stdout.finish() {
+    for bytes in stdout.finish() {
         send(&context.sender, OutputChunk::Stdout(bytes)).await?;
     }
-    if let Some(bytes) = stderr.finish() {
+    for bytes in stderr.finish() {
         send(&context.sender, OutputChunk::Stderr(bytes)).await?;
     }
 
@@ -302,6 +322,9 @@ struct BoundedCapture {
     tail: VecDeque<u8>,
     total: usize,
     stream: &'static str,
+    retained_diagnostics: usize,
+    tail_capacity: usize,
+    control_bytes: usize,
 }
 
 impl BoundedCapture {
@@ -314,6 +337,9 @@ impl BoundedCapture {
             tail: VecDeque::new(),
             total: 0,
             stream,
+            retained_diagnostics: 0,
+            tail_capacity: limit - head_limit,
+            control_bytes: 0,
         }
     }
 
@@ -326,12 +352,13 @@ impl BoundedCapture {
         let immediate_len = head_remaining.min(bytes.len());
         let immediate = if immediate_len > 0 {
             self.bytes.extend_from_slice(&bytes[..immediate_len]);
+            self.retained_diagnostics += immediate_len;
             Some(bytes[..immediate_len].to_vec())
         } else {
             None
         };
 
-        let tail_capacity = self.limit - self.head_limit;
+        let tail_capacity = self.tail_capacity;
         if tail_capacity > 0 {
             self.tail.extend(&bytes[immediate_len..]);
             let excess = self.tail.len().saturating_sub(tail_capacity);
@@ -344,12 +371,7 @@ impl BoundedCapture {
         if self.tail.is_empty() {
             return None;
         }
-        let marker = (self.total > self.limit).then(|| {
-            format!(
-                "\n[zccache: {} truncated to {} bytes; set {} to change the limit]\n",
-                self.stream, self.limit, CAPTURE_LIMIT_ENV
-            )
-        });
+        let marker = (self.total > self.limit).then(|| self.truncation_marker());
         let mut emitted = Vec::with_capacity(
             self.tail.len() + marker.as_ref().map_or(0, std::string::String::len),
         );
@@ -363,6 +385,13 @@ impl BoundedCapture {
 
     fn into_bytes(self) -> Vec<u8> {
         self.bytes
+    }
+
+    fn truncation_marker(&self) -> String {
+        format!(
+            "\n[zccache: {} truncated to {} bytes; set {} to change the limit]\n",
+            self.stream, self.limit, CAPTURE_LIMIT_ENV
+        )
     }
 }
 

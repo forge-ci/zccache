@@ -52,7 +52,10 @@ fn write_source(temp: &TempDir) {
     let source = (0..1500)
         .map(|i| format!("#[no_mangle] pub fn f{i}(mut x: u64) -> u64 {{ for _ in 0..100 {{ x = x.wrapping_mul({}).rotate_left(3); }} x }}\n", i * 2 + 1))
         .collect::<String>();
-    std::fs::write(temp.path().join("streamcrate.rs"), source).unwrap();
+    let warnings = (0..700)
+        .map(|i| format!("fn unused{i}() {{}}\n"))
+        .collect::<String>();
+    std::fs::write(temp.path().join("streamcrate.rs"), warnings + &source).unwrap();
     std::fs::create_dir(temp.path().join("out")).unwrap();
 }
 
@@ -65,6 +68,18 @@ fn metadata_line(bytes: &[u8]) -> Option<std::path::PathBuf> {
                 .as_str()
                 .map(std::path::PathBuf::from)
         })?
+    })
+}
+
+fn contains_staged_library(root: &std::path::Path, depth: usize) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    std::fs::read_dir(root).unwrap().any(|entry| {
+        let entry = entry.unwrap();
+        let kind = entry.file_type().unwrap();
+        (kind.is_file() && entry.file_name() == "libstreamcrate.rlib")
+            || (kind.is_dir() && contains_staged_library(&entry.path(), depth - 1))
     })
 }
 
@@ -96,6 +111,10 @@ async fn perf_rustc_metadata_precedes_exit_and_hit_replays_identically() {
                             "metadata must precede final link delivery"
                         );
                         delivered = Some(Instant::now());
+                        assert!(
+                            !contains_staged_library(&temp.path().join("cache"), 8),
+                            "metadata must precede rustc creating its private linked artifact"
+                        );
                     }
                 }
             }

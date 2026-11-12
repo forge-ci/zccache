@@ -113,6 +113,11 @@ Steps 1–9: identical to cache hit path.
 Embedded streaming misses retain the compiler's original output for cache
 storage and relay a separately rehydrated stream to the host. The relay joins
 split lines before interpreting rustc's `emit: metadata` artifact notification.
+Metadata checkpoints bypass delayed diagnostic tails. Diagnostics retain their
+configured byte budget, with a separate 64 KiB allowance for metadata and
+checkpoint markers; live output and stored replay remain identical. Artifact
+JSON paths are decoded and re-encoded when rewritten so native escaping remains
+valid.
 It delivers the matching planned `.rmeta` from private staging to the requested
 path through the existing independent, atomic materializer and its mtime policy,
 then forwards the notification with the requested path. An unplanned metadata
