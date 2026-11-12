@@ -47,6 +47,7 @@ failed cache-root audit retain its diagnostic JSONL evidence.
 - **Strict PCH serving, `ZCCACHE_PCH_MTIME_REPLAY`** → [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952)
 - **soldr target artifact contract** → [rust-artifact-plan.md](architecture/rust-artifact-plan.md)
 - **Embedded soldr/fbuild service integration** → [embedded-service.md](architecture/embedded-service.md)
+- **Rust metadata pipelining** → [data-flow.md](architecture/data-flow.md#rust-metadata-pipelining-1983)
 - **Shared embedded host-work admission** → [embedded-service.md § Shared host-work admission](architecture/embedded-service.md#shared-host-work-admission)
 - **Compiler-store transport snapshots** → [artifact-store.md](architecture/artifact-store.md#compiler-store-transport-snapshots-ciyml362)
 - **Embedded heap snapshots** → [embedded-service.md § Heap snapshots](architecture/embedded-service.md#heap-snapshots)
