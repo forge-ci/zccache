@@ -34,6 +34,7 @@ mod env;
 mod journal_thread;
 mod log_io;
 mod outcome;
+mod passthrough;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +42,7 @@ mod tests;
 pub use derive::{derive_crate_name, derive_crate_type, derive_output_ext};
 pub use env::{sanitize_journal_env, SanitizedJournalEnv};
 pub use outcome::{extract_outcome, termination_signal};
+pub use passthrough::{capture_passthrough_reason, record_passthrough_reason};
 
 use journal_thread::{journal_thread, JournalMessage};
 
@@ -234,7 +236,7 @@ fn daemon_generation() -> &'static str {
 pub struct JournalEntry {
     /// ISO 8601 UTC timestamp.
     pub ts: String,
-    /// Outcome: "hit", "miss", "error", "cached_error", "link_hit", "link_miss".
+    /// Outcome: "hit", "miss", "passthrough", "error", "cached_error", "link_hit", "link_miss".
     pub outcome: &'static str,
     /// Full path to compiler/tool.
     pub compiler: String,
@@ -303,6 +305,9 @@ pub struct JournalEntry {
     /// derive(Deserialize) round-trip used in analyzer tooling works.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub miss_reason: Option<String>,
+    /// Existing parser/admission refusal, only on successful passthroughs (#1865).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passthrough_reason: Option<String>,
     /// Evidence bucket — only the dimension that flipped is populated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub miss_diff: Option<MissDiff>,
@@ -400,6 +405,7 @@ impl JournalEntry {
             crate_type: None,
             output_ext: None,
             miss_reason: miss_reason.map(str::to_string),
+            passthrough_reason: None,
             miss_diff: None,
             self_profile_ns: None,
         }

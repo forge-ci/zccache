@@ -6,6 +6,7 @@
 //! is the same #640/#784 invariant the daemon binary uses; see `loaders`.
 
 use super::*;
+use crate::daemon::compile_journal::capture_passthrough_reason;
 
 /// zccache#940 — monotonic per-process compile counter for the inner
 /// diagnostic trace. Resets across process restarts by design (the
@@ -296,10 +297,13 @@ impl EmbeddedDaemon {
         // cache_store) attribute their sub-phase records to this compile_id.
         // No-op unless ZCCACHE_INNER_TRACE is set; the IPC wrapper path does
         // not open a scope, so only embedded compiles emit sub-phase records.
-        let ((mut response, attributed_miss_reason, context_key, child_memory), recorded_admission) =
-            super::test_harness_admission::scope(
-                request.test_harness_admission,
-                Box::pin(capture_miss_reason(Box::pin(super::inner_trace::scope(
+        let (
+            ((mut response, passthrough_reason), attributed_miss_reason, context_key, child_memory),
+            recorded_admission,
+        ) = super::test_harness_admission::scope(
+            request.test_harness_admission,
+            Box::pin(capture_miss_reason(Box::pin(capture_passthrough_reason(
+                super::inner_trace::scope(
                     compile_id.clone(),
                     handle_compile_ephemeral(
                         &self.state,
@@ -311,9 +315,10 @@ impl EmbeddedDaemon {
                         request.env,
                         request.stdin,
                     ),
-                )))),
-            )
-            .await;
+                ),
+            )))),
+        )
+        .await;
         let admission = recorded_admission.decision_or_default(attributed_miss_reason);
         crate::compile_trace::record(
             "embedded_daemon_compile",
@@ -343,6 +348,7 @@ impl EmbeddedDaemon {
                 );
             }
             let entry = JournalEntry::new(journal_ctx, outcome, exit_code, latency_ns, miss_reason)
+                .with_passthrough_reason(passthrough_reason)
                 .with_context_key(context_key)
                 .with_termination_signal(termination_signal)
                 .with_child_memory(child_memory);

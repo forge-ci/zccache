@@ -328,7 +328,9 @@ async fn deleted_non_cacheable_response_file_keeps_parse_time_reason() {
         })
         .await
         .expect("compile journal row");
-        assert_eq!(row["miss_reason"], miss_reason::UNCACHEABLE_INPUT);
+        assert_eq!(row["outcome"], "passthrough");
+        assert_eq!(row["passthrough_reason"], "test harness link product not cacheable");
+        assert!(row.get("miss_reason").is_none());
 
         shutdown.notify_one();
         server_task.await.unwrap();

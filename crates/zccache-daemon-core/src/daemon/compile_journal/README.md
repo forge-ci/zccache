@@ -31,4 +31,6 @@ unchanged.
 - **journal_thread.rs** — Background writer thread (`journal_thread`),
   `JournalMessage` enum, rotation (`rotate_journal`,
   `JOURNAL_MAX_SIZE`/`JOURNAL_MAX_FILES`), and GC (`gc_journal_files`).
+- **passthrough.rs** — Request-scoped refusal reasons and successful
+  passthrough classification (#1865), shared by IPC and embedded journaling.
 - **tests/** — All `#[cfg(test)]` tests, grouped per subject.

@@ -60,6 +60,7 @@ pub(in crate::daemon::server) struct PendingJournalContext {
     attributed_miss_reason: Option<&'static str>,
     context_key: Option<String>,
     child_memory: crate::daemon::compile_journal::ChildMemory,
+    passthrough_reason: Option<String>,
 }
 
 impl PendingJournalContext {
@@ -68,12 +69,14 @@ impl PendingJournalContext {
         attributed_miss_reason: Option<&'static str>,
         context_key: Option<String>,
         child_memory: crate::daemon::compile_journal::ChildMemory,
+        passthrough_reason: Option<String>,
     ) -> Self {
         Self {
             context,
             attributed_miss_reason,
             context_key,
             child_memory,
+            passthrough_reason,
         }
     }
 }
@@ -447,6 +450,7 @@ pub(super) async fn handle_connection(
                 attributed_miss_reason,
                 context_key,
                 child_memory,
+                passthrough_reason,
             } = pending;
             let termination_signal = crate::daemon::compile_journal::termination_signal(&response);
             let (outcome, exit_code, miss_reason) = extract_outcome(&response)?;
@@ -473,6 +477,7 @@ pub(super) async fn handle_connection(
                 exit_code,
                 latency_ns,
                 miss_reason,
+                passthrough_reason,
                 session_journal_path,
                 profile_on,
                 context_key,
@@ -480,7 +485,7 @@ pub(super) async fn handle_connection(
                 child_memory,
             ))
         });
-        if let Some((ctx, _, _, latency_ns, reason, _, _, _, _, _)) = journal_payload.as_ref() {
+        if let Some((ctx, _, _, latency_ns, reason, _, _, _, _, _, _)) = journal_payload.as_ref() {
             if *reason == Some(miss_reason::UNKNOWN) {
                 append_unknown_miss_warning(&mut response, ctx, *latency_ns);
             }
@@ -497,6 +502,7 @@ pub(super) async fn handle_connection(
             exit_code,
             latency_ns,
             miss_reason,
+            passthrough_reason,
             session_journal_path,
             profile_on,
             context_key,
@@ -505,6 +511,7 @@ pub(super) async fn handle_connection(
         )) = journal_payload
         {
             let entry = JournalEntry::new(ctx, outcome, exit_code, latency_ns, miss_reason)
+                .with_passthrough_reason(passthrough_reason)
                 .with_context_key(context_key)
                 .with_termination_signal(termination_signal)
                 .with_child_memory(child_memory);
@@ -523,7 +530,8 @@ pub(super) async fn handle_connection(
             // (acceptance #1). A v2 follow-up can swap this for the
             // genuine per-site spans.
             let entry = if profile_on {
-                entry.with_profile_fields(derive_approx_spans(outcome, latency_ns))
+                let spans = derive_approx_spans(entry.outcome, latency_ns);
+                entry.with_profile_fields(spans)
             } else {
                 entry
             };

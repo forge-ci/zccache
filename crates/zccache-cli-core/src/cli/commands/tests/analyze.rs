@@ -9,6 +9,20 @@ use super::super::analyze::{
 };
 use super::super::session::session_stats_json;
 
+#[test]
+fn analyze_passthrough_excludes_deliberate_skips_from_hit_rate() {
+    let mut report = AnalyzeReport::default();
+    for outcome in ["hit", "miss", "passthrough", "passthrough"] {
+        report.ingest(&make_journal_line(outcome, "rustc", "harness", "bin", 10));
+    }
+    assert_eq!(report.hit_count, 1);
+    assert_eq!(report.miss_count, 1);
+    assert_eq!(report.hit_rate(), Some(0.5));
+    assert_eq!(report.by_crate["harness"].misses, 1);
+    assert_eq!(report.by_extension["bin"].misses, 1);
+    assert_eq!(report.top_miss_crates(5)[0].misses, 1);
+}
+
 fn make_journal_line(
     outcome: &str,
     compiler: &str,

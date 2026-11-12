@@ -2,6 +2,7 @@
 //! `handle_connection` (`connection.rs` before the #1154 phase-0 split).
 
 use super::*;
+use crate::daemon::compile_journal::capture_passthrough_reason;
 
 /// Dispatch a single decoded [`Request`].
 ///
@@ -229,16 +230,18 @@ pub(super) async fn dispatch_request(
                     env.clone(),
                     None,
                 );
-                let (resp, attributed_miss_reason, context_key, child_memory) =
-                    capture_miss_reason(Box::pin(handle_compile_ephemeral(
-                        state,
-                        client_pid,
-                        &working_dir,
-                        &compiler,
-                        &ctx.args,
-                        &cwd,
-                        env,
-                        stdin,
+                let ((resp, passthrough_reason), attributed_miss_reason, context_key, child_memory) =
+                    capture_miss_reason(Box::pin(capture_passthrough_reason(
+                        handle_compile_ephemeral(
+                            state,
+                            client_pid,
+                            &working_dir,
+                            &compiler,
+                            &ctx.args,
+                            &cwd,
+                            env,
+                            stdin,
+                        ),
                     )))
                     .await;
                 (
@@ -248,6 +251,7 @@ pub(super) async fn dispatch_request(
                         attributed_miss_reason,
                         context_key,
                         child_memory,
+                        passthrough_reason,
                     )),
                 )
             };
@@ -375,6 +379,7 @@ pub(super) async fn dispatch_request(
                         None,
                         None,
                         crate::daemon::compile_journal::ChildMemory::default(),
+                        None,
                     )),
                 )
             };
@@ -571,8 +576,8 @@ async fn compile_response_for_session(
         clippy::expect_used,
         reason = "ctx.session_id is set to Some(session_id) immediately above (line 704); the Option wrap is purely for the JournalContext return field"
     )]
-    let (resp, attributed_miss_reason, context_key, child_memory) =
-        capture_miss_reason(Box::pin(handle_compile(
+    let ((resp, passthrough_reason), attributed_miss_reason, context_key, child_memory) =
+        capture_miss_reason(Box::pin(capture_passthrough_reason(handle_compile(
             state,
             ctx.session_id
                 .as_deref()
@@ -582,7 +587,7 @@ async fn compile_response_for_session(
             &compiler,
             env,
             stdin,
-        )))
+        ))))
         .await;
     (
         resp,
@@ -591,6 +596,7 @@ async fn compile_response_for_session(
             attributed_miss_reason,
             context_key,
             child_memory,
+            passthrough_reason,
         )),
     )
 }
