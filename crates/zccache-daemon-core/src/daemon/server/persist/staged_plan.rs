@@ -161,6 +161,8 @@ pub(in crate::daemon::server) struct StagedCompilePlan {
     pub(in crate::daemon::server) outputs: Vec<StagedOutputPlan>,
     pub(in crate::daemon::server) rewritten_args: Vec<String>,
     pub(super) root: NormalizedPath,
+    /// Requested metadata already delivered to a live pipelined reader.
+    pub(in crate::daemon::server) materialized_metadata: Vec<NormalizedPath>,
 }
 
 impl StagedCompilePlan {
@@ -173,6 +175,7 @@ impl StagedCompilePlan {
             outputs,
             rewritten_args: Vec::new(),
             root: root.into(),
+            materialized_metadata: Vec::new(),
         }
     }
 
@@ -362,6 +365,7 @@ impl StagedCompilePlan {
                 outputs,
                 rewritten_args,
                 root: root.clone(),
+                materialized_metadata: Vec::new(),
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
@@ -532,6 +536,7 @@ impl StagedCompilePlan {
                 outputs,
                 rewritten_args,
                 root: root.clone(),
+                materialized_metadata: Vec::new(),
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
@@ -603,6 +608,7 @@ impl StagedCompilePlan {
                 }],
                 rewritten_args,
                 root: root.clone(),
+                materialized_metadata: Vec::new(),
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {
@@ -709,6 +715,7 @@ impl StagedCompilePlan {
                 outputs,
                 rewritten_args,
                 root: root.clone(),
+                materialized_metadata: Vec::new(),
             }))
         })();
         if !matches!(result, Ok(StagedPlanOutcome::Enabled(_))) {

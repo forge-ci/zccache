@@ -29,6 +29,12 @@ impl StagedCompilePlan {
             .map(|output| output.requested.clone())
             .collect::<Vec<_>>();
         for (fault_index, output) in self.outputs.iter().enumerate() {
+            // rustc's metadata notification is its immutability boundary. Keep
+            // the inode and mtime already handed to a pipelined dependent;
+            // durable publication still reads this output's staged source.
+            if self.materialized_metadata.contains(&output.requested) {
+                continue;
+            }
             #[cfg(not(test))]
             let _ = fault_index;
             #[cfg(test)]

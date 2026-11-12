@@ -108,6 +108,29 @@ Steps 1–9: identical to cache hit path.
     compiler wrote them). CLI writes stdout/stderr, exits with exit code.
 ```
 
+### Rust metadata pipelining (#1983)
+
+Embedded streaming misses retain the compiler's original output for cache
+storage and relay a separately rehydrated stream to the host. The relay joins
+split lines before interpreting rustc's `emit: metadata` artifact notification.
+Metadata checkpoints bypass delayed diagnostic tails. Diagnostics retain their
+configured byte budget, with a separate 64 KiB allowance for metadata and
+checkpoint markers; live output and stored replay remain identical. Artifact
+JSON paths are decoded and re-encoded when rewritten so native escaping remains
+valid.
+It delivers the matching planned `.rmeta` from private staging to the requested
+path through the existing independent, atomic materializer and its mtime policy,
+then forwards the notification with the requested path. An unplanned metadata
+artifact or a delivery failure fails the compile response before advertising
+unusable metadata.
+
+The compiler continues code generation while dependents read that metadata.
+Final delivery skips metadata already delivered by the relay, preserving its
+file identity and mtime; the durable publisher still consumes the original
+staged source. Failed compiles never publish a successful cache entry. Hits
+retain their existing post-materialization replay. Host API selection is
+documented in the [embedded contract](embedded-service.md#embedded-contract).
+
 ## Non-Cacheable Invocation Passthrough
 
 ```

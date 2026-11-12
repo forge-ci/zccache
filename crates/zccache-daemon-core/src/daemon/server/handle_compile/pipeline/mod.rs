@@ -17,6 +17,7 @@
 mod compile_exec;
 mod hash_verify;
 mod request_prep;
+mod rustc_stream;
 mod store_outcome;
 mod system_includes;
 mod time_macros;

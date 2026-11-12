@@ -126,6 +126,16 @@ A host daemon that embeds zccache accepts these constraints:
 The host may own the Tokio runtime. zccache owns the service tasks it spawns
 inside that runtime and exposes explicit handles for flush, stats, and shutdown.
 
+For cargo pipelining, hosts must call `compile_streaming` or
+`compile_streaming_with_options` and forward the chunks as they arrive (#1983).
+The buffered `compile` and `compile_with_options` APIs keep their signatures
+and return output after completion; soldr#3800 must switch its Rust request
+handler to the streaming API and avoid replaying the same bytes on `Done`.
+On a staged Rust miss, the metadata artifact notification names a complete,
+readable `.rmeta` at its requested path before it reaches the host callback.
+No extra IPC exchange or protocol change is needed. See
+[Rust metadata pipelining](data-flow.md#rust-metadata-pipelining-1983).
+
 ## Ownership Boundaries
 
 | Area | Host Owns | zccache Owns |
