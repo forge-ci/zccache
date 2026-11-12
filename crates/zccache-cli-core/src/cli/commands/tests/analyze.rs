@@ -23,6 +23,37 @@ fn analyze_passthrough_excludes_deliberate_skips_from_hit_rate() {
     assert_eq!(report.top_miss_crates(5)[0].misses, 1);
 }
 
+#[test]
+fn analyze_passthrough_journal_files_keep_skips_without_counting_misses() {
+    let skip = make_journal_line("passthrough", "rustc", "harness", "bin", 10);
+    let (_temp, path) = write_fixture_journal(std::slice::from_ref(&skip));
+    let report = analyze_journal(path.to_str().unwrap()).expect("all-passthrough journal");
+    assert_eq!(report.parsed_count, 1);
+    assert_eq!(report.total_latency_ns, 10);
+    assert_eq!(report.by_tool_calls["rustc"], 1);
+    assert_eq!(report.miss_count, 0);
+    assert_eq!(report.hit_rate(), None);
+
+    let hit = make_journal_line("hit", "rustc", "library", "lib", 20);
+    let miss = make_journal_line("miss", "rustc", "library", "lib", 30);
+    let (_temp, path) = write_fixture_journal(&[skip, hit, miss]);
+    let report =
+        analyze_journal_with(path.to_str().unwrap(), &default_opts()).expect("mixed journal");
+    assert_eq!(report.parsed_count, 3);
+    assert_eq!(report.total_latency_ns, 60);
+    assert_eq!(report.by_tool_calls["rustc"], 3);
+    assert_eq!(report.miss_count, 1);
+    assert_eq!(report.hit_rate(), Some(0.5));
+    for outcome in ["passthrough", "non-cacheable"] {
+        let mut opts = default_opts();
+        opts.outcome = Some(outcome.into());
+        let report =
+            analyze_journal_with(path.to_str().unwrap(), &opts).expect("passthrough filter");
+        assert_eq!(report.parsed_count, 1);
+        assert_eq!(report.miss_count, 0);
+    }
+}
+
 fn make_journal_line(
     outcome: &str,
     compiler: &str,
