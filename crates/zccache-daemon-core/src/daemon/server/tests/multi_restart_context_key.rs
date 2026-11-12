@@ -245,7 +245,7 @@ pub(super) fn spawn_index_writer(server: &mut DaemonServer) -> kernal_api::async
 }
 
 /// Graceful-shutdown equivalent for this harness: run the EXACT production
-/// durability drain (`wal::drain_durable_state_for_shutdown`, the same
+/// durability drain (`shutdown_drain::drain_durable_state_for_shutdown`, the same
 /// function `DaemonServer::run`'s Shutdown arm calls — pending persist
 /// tasks → publication write barrier → index-writer WAL flush ack → writer
 /// stop → final store flush), then snapshot the depgraph while the returned
@@ -263,7 +263,9 @@ pub(super) async fn quiesce_and_persist(
     depgraph_path: &Path,
 ) {
     let _publication_guard =
-        drain_durable_state_for_shutdown(&server.state, Some(index_writer_handle)).await;
+        drain_durable_state_for_shutdown(&server.state, Some(index_writer_handle))
+            .await
+            .expect("shutdown publication barrier");
     save_dep_graph_to_disk(server, depgraph_path);
     // Last step of `run()`'s Shutdown arm. The next session cannot wait for
     // `drop(server)` instead: detached work such as the post-compile watch

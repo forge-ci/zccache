@@ -10,7 +10,7 @@ pub(super) enum IndexWriterCommand {
     Touch(String, u64),
     Remove(Vec<String>),
     ClearBlocking(IndexClearReceiver),
-    Flush(kernal_api::async_engine::OneshotSender<()>),
+    Flush(kernal_api::async_engine::OneshotSender<bool>),
     /// Blocking startup reconciliation needs proof that queued rows are committed.
     FlushForReconciliation(std::sync::mpsc::SyncSender<bool>),
 }
@@ -34,229 +34,6 @@ pub(super) fn wal_max_pending() -> usize {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2048)
         .max(1)
-}
-
-/// Shutdown budget for the deterministic index-writer WAL drain (#1161).
-/// Matches the embedded engine's 30 s flush bound (`embedded.rs`); a full
-/// WAL flush snapshots the whole in-memory index to disk, which can take
-/// seconds under I/O contention on a small (2-core CI) host.
-const INDEX_WRITER_SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Shutdown budget for joining the index-writer task after a successful
-/// drain. The drain ack proves the WAL is already empty and flushed, so the
-/// join is normally instantaneous; the bound only guards a wedged task.
-const INDEX_WRITER_SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Shutdown budget for the deferred-persist drain (`pending_cache_writes`).
-/// Matches the pre-existing bound in `run.rs`'s Shutdown arm (#799).
-const PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(30);
-
-/// Shutdown-time durability drain (#1161).
-///
-/// Everything a graceful shutdown must quiesce BEFORE snapshotting the
-/// depgraph, in dependency order:
-///
-/// 1. `pending_cache_writes` — deferred rustc/C++ persist tasks publish
-///    their durable `ArtifactIndex` rows only after the cache files land on
-///    disk (#799). They register before the compile response and complete
-///    after their `IndexWriterCommand::Insert` send, so awaiting them
-///    guarantees every backgrounded persist has finished its disk write and
-///    queued its index row.
-/// 2. The publication write guard — every detached publisher holds a read
-///    guard until it finishes, so acquiring the write guard proves no new
-///    index row can arrive after this point.
-/// 3. The index-writer WAL flush ack — `IndexWriterCommand::Flush` is
-///    FIFO-ordered behind every queued Insert, so its acknowledgement proves
-///    every durable-index row has been applied to the in-memory store AND
-///    snapshotted to disk. Mirrors the embedded engine's flush-then-stop
-///    sequence (`embedded.rs`).
-/// 4. Stop the writer task (bounded join; the WAL is already empty).
-/// 5. Final `ArtifactStore` flush — covers call sites that insert directly
-///    into the store without going through the WAL.
-///
-/// Returns the held publication write guard so the caller can keep
-/// publishers blocked through its own depgraph/metadata snapshotting.
-///
-/// Called from `DaemonServer::run`'s Shutdown arm AND from restart-shaped
-/// tests that drive the compile pipeline without `run()`
-/// (`tests/multi_restart_context_key.rs`) — the tests exercise this exact
-/// production drain rather than a parallel approximation.
-///
-/// Loud-forensics rule: every budget breach emits BOTH a `tracing::warn!`
-/// AND a durable lifecycle event.
-pub(super) async fn drain_durable_state_for_shutdown(
-    state: &SharedState,
-    index_writer_handle: Option<kernal_api::async_engine::Task<()>>,
-) -> crate::core::sync::PublicationDrainPermit {
-    // 1. Deferred persist tasks (#799).
-    //
-    // zccache#1775: this drain is invisible unless it times out, so a long
-    // wait behind a large miss backlog (observed: `stop` hit its 10 s cap
-    // after a ~1 GB build) has no timing signal short of the timeout warning
-    // below. Log the elapsed time unconditionally so a slow-but-successful
-    // drain is diagnosable from the daemon log alone.
-    drain_pending_writes(state, PENDING_WRITES_SHUTDOWN_DRAIN_TIMEOUT).await;
-
-    // 2. Block all publishers for the remainder of shutdown.
-    let publication_guard = state
-        .artifact_publication
-        .drain_for(crate::core::sync::OPERATION_TIMEOUT)
-        .await;
-
-    // 3. Deterministic WAL drain. The standalone daemon previously went
-    // straight to notify + 2 s join + silent `abort()`, which on a slow
-    // 2-core host could abort the writer mid-drain and lose queued rows —
-    // the warm daemon after restart then misses the artifacts the cold
-    // daemon had already persisted (observed as the Integration
-    // `legacy_path_validation` warm-multi miss).
-    let drain_start = std::time::Instant::now();
-    let index_writer_drained =
-        flush_index_writer(&state.index_writer_tx, INDEX_WRITER_SHUTDOWN_DRAIN_TIMEOUT).await;
-    if !index_writer_drained {
-        tracing::warn!(
-            event = crate::core::lifecycle::EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT,
-            step = "index_writer_drain",
-            timeout_ms = INDEX_WRITER_SHUTDOWN_DRAIN_TIMEOUT.as_millis() as u64,
-            elapsed_ms = drain_start.elapsed().as_millis() as u64,
-            "index-writer WAL drain did not acknowledge within its \
-             shutdown budget; queued durable-index rows may be lost"
-        );
-        record_shutdown_shortfall(state, "index_writer_drain: WAL flush was not acknowledged");
-        crate::core::lifecycle::write_event_in_cache_root(
-            state.cache_dir.as_path(),
-            crate::core::lifecycle::EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT,
-            serde_json::json!({
-                "step": "index_writer_drain",
-                "timeout_ms": INDEX_WRITER_SHUTDOWN_DRAIN_TIMEOUT.as_millis() as u64,
-                "reason": "shutdown WAL drain ack timed out; durable \
-                           index rows queued behind the flush may be lost",
-            }),
-        );
-    }
-
-    // 4. Stop the writer task. `notify_one` retains a permit if the writer
-    // is between polls; `notify_waiters` could lose the signal in that
-    // window.
-    state.index_writer_shutdown.notify_one();
-    if let Some(mut handle) = index_writer_handle {
-        if kernal_api::async_engine::timeout(INDEX_WRITER_SHUTDOWN_JOIN_TIMEOUT, &mut handle)
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                event = crate::core::lifecycle::EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT,
-                step = "index_writer_join",
-                timeout_ms = INDEX_WRITER_SHUTDOWN_JOIN_TIMEOUT.as_millis() as u64,
-                "index-writer task did not exit within its shutdown \
-                 budget; aborting it"
-            );
-            crate::core::lifecycle::write_event_in_cache_root(
-                state.cache_dir.as_path(),
-                crate::core::lifecycle::EVENT_EMBEDDED_FLUSH_STEP_TIMEOUT,
-                serde_json::json!({
-                    "step": "index_writer_join",
-                    "timeout_ms": INDEX_WRITER_SHUTDOWN_JOIN_TIMEOUT.as_millis() as u64,
-                    "reason": "index-writer task join timed out after a \
-                               drain attempt; task aborted",
-                }),
-            );
-            handle.cancel();
-            let _ = handle.await;
-        }
-    }
-
-    // 5. Final store flush: the WAL drain above only persists entries that
-    // went through `index_writer_tx`. Some compile-success paths insert
-    // DIRECTLY into `artifact_store` without sending to the WAL, and
-    // `flush_wal_to_disk` early-returns on an empty WAL — so those
-    // direct-inserts never reach disk on a WAL-only-empty shutdown.
-    // Reproduced historically: a fresh medium-fixture build wrote 271 MB of
-    // CAS payloads but no index.bin, leaving the warm-side daemon (and
-    // every other `soldr load` consumer) with an empty index even though
-    // all artifacts were on disk.
-    //
-    // zccache#1775: the WAL flush in step 3 already covers every mutation
-    // that went through `index_writer_tx`, including the direct-insert case
-    // above once it lands (`store.insert` marks the store dirty; the next
-    // WAL flush or this final flush picks it up). If step 3 left the store
-    // clean, re-serializing and re-fsyncing the same snapshot here is pure
-    // waste — skip it entirely.
-    let store = Arc::clone(&state.artifact_store);
-    let entries = store.len();
-    if store.take_dirty() {
-        let flush_start = std::time::Instant::now();
-        match store.flush_async().await {
-            Ok(()) => tracing::info!(
-                entries,
-                elapsed_ms = flush_start.elapsed().as_millis() as u64,
-                "artifact store final flush complete"
-            ),
-            Err(e) => {
-                tracing::warn!(entries, "artifact store final flush failed: {e}");
-                record_shutdown_shortfall(state, &format!("artifact store flush failed: {e}"));
-            }
-        }
-    } else {
-        tracing::debug!(
-            entries,
-            "artifact store final flush skipped: no changes since last flush"
-        );
-    }
-
-    publication_guard
-}
-
-/// Remove a record left by an earlier daemon on this cache root.
-pub(super) fn clear_shutdown_shortfall(state: &SharedState) {
-    let path = crate::core::config::shutdown_shortfall_path_from_cache_dir(&state.cache_dir);
-    let _ = std::fs::remove_file(path.as_path());
-}
-
-/// Append what this shutdown failed to persist (#1984). The Shutdown response
-/// has already been sent, so this file is how `zccache stop` learns of it
-/// without another IPC exchange.
-pub(super) fn record_shutdown_shortfall(state: &SharedState, reason: &str) {
-    use std::io::Write as _;
-    let path = crate::core::config::shutdown_shortfall_path_from_cache_dir(&state.cache_dir);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let written = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path.as_path())
-        .and_then(|mut file| writeln!(file, "{reason}"));
-    if let Err(error) = written {
-        tracing::warn!(%error, reason, "could not record shutdown shortfall");
-    }
-}
-
-/// Wait up to `timeout` for deferred persist tasks to finish.
-pub(super) async fn drain_pending_writes(state: &SharedState, timeout: std::time::Duration) {
-    let start = std::time::Instant::now();
-    let drained = pending_writes::await_all(&state.pending_cache_writes, timeout).await;
-    let elapsed_ns = start.elapsed().as_nanos() as u64;
-    if drained {
-        tracing::info!(
-            elapsed_ns,
-            "pending artifact writes drained before WAL drain"
-        );
-    } else {
-        tracing::warn!(
-            pending = state.pending_cache_writes.len(),
-            elapsed_ns,
-            "timed out waiting for pending artifact writes before WAL drain"
-        );
-        record_shutdown_shortfall(
-            state,
-            &format!(
-                "pending_writes: {} artifact writes unfinished after {}s",
-                state.pending_cache_writes.len(),
-                timeout.as_secs_f32()
-            ),
-        );
-    }
 }
 
 /// Background index-writer task.
@@ -466,16 +243,16 @@ async fn process_index_writer_command(
                 let _ = ack.try_send(result.is_ok());
             }
             for ack in flush_acks {
-                let _ = ack.send(());
+                let _ = ack.send(result.is_ok());
             }
         }
         IndexWriterCommand::Flush(ack) => {
-            flush_wal_to_disk(store, wal, root).await;
-            let _ = ack.send(());
+            let committed = flush_wal_to_disk(store, wal, root).await;
+            let _ = ack.send(committed);
         }
         IndexWriterCommand::FlushForReconciliation(ack) => {
-            flush_wal_to_disk(store, wal, root).await;
-            let _ = ack.try_send(wal.is_empty() && !store.has_pending_entries());
+            let committed = flush_wal_to_disk(store, wal, root).await;
+            let _ = ack.try_send(committed);
         }
     }
 }
@@ -509,14 +286,22 @@ pub(super) async fn flush_index_writer(
     tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
     timeout: std::time::Duration,
 ) -> bool {
+    flush_index_writer_result(tx, timeout).await.is_ok()
+}
+
+pub(super) async fn flush_index_writer_result(
+    tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
+    timeout: std::time::Duration,
+) -> Result<(), shutdown_completion::ShutdownError> {
+    use shutdown_completion::ShutdownError;
     let (ack_tx, ack_rx) = kernal_api::async_engine::oneshot_channel();
-    if tx.send(IndexWriterCommand::Flush(ack_tx)).is_err() {
-        return false;
+    tx.send(IndexWriterCommand::Flush(ack_tx))
+        .map_err(|_| ShutdownError::Persistence)?;
+    match kernal_api::async_engine::timeout(timeout, ack_rx).await {
+        Ok(Ok(true)) => Ok(()),
+        Ok(_) => Err(ShutdownError::Persistence),
+        Err(_) => Err(ShutdownError::BudgetExceeded),
     }
-    matches!(
-        kernal_api::async_engine::timeout(timeout, ack_rx).await,
-        Ok(Ok(()))
-    )
 }
 
 pub(super) struct PendingIndexClear {
@@ -652,9 +437,9 @@ pub(super) async fn flush_wal_to_disk(
     store: &Arc<ArtifactStore>,
     wal: &mut std::collections::HashMap<String, ArtifactIndex>,
     root: &Arc<CacheRootWriterLease>,
-) {
+) -> bool {
     if wal.is_empty() && !store.has_pending_entries() && !store.needs_checkpoint() {
-        return;
+        return true;
     }
     let drained: Vec<(String, ArtifactIndex)> = wal.drain().collect();
     let count = drained.len();
@@ -666,8 +451,14 @@ pub(super) async fn flush_wal_to_disk(
         .await
         .unwrap_or_else(|error| Err(io::Error::other(error)));
     match res {
-        Ok(()) => tracing::info!(committed = count, "WAL flushed to disk"),
-        Err(e) => tracing::warn!(count, "WAL flush to disk failed: {e}"),
+        Ok(()) => {
+            tracing::info!(committed = count, "WAL flushed to disk");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(count, "WAL flush to disk failed: {e}");
+            false
+        }
     }
 }
 

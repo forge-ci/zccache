@@ -519,3 +519,82 @@ async fn rustc_replacement_releases_publication_before_private_cleanup() {
     })
     .await;
 }
+
+/// #1984: failed detached Rust persistence removes its provisional row, but
+/// that removal must not erase the failure returned by the Stop exchange.
+#[tokio::test]
+async fn stop_persistence_failed_staged_rust_is_reported_after_provisional_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut server = crate::daemon::server::tests::bind_isolated_server_at(&endpoint, temp.path());
+    let state = Arc::clone(&server.state);
+    let work = tempfile::tempdir().unwrap();
+    let task = tokio::spawn(async move { server.run(0).await.unwrap() });
+    let private_root: NormalizedPath = work.path().join("private-rust-output").into();
+    std::fs::create_dir_all(&private_root).unwrap();
+    let staged: NormalizedPath = private_root.join("libworkspace.a");
+    let requested: NormalizedPath = work.path().join("libworkspace.a").into();
+    let expected = b"workspace staticlib";
+    std::fs::write(&staged, expected).unwrap();
+    let plan = StagedCompilePlan::for_test(
+        private_root,
+        vec![StagedOutputPlan {
+            requested: requested.clone(),
+            staged: staged.clone(),
+            role: StagedOutputRole::Regular,
+        }],
+    );
+    let outputs = vec![RustcOutputFile {
+        name: "libworkspace.a".to_string(),
+        path: staged.clone(),
+        size: expected.len() as u64,
+    }];
+    let key = "8".repeat(64);
+    let sid = crate::depgraph::SessionId::new();
+    let fault = StagedFaultGuard::arm(&state.artifact_dir, [StagedFaultPoint::PointerCommit]);
+    let source_path: NormalizedPath = work.path().join("lib.rs").into();
+    let mut stats = MissArtifactStoreStats::default();
+    let publication_guard = begin_artifact_publication(&state).await.unwrap();
+    let resource_gate = CompileResourceGate::default();
+    let resource_admission = resource_gate.acquire(false).await;
+
+    store_rustc_outputs(
+        &state,
+        &sid,
+        &source_path,
+        &outputs,
+        &key,
+        crate::depgraph::RustcVerdictContract {
+            dylint_input_hash: None,
+            args: &crate::depgraph::parse_rustc_args(&[], work.path()),
+        },
+        &Arc::new(Vec::new()),
+        &Arc::new(Vec::new()),
+        0,
+        Instant::now(),
+        &mut stats,
+        Instant::now(),
+        false,
+        Some(plan),
+        publication_guard,
+        resource_admission,
+        MaterializationMode::Auto,
+    );
+
+    assert!(pending_writes::await_all(&state.pending_cache_writes, crate::core::wait::PROBE).await);
+    fault.assert_all_consumed();
+    assert!(
+        !state.artifacts.contains_key(&key),
+        "failed provisional entry must be removed"
+    );
+    let mut client = crate::ipc::connect(&endpoint).await.unwrap();
+    client.send(&Request::Shutdown).await.unwrap();
+    assert_eq!(
+        client.recv::<Response>().await.unwrap(),
+        Some(shutdown_completion::ShutdownError::Persistence.response())
+    );
+    tokio::time::timeout(crate::core::wait::HELPER_JOIN, task)
+        .await
+        .unwrap()
+        .unwrap();
+}

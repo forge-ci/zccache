@@ -850,17 +850,19 @@ pub(super) async fn store_successful_compile(req: StoreOutcomeRequest<'_>) -> Op
         });
     }
 
-    {
+    if let Some(publication) = begin_artifact_publication(state_arc).await {
         let bg_state = Arc::clone(state_arc);
         let bg_output_path = output_path.clone();
-        tokio::spawn(async move {
+        kernal_api::async_engine::launch(async move {
+            let _publication = publication;
             let state = &*bg_state;
             watch_directories(state, &dep_dirs).await;
             if let Some(out_dir) = bg_output_path.parent() {
                 watch_directory(state, out_dir).await;
             }
             state.cache_system.apply_changes(vec![bg_output_path]);
-        });
+        })
+        .detach();
     }
 
     None

@@ -162,16 +162,25 @@ pub(super) async fn discover_system_includes(
             // in-memory cache is canonical and write-through is safe.
             if let Some(snapshot) = inserted_snapshot {
                 if state.system_includes_loaded.load(Ordering::Acquire) {
-                    let path = state.system_includes_cache_path.clone();
-                    kernal_api::async_engine::launch_blocking(move || {
-                        if let Err(e) = snapshot.save_to_disk(path.as_path()) {
-                            tracing::warn!(
-                                path = %path.display(),
-                                "system include cache write-through failed: {e}"
-                            );
+                    if let Some(publication) = begin_artifact_publication(state).await {
+                        if let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) {
+                            let path = state.system_includes_cache_path.clone();
+                            kernal_api::async_engine::launch_blocking(move || {
+                                let _ = &publication;
+                                let _root = root;
+                                let _publication = publication;
+                                if let Err(e) = snapshot.save_to_disk(path.as_path()) {
+                                    tracing::warn!(
+                                        path = %path.display(),
+                                        "system include cache write-through failed: {e}"
+                                    );
+                                }
+                            })
+                            .detach();
+                        } else {
+                            state.shutdown_completion.fail();
                         }
-                    })
-                    .detach();
+                    }
                 }
             }
             (resolved, empty_discovery)

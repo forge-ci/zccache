@@ -412,3 +412,35 @@ fn shutdown_shortfall_marker_is_reported_once() {
     assert_eq!(first.as_deref(), Some("pending_writes: 3 unflushed"));
     assert_eq!(super::super::daemon::take_shutdown_shortfall(&marker), None);
 }
+
+/// #1984: a typed shutdown failure on the existing exchange must exit nonzero.
+#[tokio::test]
+async fn stop_persistence_budget_error_exits_nonzero() {
+    let endpoint = crate::ipc::unique_test_endpoint();
+    let mut listener = crate::ipc::IpcListener::bind(&endpoint).unwrap();
+    let daemon = tokio::spawn(async move {
+        let mut connection = tokio::time::timeout(crate::core::wait::PROBE, listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            connection.recv::<crate::protocol::Request>().await.unwrap(),
+            Some(crate::protocol::Request::Shutdown)
+        );
+        connection
+            .send(&crate::protocol::Response::Error {
+                message: "shutdown_budget_exceeded: persistence drain exceeded its duration budget"
+                    .to_string(),
+            })
+            .await
+            .unwrap();
+    });
+    let code = tokio::time::timeout(crate::core::wait::PROBE, cmd_stop(&endpoint))
+        .await
+        .unwrap();
+    assert_eq!(code, ExitCode::FAILURE);
+    tokio::time::timeout(crate::core::wait::PROBE, daemon)
+        .await
+        .unwrap()
+        .unwrap();
+}

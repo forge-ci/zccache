@@ -151,7 +151,7 @@ async fn pending_write_drain_timeout_records_a_shutdown_shortfall() {
     let state = server.test_state_arc();
     let _notify = pending_writes::register(&state.pending_cache_writes, "stuck");
 
-    super::super::wal::drain_pending_writes(&state, Duration::from_millis(20)).await;
+    super::super::shutdown_drain::drain_pending_writes(&state, Duration::from_millis(20)).await;
 
     let marker = crate::core::config::shutdown_shortfall_path_from_cache_dir(&cache_dir);
     let recorded = std::fs::read_to_string(marker.as_path()).unwrap();

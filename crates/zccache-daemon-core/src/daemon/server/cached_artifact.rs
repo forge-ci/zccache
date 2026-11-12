@@ -130,6 +130,8 @@ pub(crate) struct CachedArtifactInner {
     /// immediately. Filesystem discovery then initializes this cell without
     /// holding a map shard lock.
     payloads: OnceLock<Arc<[CachedPayload]>>,
+    /// Publication status is independent of resident legacy pack decoding.
+    provisional: bool,
     /// Keeps private staged files alive while a detached durable publication
     /// is still consuming them. Owned hit clones retain the same plan, so a
     /// concurrent publisher cannot clean the paths during materialization.
@@ -150,14 +152,16 @@ impl std::ops::Deref for CachedArtifact {
 }
 
 impl CachedArtifact {
+    #[cfg(test)]
     fn with_payloads(meta: ArtifactIndex, payloads: Arc<[CachedPayload]>) -> Self {
-        Self::with_payloads_and_owner(meta, payloads, None)
+        Self::with_payloads_and_owner(meta, payloads, None, false)
     }
 
     fn with_payloads_and_owner(
         meta: ArtifactIndex,
         payloads: Arc<[CachedPayload]>,
         provisional_staged_owner: Option<Arc<StagedCompilePlan>>,
+        provisional: bool,
     ) -> Self {
         let stdout = Arc::clone(&meta.stdout);
         let stderr = Arc::clone(&meta.stderr);
@@ -168,6 +172,7 @@ impl CachedArtifact {
                 stdout,
                 stderr,
                 payloads: OnceLock::from(payloads),
+                provisional,
                 _provisional_staged_owner: provisional_staged_owner,
                 access: zccache_core::blocking_sync::Mutex::new(ArtifactAccess {
                     last_used: now,
@@ -202,7 +207,7 @@ impl CachedArtifact {
             artifact.exit_code,
         );
         meta.output_modes = output_modes;
-        Self::with_payloads(
+        Self::with_payloads_and_owner(
             meta,
             Arc::from(
                 artifact
@@ -214,6 +219,8 @@ impl CachedArtifact {
                     })
                     .collect::<Vec<_>>(),
             ),
+            None,
+            true,
         )
     }
 
@@ -247,6 +254,7 @@ impl CachedArtifact {
                     .collect::<Vec<_>>(),
             ),
             Some(owner),
+            true,
         )
     }
 
@@ -288,6 +296,7 @@ impl CachedArtifact {
                 stdout,
                 stderr,
                 payloads: OnceLock::new(),
+                provisional: false,
                 _provisional_staged_owner: None,
                 access: zccache_core::blocking_sync::Mutex::new(ArtifactAccess {
                     last_used: std::time::Instant::now(),

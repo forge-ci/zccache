@@ -388,3 +388,25 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.windows-retirement-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core --features test-support -E 'test(persist::staged_store) | test(persist::link_registry) | test(orphan_reconcile)' --test-threads 2 --status-level slow --final-status-level fail --failure-output immediate"
+
+# #1984: the stop response must follow persistence and report failed drains.
+[task.stop-persistence-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core -p zccache-cli-core --features zccache-daemon-core/test-support,zccache-cli-core/cli -E 'test(stop_persistence) | test(shutdown_dirty_state) | test(pending_cache_writes) | test(wal::) | test(cached_artifact)' --status-level fail --final-status-level fail --failure-output immediate --success-output never"
+
+[task.stop-persistence-perf]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib perf_shutdown_request_exits_idle_daemon_promptly --locked -- --ignored --nocapture"
+
+# Isolate comparison builds so Cargo cannot reuse the baseline executable.
+[task.stop-persistence-cli-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target/1984-cli-fixed soldr cargo nextest run --locked -p zccache --features zccache-bin,test-support --test daemon_lifecycle -E 'test(daemon_stop_persistence_test)' --status-level fail --final-status-level fail --failure-output immediate --success-output never"
+
+[task.stop-forced-persistence-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target/1984-cli-fixed soldr cargo test --locked -p zccache --features zccache-bin,daemon-bin,test-support --test cli -- cli_wrapper_failure_boundaries:: cli_daemon_start::stop_ --ignored --test-threads=1"
+
+[task.stop-persistence-gate-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target/1984-cli-fixed soldr cargo nextest run --locked -p zccache -p zccache-daemon-core --features zccache/zccache-bin,zccache/daemon-bin,zccache/test-support,zccache-daemon-core/test-support --lib --test cache_native --test daemon_lifecycle -E 'test(exec_cache_survives_daemon_restart) | test(cache_restore_with_normalized_mtimes_still_hits) | test(idle_daemon_stays_within_cpu_budget) | test(every_compile_spawn_surface_combines_host_policy_before_shared_admission) | test(daemon_stop_persistence_test) | test(stop_persistence)' --no-fail-fast --status-level fail --final-status-level fail --failure-output immediate --success-output never"

@@ -328,6 +328,7 @@ pub(super) fn new_shared_state(
             artifact_store_loaded: AtomicBool::new(false),
             shutdown_event_logged: AtomicBool::new(false),
             shutdown_requested: AtomicBool::new(false),
+            shutdown_completion: shutdown_completion::Completion::default(),
             index_writer_gone: AtomicBool::new(false),
             fingerprint: FingerprintManager::new(),
             dep_graph_persisted: AtomicBool::new(false),
@@ -478,6 +479,14 @@ impl DaemonServer {
     #[must_use]
     pub fn test_artifacts_len(&self) -> usize {
         self.state.artifacts.len()
+    }
+
+    /// Test-only seam for delaying actual payload writes through a real CLI stop.
+    #[doc(hidden)]
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn test_persistence_gate(&self) -> Arc<crate::core::sync::Gate> {
+        Arc::clone(&self.state.persist_semaphore)
     }
 
     /// Test-only seam: insert a synthetic system-includes entry for the

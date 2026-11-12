@@ -32,8 +32,7 @@ pub(super) async fn store_exec_artifact_inner(
             .collect();
         let persist_meta = cached.meta().clone();
         if payloads.is_empty() {
-            // Stdout/stderr-only artifacts have no payload files to persist,
-            // so expose their index entry to the final shutdown flush now.
+            // Stream-only results live entirely in the final index flush.
             state.artifact_store.insert(&key_hex, &persist_meta);
         }
         let completion_gate = if let Some(gate) = handoff_gate {
@@ -53,6 +52,7 @@ pub(super) async fn store_exec_artifact_inner(
             .ok_or(StagedPublishFailure::StoreSetup)?;
         retired = cached.publish(&state.artifacts, key_hex.clone());
         let persist_state = Arc::clone(state);
+        let failure_state = Arc::clone(state);
         let sem = Arc::clone(&state.persist_semaphore);
         let publication_guard_for_task =
             publication_guard.expect("direct exec publication acquired an owned guard");
@@ -66,6 +66,7 @@ pub(super) async fn store_exec_artifact_inner(
                         let _ = &publication_guard_for_task;
                         let _cache_lifetime = persistence_root;
                         let _publication_guard = publication_guard_for_task;
+                        let _unwind = persist_state.shutdown_completion.watch_unwind();
                         if let Err(error) = cached.persist_bytes(&persist_state, &key_for_persist, &payloads) {
                             tracing::warn!(%error, "exec artifact persistence failed; retaining resident payloads");
                         }
@@ -73,18 +74,21 @@ pub(super) async fn store_exec_artifact_inner(
                     .detach_on_drop()
                     .await;
                     if let Err(error) = written {
+                        failure_state.shutdown_completion.fail();
                         tracing::warn!(%error, "exec artifact persistence task failed to join");
                     }
                 }
-                Err(error) => tracing::warn!(%error, ?admission_bound, "exec persistence admission expired"),
+                Err(error) => {
+                    failure_state.shutdown_completion.fail();
+                    tracing::warn!(%error, ?admission_bound, "exec persistence admission expired");
+                }
             }
             if let Some(gate) = completion_gate {
                 gate.persisted.notify_one();
             }
         })
         .detach();
-        // No further suspension: publication has moved to the persistence
-        // owner before old records are scheduled on their blocking worker.
+        // Persistence owns publication before retirement is scheduled.
         if retired.is_some() {
             let cleanup = super::super::cached_artifact_retirement::retire_owned_for(
                 retirement_root,

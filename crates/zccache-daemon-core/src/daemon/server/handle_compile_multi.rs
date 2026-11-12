@@ -820,7 +820,7 @@ pub(super) async fn handle_compile_multi(
         // src/dst failures already enriched by `persist::enrich_persist_err`).
         let t_persist_enqueue = std::time::Instant::now();
         // Track this deferred persist in pending_cache_writes so the
-        // shutdown drain (wal::drain_durable_state_for_shutdown) awaits it
+        // shutdown drain (shutdown_drain::drain_durable_state_for_shutdown) awaits it
         // — the single-file path registers its deferred persist the same
         // way (miss_store.rs). Untracked, a 2-core host can shut down
         // between the compile response and persist_artifact_payloads,
@@ -840,10 +840,15 @@ pub(super) async fn handle_compile_multi(
                 let gap_ms = t_persist_enqueue.elapsed().as_millis() as u64;
                 match persist_artifact_payloads(&artifact_dir, &key_hex, &payloads) {
                     Ok(()) => {
-                        let _ =
-                            index_writer_tx.send(IndexWriterCommand::Insert(key_hex, persist_meta));
+                        if index_writer_tx
+                            .send(IndexWriterCommand::Insert(key_hex, persist_meta))
+                            .is_err()
+                        {
+                            _guard.state.shutdown_completion.fail();
+                        }
                     }
                     Err(e) => {
+                        _guard.state.shutdown_completion.fail();
                         tracing::warn!(
                             key = %key_hex,
                             gap_ms,
@@ -855,6 +860,7 @@ pub(super) async fn handle_compile_multi(
             .detach_on_drop()
             .await;
             if let Err(error) = written {
+                pending_state.shutdown_completion.fail();
                 tracing::warn!(%error, "multi-source artifact persistence task failed to join");
             }
             pending_writes::complete(&pending_state.pending_cache_writes, &completion_key);

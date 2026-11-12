@@ -17,6 +17,7 @@ pub(super) fn publish_and_materialize_staged_link(
 }
 
 pub(super) fn record_staged_publication_failure(state: &SharedState, reason: StagedPublishFailure) {
+    state.shutdown_completion.fail();
     use crate::daemon::staged_stats::{StagedCounter, StagedFailure};
     state
         .profiler

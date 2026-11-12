@@ -330,6 +330,8 @@ pub(super) struct SharedState {
     /// instead of consuming the public shutdown Notify, so legacy
     /// `shutdown_handle().notify_one()` callers still wake the accept loop.
     pub(super) shutdown_requested: AtomicBool,
+    /// Completion of the bounded persistence drain, shared with Stop callers.
+    pub(super) shutdown_completion: shutdown_completion::Completion,
     /// Latched when an index-writer send fails, i.e. the writer task is gone
     /// (#1177). The condition is permanent — the receiver does not come back —
     /// so this bounds the report to one per daemon instead of one per compile.

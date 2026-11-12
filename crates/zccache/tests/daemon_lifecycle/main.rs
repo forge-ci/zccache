@@ -23,6 +23,7 @@ mod daemon_session_stats_test;
 mod daemon_spawn_lockfile_budget_test;
 mod daemon_spawn_storm_test;
 mod daemon_stdio_detach;
+mod daemon_stop_persistence_test;
 mod daemon_tokio_console_test;
 mod embedded_service_test;
 
