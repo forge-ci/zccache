@@ -968,3 +968,7 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "embedded/metadata_persist_tests.rs"]
 mod metadata_persist_tests;
+
+#[cfg(test)]
+#[path = "embedded/rustc_stream_tests.rs"]
+mod rustc_stream_tests;

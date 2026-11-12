@@ -199,7 +199,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         StagedTiming::Planning,
         planning_started.elapsed().as_nanos() as u64,
     );
-    let staged_plan = match staged_plan_result {
+    let mut staged_plan = match staged_plan_result {
         StagedPlanOutcome::Enabled(plan) => {
             state.profiler.staged.count(StagedCounter::PlanEnabled);
             Some(plan)
@@ -469,7 +469,15 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             compiler.display().to_string(),
             crate::daemon::process::ProcessLiveness::configured(),
         );
-        let consume = crate::daemon::compile_output::consume(receiver, context, filter);
+        let consume = super::rustc_stream::consume(
+            receiver,
+            context,
+            filter,
+            &mut staged_plan,
+            is_rustc,
+            state_arc,
+            state.non_rustc_materialization_mode(client_env.as_deref()),
+        );
         let (process_result, capture_result) = tokio::join!(process, consume);
         (process_result.0, process_result.1, Some(capture_result))
     } else {

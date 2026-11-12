@@ -47,6 +47,18 @@ impl OutputContext {
     pub(crate) fn was_live(&self) -> bool {
         self.live_compiler.load(Ordering::Acquire)
     }
+
+    pub(crate) fn redirect(&self, sender: Sender<OutputChunk>) -> Self {
+        Self {
+            sender,
+            capture_limit: self.capture_limit,
+            live_compiler: Arc::clone(&self.live_compiler),
+        }
+    }
+
+    pub(crate) async fn send(&self, chunk: OutputChunk) -> io::Result<()> {
+        send(&self.sender, chunk).await
+    }
 }
 
 kernal_api::task_local! {
