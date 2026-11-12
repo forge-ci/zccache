@@ -80,3 +80,41 @@ fn poisoned_reader_and_writer_guards_remain_registered_until_release() {
     drop(poison.into_inner());
     assert_eq!(registered(&lock), 0);
 }
+
+// Exercise the production decision, formatter and acknowledged writer with real
+// registrations, independently of the monitor's best-effort abort grace.
+fn report_expired_holder<T>(owner: &T) {
+    let _waiter = Ticket::waiting(owner, "diagnostic waiter", Location::caller());
+    let now = Instant::now() + crate::sync::STATE_TIMEOUT;
+    let (abort, entries) = with_entries(|entries| decision(entries, now)).unwrap();
+    assert!(abort, "an expired real holder must request termination");
+    assert!(report_for(
+        reporter(),
+        report(&entries, now, abort),
+        Duration::from_secs(5),
+    ));
+}
+
+#[test]
+fn holder_report_child() {
+    let Ok(case) = std::env::var("ZCCACHE_WATCHDOG_TEST_CASE") else {
+        return;
+    };
+    if case == "native" {
+        let lock = crate::blocking_sync::Mutex::new(0);
+        let _holder = lock.lock_for(Duration::from_secs(5)).unwrap();
+        report_expired_holder(&lock);
+        return;
+    }
+    let state = crate::sync::State::new(0);
+    let operation = |_: &mut i32| report_expired_holder(&state);
+    match case.as_str() {
+        "blocking-state" => state.with_blocking_for(Duration::from_secs(5), operation),
+        "async-state" => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(state.with_for(Duration::from_secs(5), operation)),
+        _ => panic!("unexpected holder diagnostic child case"),
+    }
+}

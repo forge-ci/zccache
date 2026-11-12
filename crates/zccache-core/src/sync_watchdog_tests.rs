@@ -1,27 +1,29 @@
 //! Real subprocess regressions: a wedged callback cannot drive its own timer.
 use super::*;
 
-fn assert_holder_is_terminated(case: &str) {
+fn assert_holder_report(case: &str) {
     let cache = tempfile::tempdir().unwrap();
     let spec = kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
-        .args(["--exact", "sync::watchdog_tests::watchdog_child"])
+        .args(["--exact", "sync_watchdog::tests::holder_report_child"])
         .env("ZCCACHE_CACHE_DIR", cache.path())
         .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
         .env("ZCCACHE_WATCHDOG_TEST_CASE", case);
     // Keep libtest capture enabled in the child: diagnostics must bypass it.
-    let output = crate::wait::output_for(spec, STATE_TIMEOUT + Duration::from_secs(5))
-        .expect("a wedged holder must terminate before the parent deadline");
-    assert_ne!(
+    let output = crate::wait::output_for(spec, Duration::from_secs(10))
+        .expect("holder diagnostics must be acknowledged before the parent deadline");
+    assert_eq!(
         output.exit.raw_code(),
         0,
-        "wedged holder exited successfully"
+        "holder diagnostic child failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     for expected in [
         "lock hold exceeded",
         "Holding",
         "Waiting",
-        "sync_watchdog_tests.rs",
+        "sync_watchdog_registry_tests.rs",
     ] {
         assert!(stderr.contains(expected), "missing {expected:?}: {stderr}");
     }
@@ -41,10 +43,34 @@ fn assert_holder_is_terminated(case: &str) {
         "lock hold exceeded",
         "Holding",
         "Waiting",
-        "sync_watchdog_tests.rs",
+        "sync_watchdog_registry_tests.rs",
     ] {
         assert!(report.contains(expected), "missing {expected:?}: {report}");
     }
+}
+
+fn assert_holder_is_terminated(case: &str) {
+    // Diagnostic delivery includes filesystem I/O and is best effort within
+    // the production 250 ms abort grace. Acknowledge it independently, then
+    // prove the real wedged callback still terminates with unchanged budgets.
+    assert_holder_report(case);
+    let cache = tempfile::tempdir().unwrap();
+    let output = crate::wait::output_for(
+        kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+            .args(["--exact", "sync::watchdog_tests::watchdog_child"])
+            .env("ZCCACHE_CACHE_DIR", cache.path())
+            .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
+            .env("ZCCACHE_WATCHDOG_TEST_CASE", case),
+        STATE_TIMEOUT + Duration::from_secs(5),
+    )
+    .expect("a wedged holder must terminate before the parent deadline");
+    assert_ne!(
+        output.exit.raw_code(),
+        0,
+        "wedged holder exited successfully"
+    );
+    #[cfg(unix)]
+    assert_eq!(output.exit.raw_code(), -6, "wedged holder must abort");
 }
 
 #[test]
