@@ -18,12 +18,16 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 BLOCKING = frozenset(
     {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 )
 # Only the running aggregate itself is outside the verdict.
 EXEMPT_PREFIXES = ("CI summary",)
+# #2202: keep 20% headroom under each Dylint job's 25-minute hang bound.
+DYLINT_JOBS = frozenset({"Dylint", "Dylint (product features)"})
+DYLINT_RUNTIME_BUDGET_NS = 20 * 60 * 1_000_000_000
 
 
 def blocking_jobs(jobs: list[dict]) -> list[tuple[str, str]]:
@@ -33,6 +37,31 @@ def blocking_jobs(jobs: list[dict]) -> list[tuple[str, str]]:
         if j.get("conclusion") in BLOCKING
         and not j["name"].startswith(EXEMPT_PREFIXES)
     ]
+
+
+def runtime_violations(jobs: list[dict]) -> list[str]:
+    """Reject Dylint creep using runner time, excluding time queued for a runner."""
+    errors = []
+    for job in jobs:
+        if job["name"] not in DYLINT_JOBS or job.get("conclusion") != "success":
+            continue
+        try:
+            start = datetime.fromisoformat(job["started_at"])
+            end = datetime.fromisoformat(job["completed_at"])
+            if start.tzinfo is None or end.tzinfo is None or end < start:
+                raise ValueError("invalid runner timestamps")
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"{job['name']}: missing or invalid runtime evidence")
+            continue
+        elapsed = end - start
+        elapsed_ns = ((elapsed.days * 86400 + elapsed.seconds) * 1_000_000_000
+                      + elapsed.microseconds * 1000)
+        if elapsed_ns > DYLINT_RUNTIME_BUDGET_NS:
+            errors.append(
+                f"{job['name']}: runtime {elapsed_ns / 1_000_000_000:.1f}s exceeds "
+                "20m (80% of the 25m timeout); split or remove duplicated work"
+            )
+    return errors
 
 
 def fetch_jobs(repo: str, run_id: str, attempt: str, token: str) -> list[dict]:
@@ -80,12 +109,17 @@ def main(argv: list[str] | None = None) -> int:
     for j in jobs:
         print(f"  {j.get('conclusion') or j.get('status'):<16} {j['name']}")
     blocked = blocking_jobs(jobs)
+    runtime_errors = runtime_violations(jobs)
+    for error in runtime_errors:
+        print(f"  BLOCKED runtime: {error}")
     if blocked:
         print(f"\nCI summary: {len(blocked)} job(s) blocked the gate:")
         for name, concl in blocked:
             print(f"  BLOCKED {concl}: {name}")
         return 1
-    print("\nCI summary: all jobs succeeded or were skipped.")
+    if runtime_errors:
+        return 1
+    print("\nCI summary: all jobs succeeded or were skipped; runtime budgets passed.")
     return 0
 
 

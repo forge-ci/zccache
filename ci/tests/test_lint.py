@@ -8,7 +8,7 @@ import pytest
 from ci import lint
 
 
-def test_one_linux_dylint_job_gates_ordinary_pr_ci():
+def test_parallel_dylint_jobs_gate_ordinary_pr_ci():
     workflow = (lint.SCRIPT_DIR / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     job = workflow.split("\n  dylint:", 1)[1].split("\n  msrv:", 1)[0]
     assert "name: Dylint" in job
@@ -17,6 +17,9 @@ def test_one_linux_dylint_job_gates_ordinary_pr_ci():
     assert "dylint-coverage:" not in workflow
     assert workflow.count("working-directory: ci/dylint-target-fixture") == 1
     assert "soldr dylint prepare" in job
+    assert "name: Dylint (product features)" in job
+    assert "ci.lint --dylint-only --pass default" in job
+    assert "ci.lint --dylint-only --pass product" in job
 
 
 def test_ci_dylint_job_lints_and_proves_every_os_target():
@@ -175,6 +178,43 @@ def test_lint_dylint_only_fails_closed_on_a_cross_target_finding(monkeypatch):
         ],
         [*workspace, "--target", "x86_64-pc-windows-msvc"],
     ]
+
+
+@pytest.mark.parametrize("pass_name", ["all", "default", "product"])
+def test_split_dylint_passes_preserve_every_os_and_product_check(monkeypatch, pass_name):
+    monkeypatch.setattr(lint, "which", lambda _: "/tools/soldr")
+    monkeypatch.setattr(lint, "self_build_env", lambda: {})
+    monkeypatch.setattr(lint.sys, "platform", "linux")
+    calls = []
+    product_targets = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    def product(env, targets):
+        product_targets.extend(targets)
+        return 7  # A product finding must propagate through either entry point.
+
+    monkeypatch.setattr(lint.subprocess, "run", fake_run)
+    monkeypatch.setattr(lint, "dylint_product_pass", product)
+    assert lint.lint_dylint_only(pass_name) == (0 if pass_name == "default" else 7)
+    analyses = [c for c in calls if "--all" in c]
+    targets = [c[c.index("--target") + 1] if "--target" in c else None for c in analyses]
+    expected = [None, "x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+    assert targets == ([] if pass_name == "product" else expected)
+    assert product_targets == ([] if pass_name == "default" else expected)
+
+
+@pytest.mark.parametrize("pass_name", ["all", "default", "product"])
+def test_dylint_cli_selects_the_requested_pass(monkeypatch, pass_name):
+    monkeypatch.setattr(lint, "validate_release_metadata", lambda: None)
+    monkeypatch.setattr(lint.check_kernal_api_baseline, "check", lambda: [])
+    monkeypatch.setattr(lint.sys, "argv", ["lint", "--dylint-only", "--pass", pass_name])
+    calls = []
+    monkeypatch.setattr(lint, "lint_dylint_only", lambda selected: calls.append(selected) or 7)
+    assert lint.main() == 7
+    assert calls == [pass_name]
 
 
 def test_dylint_command_keeps_the_plugin_subcommand(monkeypatch):

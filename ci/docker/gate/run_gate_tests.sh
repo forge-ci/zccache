@@ -63,4 +63,13 @@ soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ig
 step "ignored Cargo cache regressions"
 soldr cargo test -p zccache --features zccache-bin --test cache_rust -- false_green_check:: cow_readonly_cargo:: native_archive:: --ignored --test-threads=1
 
+# #2202: ordinary regressions moved from Dylint into MSRV.
+step "Rust argfile execution regressions"
+native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"
+export PATH="${native_compiler_dir}:${PATH}"
+test -x "${native_compiler_dir}/rustc"
+soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
+step "Fetch-lock expiry regression"
+soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
+
 step "gate tests passed"

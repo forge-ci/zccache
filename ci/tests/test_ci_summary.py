@@ -1,13 +1,69 @@
 import pathlib
 import unittest
 
+import pytest
 import yaml
 
+from ci import ci_summary
 from ci.ci_summary import EXEMPT_PREFIXES, blocking_jobs
 
 
 def job(name, conclusion):
     return {"name": name, "conclusion": conclusion}
+
+
+@pytest.mark.parametrize("name", ["Dylint", "Dylint (product features)"])
+def test_dylint_runtime_guard_blocks_a_green_job_before_timeout(monkeypatch, capsys, name):
+    row = {
+        **job(name, "success"),
+        "started_at": "2026-11-13T03:00:00Z",
+        "completed_at": "2026-11-13T03:20:01Z",
+    }
+    monkeypatch.setattr(ci_summary, "fetch_jobs", lambda *args: [row])
+    assert ci_summary.main([]) == 1
+    output = capsys.readouterr().out
+    assert name in output and "runtime" in output and "20m" in output
+
+
+@pytest.mark.parametrize("completed", ["2026-11-13T03:00:01Z", "2026-11-13T03:20:00Z"])
+def test_dylint_runtime_guard_accepts_up_to_eighty_percent(completed):
+    row = {
+        **job("Dylint", "success"),
+        "started_at": "2026-11-13T03:00:00Z",
+        "completed_at": completed,
+    }
+    assert ci_summary.runtime_violations([row]) == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("started_at", None), ("completed_at", "invalid"),
+    ("completed_at", "2026-11-13T02:59:59Z"),
+    ("started_at", "2026-11-13T03:00:00"),
+])
+def test_dylint_runtime_guard_rejects_missing_or_invalid_evidence(field, value):
+    row = {
+        **job("Dylint", "success"),
+        "started_at": "2026-11-13T03:00:00Z",
+        "completed_at": "2026-11-13T03:01:00Z",
+        field: value,
+    }
+    assert ci_summary.runtime_violations([row])
+
+
+def test_dylint_runtime_guard_ignores_skips_and_other_jobs():
+    assert ci_summary.runtime_violations([
+        job("Dylint", "skipped"), job("Dylint (product features)", "skipped"),
+        job("Integration (Linux)", "success"),
+    ]) == []
+
+
+def test_dylint_runtime_guard_tracks_the_workflow_budget():
+    wf = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+    jobs = yaml.safe_load(wf.read_text())["jobs"]
+    dylint = {j["name"]: j for key, j in jobs.items() if key.startswith("dylint")}
+    assert set(dylint) == ci_summary.DYLINT_JOBS
+    assert all(j["timeout-minutes"] == 25 for j in dylint.values())
+    assert ci_summary.DYLINT_RUNTIME_BUDGET_NS == 25 * 60 * 1_000_000_000 * 80 // 100
 
 
 class BlockingJobsTest(unittest.TestCase):
