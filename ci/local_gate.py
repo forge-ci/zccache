@@ -23,12 +23,13 @@ Lanes (GATE-007: each is cached on its own input set):
 - `check`: the MSRV job through Bosn Actions, including workspace check
   and its nested Dylint cache contract.
 - `docs`: rustdoc with warnings denied (ci.yml `docs`).
+- `dylint`: both default and product-feature jobs from ci.yml, through Bosn.
 - `tests`: the Integration (Linux) workflow replayed through `bosn ci run`,
   never on the host (GATE-005). Every successful receipt must
   prove this clean workspace/HEAD and completed required job steps (GATE-009).
 
 Remote-only (not attested): native macOS and Windows runs, the btrfs reflink
-e2e, the miss-overhead timing budget, Dylint, and every other workflow.
+e2e, the miss-overhead timing budget, and every other workflow.
 
 Checks in a lane run in parallel; each one's output is shown only when it
 fails, then a timing table. Exit 1 when any check fails.
@@ -222,19 +223,17 @@ def checks() -> list[Check]:
             bosn_job="msrv",
             selected_job="msrv",
             required_steps=(
+                "Install compiler ownership Clippy",
                 "Check MSRV",
                 "Verify nested Dylint cache contract",
                 "Verify ignored Cargo cache regressions (#2002/#2117)",
+                "Enforce compiler spawn ownership (clippy disallowed-methods)",
+                "Rust argfile execution regressions",
+                "Fetch-lock expiry regression",
             ),
         ),
-        # The Dylint job is the longest on a zccache PR (~9m of a ~9.2m
-        # critical path), and until it had a lane here an attested head could
-        # not skip it -- so every attested PR still paid it. Replay the real
-        # job rather than mirroring its steps, so the lane cannot drift.
-        # Locally it takes ~8-11m warm and up to ~30-55m when the dylint
-        # build-cache was evicted from Bosn's per-repository act cache budget
-        # (8 GiB, LRU) or the host is oversubscribed; the timing summary
-        # printed after the lane shows which step grew.
+        # #2202: replay both parallel feature selections in the same lane.
+        # A partial proof must never skip either remote Dylint job.
         Check(
             "Dylint (isolated Bosn Actions)",
             (
@@ -260,8 +259,34 @@ def checks() -> list[Check]:
             selected_job="dylint",
             required_steps=(
                 "Run Dylint",
-                "Rust argfile execution regressions",
                 "Prove custom-lint selection for every OS",
+            ),
+        ),
+        Check(
+            "Dylint product features (isolated Bosn Actions)",
+            (
+                "bosn",
+                "ci",
+                "run",
+                "--workspace",
+                ".",
+                "--workflow",
+                ".github/workflows/ci.yml",
+                "--job",
+                "dylint-product",
+                "--trigger",
+                "pr",
+                "--wait",
+                "--json",
+            ),
+            "dylint",
+            exclusive=True,
+            min_version=(0, 1, 12),
+            bosn_workflow=".github/workflows/ci.yml",
+            bosn_job="dylint-product",
+            selected_job="dylint-product",
+            required_steps=(
+                "Run Dylint product features",
             ),
         ),
         Check(

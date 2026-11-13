@@ -5,9 +5,12 @@ Usage:
     ./lint --fix            # auto-fix formatting + clippy (no Dylint)
     ./lint <file.rs>        # single-file rustfmt + per-crate clippy (no Dylint)
     ./lint --dylint-only    # Dylint for the host and every other OS target
+    ./lint --dylint-only --pass default  # CI default-feature shard
+    ./lint --dylint-only --pass product  # CI shipped-feature shard
     ./lint --clippy-only    # default and shipped-product clippy passes
 """
 
+import argparse
 import filecmp
 import os
 import re
@@ -326,12 +329,13 @@ def dylint_cross_targets() -> list[str]:
     ]
 
 
-def lint_dylint_only():
+def lint_dylint_only(pass_name: str = "all"):
     """Run the pinned, published Dylint toolchain for every supported OS.
 
     The native host pass runs first, then one cross-target check per other
     OS. Cross checks never link target code; only build scripts and proc
-    macros link, for the host.
+    macros link, for the host. CI can run default and product selections
+    concurrently; the ordinary local entry point still runs both (#2202).
     """
     if which("soldr") is None:
         print("soldr is required for Dylint; install it globally", file=sys.stderr)
@@ -350,16 +354,16 @@ def lint_dylint_only():
     env["SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS"] = "1"
     workspace = ["soldr", "dylint", "--all", "--", "--workspace", "--lib", "--bins"]
     cross_targets = dylint_cross_targets()
-    for command in (
-        ["soldr", "dylint", "prepare"],
-        workspace,
-        [
-            "soldr", "rustup", "target", "add",
-            "--toolchain", DYLINT_TOOLCHAIN,
-            *cross_targets,
-        ],
-        *([*workspace, "--target", target] for target in cross_targets),
-    ):
+    commands = [["soldr", "dylint", "prepare"]]
+    if pass_name != "product":
+        commands.append(workspace)
+    commands.append([
+        "soldr", "rustup", "target", "add",
+        "--toolchain", DYLINT_TOOLCHAIN, *cross_targets,
+    ])
+    if pass_name != "product":
+        commands.extend([*workspace, "--target", target] for target in cross_targets)
+    for command in commands:
         result = subprocess.run(
             command,
             text=True,
@@ -370,7 +374,7 @@ def lint_dylint_only():
         )
         if result.returncode != 0:
             return result.returncode
-    return dylint_product_pass(env, [None, *cross_targets])
+    return 0 if pass_name == "default" else dylint_product_pass(env, [None, *cross_targets])
 
 
 def detect_crate(file_path):
@@ -521,8 +525,11 @@ def main():
     if args and args[0].endswith(".rs"):
         return lint_single_file(args[0])
 
-    if args == ["--dylint-only"]:
-        return lint_dylint_only()
+    if args and args[0] == "--dylint-only":
+        parser = argparse.ArgumentParser(description="Dylint for every OS")
+        parser.add_argument("--dylint-only", action="store_true")
+        parser.add_argument("--pass", dest="pass_name", choices=("all", "default", "product"), default="all")
+        return lint_dylint_only(parser.parse_args(args).pass_name)
 
     if args == ["--clippy-only"]:
         return lint_clippy_only()

@@ -99,6 +99,7 @@ jobs:
       skip_docs: ${{ steps.gate.outputs.skip_docs }}
       skip_msrv: ${{ steps.gate.outputs.skip_msrv }}
       skip_dylint: ${{ steps.gate.outputs.skip_dylint }}
+      skip_dylint-product: ${{ steps.gate.outputs['skip_dylint-product'] }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -439,27 +440,10 @@ jobs:
           soldr rustup run nightly-2026-08-15 cargo test
       - name: Run Dylint
         # Each lint crate uses dylint-link, so the published Soldr driver can
-        # build all ten libraries once without an alias-repair retry loop.
+        # build the libraries once without an alias-repair retry loop.
         # ci.lint runs the Linux host pass plus one cross-target pass per
         # other OS: late lints only see cfg-selected code (#1740).
-        run: uv run python -m ci.lint --dylint-only
-      - name: Enforce compiler spawn ownership (clippy disallowed-methods)
-        # #2027: crates/zccache-daemon-core/clippy.toml bans
-        # kernal_api::SpawnSpec::new outside daemon::server::compiler_spawn.
-        # The Clippy workflow runs only on main pushes without -D warnings
-        # (#944), so the ban is enforced here for every PR and merge group.
-        run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
-      - name: Rust argfile execution regressions
-        run: |
-          native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"
-          export PATH="${native_compiler_dir}:${PATH}"
-          test -x "${native_compiler_dir}/rustc"
-          soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
-      # #1967: `cargo test --workspace --lib` builds zccache-cli-core without
-      # `download-client`, so the fetch-lock expiry test runs nowhere else on Linux.
-      - name: Fetch-lock expiry regression
-        run: |
-          soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
+        run: uv run python -m ci.lint --dylint-only --pass default
       - name: Prove custom-lint selection for every OS
         working-directory: ci/dylint-target-fixture
         run: |
@@ -472,6 +456,82 @@ jobs:
             grep -Fq 'use zccache_core::path::NormalizedPath instead of std::path::PathBuf' "$RUNNER_TEMP/dylint-negative-$target.log"
             env -u RUSTUP_TOOLCHAIN -u RUSTFLAGS SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 soldr dylint --all -- --target "$target"
           done
+
+  dylint-product:
+    name: Dylint (product features)
+    needs: [cache-pre-prune, ci-mode]
+    # #2202: product features run concurrently with default features. The
+    # same local lane proves both jobs before either can be skipped.
+    if: ${{ needs.ci-mode.outputs.skip_dylint-product != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
+      SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
+      # Dylint removes RUSTUP_TOOLCHAIN before its nested driver build. The
+      # cargo shim below pins both cargo and rustc without changing the shared
+      # CARGO_HOME cache.
+      CARGO_ENV_RUSTUP_TOOLCHAIN: nightly-2026-08-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
+      - name: Wait for current-main cache pre-prune
+        uses: ./.github/actions/wait-cache-pre-prune
+      - id: setup-soldr
+        uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
+        with:
+          s3-bucket: forge-ci-cache # setup-soldr#629 S3 remote build cache
+          s3-endpoint: sfo3.digitaloceanspaces.com
+          job-status: ${{ job.status }} # setup-soldr#559: a failed job saves no build outputs
+          cook-delta: false # per-commit delta layer off (setup-soldr#528)
+          save-cache: auto
+          save-cache-remote: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.ZCCACHE_CACHE_WRITES == 'true' && 'auto' || 'false' }}
+          zccache-seed-strict: true
+          toolchain: 1.95.0
+          cache: true
+          cargo-registry-cache: false
+          # Distinct cache identity (#1677): the Dylint suffix is retained for
+          # the driver/profile, but its measured cook archive costs 599 MB.
+          # Registry caching is disabled for this lane as before.
+          cache-key-suffix: dylint
+          linker: fast
+          prebuild-deps: none
+          # The Dylint cache retains its exact nightly driver/tool profile;
+          # this lane skips only the low-return Cargo cook-base archive.
+          ci-tests: true
+          dylint: true
+          dylint-cache: true
+          # Reuse the existing dylint profile; only the original job publishes
+          # its budgeted lock-keyed output archive (#1858).
+          dylint-output-cache: false
+          solo-toolchain-cache: false # #1677 retires the standalone toolchain archive.
+          dylint-toolchain: nightly-2026-08-15
+          cargo-dylint-version: 6.2.0
+          dylint-link-version: 6.2.0
+      - name: Prepare published Dylint tools
+        run: |
+          env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1 | tee "$RUNNER_TEMP/dylint-prepare.log"
+          sed -n 's/^soldr: dylint prepare: tool bin dir //p' "$RUNNER_TEMP/dylint-prepare.log" >> "$GITHUB_PATH"
+      - name: Configure Dylint driver Cargo shim
+        run: |
+          shim_dir="${RUNNER_TEMP}/dylint-cargo-shim"
+          mkdir -p "${shim_dir}"
+          nightly_bin="$(dirname "$(soldr rustup which --toolchain nightly-2026-08-15 rustc)")"
+          nightly_toolchain="$(basename "$(dirname "${nightly_bin}")")"
+          printf '#!/usr/bin/env bash\nsubcommand="ru""stup"\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN="%s"\nexec soldr "${subcommand}" run "%s" cargo "$@"\n' "${nightly_toolchain}" "${nightly_toolchain}" > "${shim_dir}/cargo"
+          chmod +x "${shim_dir}/cargo"
+          echo "DYLINT_CARGO_SHIM=${shim_dir}" >> "${GITHUB_ENV}"
+          echo "${shim_dir}" >> "${GITHUB_PATH}"
+      - name: Install Dylint nightly toolchain
+        run: soldr rustup toolchain install nightly-2026-08-15 --component llvm-tools-preview --component rust-src --component rustc-dev --target x86_64-unknown-linux-gnu --target x86_64-pc-windows-msvc --target aarch64-apple-darwin --profile minimal
+      - name: Install stable Rust components
+        run: soldr rustup component add rustfmt
+      - name: Run Dylint product features
+        # Keep strict timeout lints and baseline aggregation across every OS.
+        run: uv run python -m ci.lint --dylint-only --pass product
 
   msrv:
     env: # setup-soldr#629: S3 remote build cache credentials
@@ -519,12 +579,33 @@ jobs:
           # families; cache-cleanup.yml retires the disabled solo-toolchain
           # family through its explicit main-only policy.
           cache-eviction-policy: protect-foundations
+      - name: Install compiler ownership Clippy
+        # Rustup may stage components across OverlayFS mounts in Docker replay.
+        env:
+          RUSTUP_PERMIT_COPY_RENAME: "1"
+        run: soldr rustup component add clippy
       - name: Check MSRV
         run: soldr cargo check --workspace
       - name: Verify nested Dylint cache contract
         run: "soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ignored"
       - name: Verify ignored Cargo cache regressions (#2002/#2117)
         run: "soldr cargo test -p zccache --features zccache-bin --test cache_rust -- false_green_check:: cow_readonly_cargo:: native_archive:: --ignored --test-threads=1"
+      - name: Enforce compiler spawn ownership (clippy disallowed-methods)
+        # #2027: crates/zccache-daemon-core/clippy.toml bans
+        # kernal_api::SpawnSpec::new outside daemon::server::compiler_spawn.
+        # Enforce the ban for every PR and merge group.
+        run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
+      - name: Rust argfile execution regressions
+        run: |
+          native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"
+          export PATH="${native_compiler_dir}:${PATH}"
+          test -x "${native_compiler_dir}/rustc"
+          soldr cargo test -p zccache --features test-support --test cache_rust daemon_rustc_response_file_test:: -- --ignored --test-threads=1
+      # #1967: `cargo test --workspace --lib` builds zccache-cli-core without
+      # `download-client`, so the fetch-lock expiry test runs nowhere else on Linux.
+      - name: Fetch-lock expiry regression
+        run: |
+          soldr cargo test -p zccache-cli-core --features download-client --lib -- download_client::artifact::lock::
 
   reflink-e2e:
     name: Reflink e2e
@@ -680,7 +761,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
+    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, dylint-product, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -724,7 +805,7 @@ jobs:
   # Adding or renaming a CI job needs no ruleset edit; list it in `needs`.
   ci-summary:
     name: CI summary
-    needs: [cancel-superseded, cache-janitor, clippy, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
+    needs: [cancel-superseded, cache-janitor, clippy, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, dylint-product, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

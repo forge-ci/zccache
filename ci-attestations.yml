@@ -21,9 +21,11 @@ gates:
   rust/x86_64-unknown-linux-gnu/doc: {lane: docs}      # rustdoc -D warnings
   rust/x86_64-unknown-linux-gnu/test: {lane: tests}    # Integration (Linux) test commands, in bosn
   rust/x86_64-unknown-linux-gnu/dylint: {lane: dylint}  # the Dylint job, replayed in bosn
+  rust/x86_64-unknown-linux-gnu/dylint-product: {lane: dylint}
 jobs:
   ci.yml:fmt: [rust/all/fmt, python/all/static]
   ci.yml:docs: [rust/x86_64-unknown-linux-gnu/doc]
   ci.yml:msrv: [rust/x86_64-unknown-linux-gnu/check, rust/x86_64-unknown-linux-gnu/test]
   ci.yml:dylint: [rust/x86_64-unknown-linux-gnu/dylint]
+  ci.yml:dylint-product: [rust/x86_64-unknown-linux-gnu/dylint-product]
   integration.yml:integration: [rust/x86_64-unknown-linux-gnu/test]

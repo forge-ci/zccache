@@ -75,11 +75,33 @@ def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
         ("ci.yml", "fmt"),
         ("ci.yml", "docs"),
         ("ci.yml", "msrv"),
+        ("ci.yml", "dylint"),
+        ("ci.yml", "dylint-product"),
         ("integration.yml", "integration"),
     ):
         block = _job_block(workflow, job)
-        assert f"needs.ci-mode.outputs.skip_{job} != 'true'" in block, (workflow, job)
+        output = f"skip_{job}"
+        assert f"needs.ci-mode.outputs.{output} != 'true'" in block, (workflow, job)
         assert "ci-mode" in block.split("if:", 1)[0], (workflow, job)
+
+
+def test_both_dylint_jobs_require_the_complete_attested_lane() -> None:
+    import tomllib
+
+    attestations = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
+    trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
+    for name in ("dylint", "dylint-product"):
+        key = f"ci.yml:{name}"
+        assert key in trust["skip"]
+        assert trust["covered-by"][key] == ["dylint"]
+        gates = attestations["jobs"][key]
+        assert gates and all(attestations["gates"][g]["lane"] == "dylint" for g in gates)
+        output = f"skip_{name}"
+        mode = _job_block("ci.yml", "ci-mode")
+        assert output in mode
+        # Pinned ci-lint output_name preserves the job id, including hyphens.
+        if "-" in name:
+            assert f"{output}: ${{{{ steps.gate.outputs['skip_{name}'] }}}}" in mode
 
 
 def test_legacy_harness_runs_every_integration_test_command() -> None:
@@ -132,28 +154,31 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     already covered -- each row below is a job a PR head can now skip.
     """
     isolated = [check for check in local_gate.checks() if check.bosn_workflow]
-    by_lane = {check.lane: check for check in isolated}
-    assert len(isolated) == len(by_lane) == 3
+    by_job = {check.bosn_job: check for check in isolated}
+    assert len(isolated) == len(by_job) == 4
     assert {
-        lane: (check.bosn_workflow, check.bosn_job, check.selected_job)
-        for lane, check in by_lane.items()
+        job: (check.lane, check.bosn_workflow, check.selected_job)
+        for job, check in by_job.items()
     } == {
-        "check": (".github/workflows/ci.yml", "msrv", "msrv"),
-        "dylint": (".github/workflows/ci.yml", "dylint", "dylint"),
-        "tests": (".github/workflows/integration.yml", "integration", None),
+        "msrv": ("check", ".github/workflows/ci.yml", "msrv"),
+        "dylint": ("dylint", ".github/workflows/ci.yml", "dylint"),
+        "dylint-product": ("dylint", ".github/workflows/ci.yml", "dylint-product"),
+        "integration": ("tests", ".github/workflows/integration.yml", None),
     }
     assert all(check.argv[:3] == ("bosn", "ci", "run") for check in isolated)
     assert all("--wait" in check.argv and "--json" in check.argv for check in isolated)
     assert all(check.min_version == (0, 1, 12) for check in isolated)
-    assert "Verify nested Dylint cache contract" in by_lane["check"].required_steps
-    assert by_lane["dylint"].required_steps == (
+    assert "Verify nested Dylint cache contract" in by_job["msrv"].required_steps
+    assert "Install compiler ownership Clippy" in by_job["msrv"].required_steps
+    assert by_job["dylint"].required_steps == (
         "Run Dylint",
-        "Rust argfile execution regressions",
         "Prove custom-lint selection for every OS",
     )
-    assert "Test (full workspace)" in by_lane["tests"].required_steps
-    assert "Install PCH regression toolchain" in by_lane["tests"].required_steps
-    assert "Strict PCH regressions (Clang 21)" in by_lane["tests"].required_steps
+    assert by_job["dylint-product"].required_steps == ("Run Dylint product features",)
+    assert "Fetch-lock expiry regression" in by_job["msrv"].required_steps
+    assert "Test (full workspace)" in by_job["integration"].required_steps
+    assert "Install PCH regression toolchain" in by_job["integration"].required_steps
+    assert "Strict PCH regressions (Clang 21)" in by_job["integration"].required_steps
     for check in isolated:
         workflow = check.bosn_workflow.rsplit("/", 1)[-1]
         block = _job_block(workflow, check.bosn_job)
@@ -162,14 +187,14 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
 
 
 def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
-    block = _job_block("ci.yml", "dylint")
+    block = _job_block("ci.yml", "msrv")
     assert "name: Rust argfile execution regressions" in block
     assert "soldr rustup which rustc" in block
     assert (
         "soldr cargo test -p zccache --features test-support --test cache_rust "
         "daemon_rustc_response_file_test:: -- --ignored --test-threads=1"
     ) in block
-    check = next(check for check in local_gate.checks() if check.lane == "dylint")
+    check = next(check for check in local_gate.checks() if check.lane == "check")
     assert "Rust argfile execution regressions" in check.required_steps
 
 
