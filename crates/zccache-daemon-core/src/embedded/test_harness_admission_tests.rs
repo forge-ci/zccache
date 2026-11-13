@@ -99,6 +99,57 @@ const SHARED_ONLY: CompileOptions =
 const ALL: CompileOptions =
     CompileOptions::new().with_test_harness_admission(TestHarnessAdmission::All);
 
+/// #1865: a deliberate refusal must not lower the journal's cache hit rate.
+#[tokio::test]
+async fn journal_passthrough_preserves_harness_reason_and_cacheable_outcomes() {
+    let workspace = Workspace::new().expect("rustc is required for the journal contract");
+    let service = start_service(&workspace.temp).await;
+    observe(&service, workspace.harness(&[], &[]), SHARED_ONLY).await;
+    observe(&service, workspace.harness(&[], &[]), ALL).await;
+    observe(&service, workspace.harness(&[], &[]), ALL).await;
+
+    let stats = service.stats().await.expect("stats");
+    assert_eq!(stats.non_cacheable, 1);
+    assert_eq!(stats.cache_misses, 1);
+    assert_eq!(stats.cache_hits, 1);
+    let journal = stats
+        .cache_root
+        .as_path()
+        .join("logs/compile_journal.jsonl");
+    let rows = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&journal) {
+                let rows: Vec<serde_json::Value> = contents
+                    .lines()
+                    .map(|line| serde_json::from_str(line).expect("journal JSON"))
+                    .collect();
+                if rows.len() == 3 {
+                    break rows;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("three journal rows before deadline");
+    assert_eq!(rows[0]["outcome"], "passthrough");
+    assert_eq!(
+        rows[0]["passthrough_reason"],
+        "test harness link product not cacheable"
+    );
+    assert!(rows[0].get("miss_reason").is_none());
+    assert_eq!(rows[1]["outcome"], "miss");
+    assert!(rows[1]["miss_reason"].is_string());
+    assert_eq!(rows[2]["outcome"], "hit");
+    for row in &rows[1..] {
+        assert!(row.get("passthrough_reason").is_none());
+    }
+    service
+        .shutdown(ShutdownMode::Graceful)
+        .await
+        .expect("shutdown");
+}
+
 async fn observe(
     service: &ZccacheService,
     request: CompileRequest,

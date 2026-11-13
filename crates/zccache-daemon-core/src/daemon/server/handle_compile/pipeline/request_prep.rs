@@ -4,6 +4,7 @@ use super::super::super::*;
 use super::super::error_cache::compile_failure_stderr;
 use super::system_includes::{discover_system_includes, SystemIncludesOutcome};
 use super::time_macros::{find_time_macro_use, warn_time_macro_uncacheable};
+use crate::daemon::compile_journal::record_passthrough_reason;
 
 const DEPGRAPH_STARTUP_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -218,6 +219,7 @@ pub(super) async fn prepare_dylint_request(
         sid,
         &format!("non-cacheable: Dylint cache disabled: {reason}"),
     );
+    record_passthrough_reason(reason);
     let response = run_compiler_direct(
         state,
         &bypass_compiler,
@@ -276,6 +278,11 @@ pub(super) async fn bypass_time_macro_request(
             found.input_file.display()
         ),
     );
+    record_passthrough_reason(format!(
+        "{} in {}",
+        found.macro_name,
+        found.input_file.display()
+    ));
     warn_time_macro_uncacheable(&found);
     Some(
         run_compiler_direct(
@@ -334,6 +341,7 @@ pub(super) async fn discover_request_system_includes(
         sid,
         "non-cacheable: system include discovery returned zero paths",
     );
+    record_passthrough_reason("system include discovery returned zero paths".into());
     Err(run_compiler_direct(
         state,
         compiler,
@@ -392,17 +400,12 @@ pub(super) async fn parse_single_compile_request(
     let compilation = match parsed {
         crate::compiler::ParsedInvocation::Cacheable(compilation) => compilation,
         crate::compiler::ParsedInvocation::NonCacheable { reason } => {
-            // Preserve the parser's decision before the direct compiler can
-            // remove an @response file that later journal attribution would
-            // otherwise need to re-read (issue #1529).
-            crate::daemon::compile_journal::record_miss_reason(
-                crate::daemon::compile_journal::miss_reason::UNCACHEABLE_INPUT,
-            );
             state.stats.record_non_cacheable();
             record_session_stat(&state.sessions, sid, |tracker| {
                 tracker.record_non_cacheable()
             });
             write_session_log(&state.sessions, sid, &format!("non-cacheable: {reason}"));
+            record_passthrough_reason(reason);
             // A side-output compile (`--coverage`, ...) rewrites the same
             // object and default depfile a cached compile may have
             // materialized as hardlinks; detach them first, as the staged
@@ -508,8 +511,8 @@ pub(super) async fn parse_single_compile_request(
                     client_env.as_deref(),
                 ))
         {
-            crate::daemon::compile_journal::record_miss_reason(
-                crate::daemon::compile_journal::miss_reason::UNCACHEABLE_INPUT,
+            record_passthrough_reason(
+                "library inputs or Dylint output identity is incomplete".into(),
             );
             state.stats.record_non_cacheable();
             test_harness_admission::observe_bypass();

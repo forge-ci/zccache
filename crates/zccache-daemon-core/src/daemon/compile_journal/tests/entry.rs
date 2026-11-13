@@ -354,6 +354,7 @@ fn serializes_extended_fields_when_present() {
         crate_type: Some("bin".to_string()),
         output_ext: Some("exe".to_string()),
         miss_reason: Some("inputs".to_string()),
+        passthrough_reason: None,
         miss_diff: Some(MissDiff {
             changed_files: vec!["src/main.rs".to_string(), "build.rs".to_string()],
             changed_flags: vec!["-C".to_string(), "debuginfo=2".to_string()],

@@ -686,7 +686,7 @@ fn analyze_passes_filters(value: &serde_json::Value, opts: &AnalyzeOptions) -> b
         let matches_outcome = match want.as_str() {
             "hit" => got == "hit" || got == "link_hit",
             "miss" => got == "miss" || got == "link_miss",
-            "non-cacheable" => got == "error",
+            "non-cacheable" => matches!(got, "error" | "passthrough"),
             other => got == other,
         };
         if !matches_outcome {
@@ -743,7 +743,7 @@ fn is_compile_journal_entry(value: &serde_json::Value) -> bool {
     let outcome = value.get("outcome").and_then(|v| v.as_str());
     let has_known_outcome = matches!(
         outcome,
-        Some("hit" | "miss" | "error" | "cached_error" | "link_hit" | "link_miss")
+        Some("hit" | "miss" | "passthrough" | "error" | "cached_error" | "link_hit" | "link_miss")
     );
     has_known_outcome
         && value.get("compiler").and_then(|v| v.as_str()).is_some()

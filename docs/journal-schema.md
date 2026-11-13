@@ -11,7 +11,7 @@ scripts) can rely on.
 | Field          | Type            | Always present | Notes |
 |----------------|-----------------|----------------|-------|
 | `ts`           | string          | yes            | ISO 8601 UTC timestamp of the record write. |
-| `outcome`      | string          | yes            | One of `hit`, `miss`, `error`, `cached_error`, `link_hit`, `link_miss`. |
+| `outcome`      | string          | yes            | One of `hit`, `miss`, `error`, `cached_error`, `link_hit`, `link_miss`, `passthrough`. |
 | `compiler`     | string          | yes            | Absolute path to the compiler binary as the client invoked it. |
 | `args`         | array of string | yes            | Full argument list, suitable for diagnostic replay when combined with an independently captured environment. |
 | `cwd`          | string          | yes            | Working directory at request time. |
@@ -29,6 +29,7 @@ scripts) can rely on.
 | `crate_type`   | string          | no             | Canonical: `lib`, `bin`, `proc-macro`, `build-script`, `test`, `bench`, `example`. |
 | `output_ext`   | string          | no             | Derived from `crate_type` — `rlib`, `exe`, `so`, etc. |
 | `miss_reason`  | string          | on misses only | See below. |
+| `passthrough_reason` | string | on passthroughs only | The existing parser or admission refusal reason; see below. |
 | `miss_diff`    | object          | no             | Evidence bucket; only the dimension that changed is populated. |
 | `self_profile_ns` | object       | no             | Sub-phase timings (`hash_inputs`, `lookup`, `decompress`, `store`). |
 
@@ -81,6 +82,28 @@ The Rust source of truth is the `miss_reason` module in
 `crates/zccache-daemon-core/src/daemon/compile_journal/mod.rs`.
 `miss_reason::ALL` is the
 append-only iteration of the closed set.
+
+## Deliberate passthroughs (#1865)
+
+`outcome: passthrough` means the compiler succeeded after the daemon deliberately
+skipped cache lookup/storage. It is distinct from a cacheable `miss`. These rows
+carry `passthrough_reason` and omit `miss_reason`; failures retain `error` and
+omit both reasons. The IPC result is unchanged: `cached: false`.
+
+`passthrough_reason` preserves the existing parser/admission reason string,
+without parsing diagnostic text or re-reading inputs. Examples include
+`test harness link product not cacheable`, `no .rs source file found`, and
+`randomized autocfg probe crate name`. Admission bypasses also report Dylint
+identity failures, time macros, empty system include discovery, incomplete
+library inputs/output identity, and unsupported batch staging. The strings are
+an open set; readers must tolerate additional values.
+
+Hit-rate denominators include only hits and cacheable misses. Exclude
+passthroughs from compile/link misses, miss histograms, and per-crate miss counts.
+Front-ends such as soldr can map `passthrough` to `[SKIP]` and show the reason.
+
+This outcome and optional field are additive, backward-compatible journal
+extensions. They do not change IPC framing or require a protocol version bump.
 
 ## Issue #256: `session-start --profile` and the extended schema
 

@@ -69,6 +69,7 @@ pub(super) fn legacy_entry(
         crate_type: None,
         output_ext: None,
         miss_reason: None,
+        passthrough_reason: None,
         miss_diff: None,
         self_profile_ns: None,
     }

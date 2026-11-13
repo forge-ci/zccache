@@ -1,6 +1,7 @@
 //! Whole-invocation planning before any cache lookup or requested-path write.
 
 use super::*;
+use crate::daemon::compile_journal::record_passthrough_reason;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InputStamp {
@@ -421,6 +422,7 @@ pub(super) async fn run_non_cacheable_batch(
     client_env: &Option<Vec<(String, String)>>,
     stdin: &[u8],
 ) -> Response {
+    record_passthrough_reason("batch depfile output not cacheable".into());
     state.stats.record_non_cacheable();
     record_session_stat(&state.sessions, sid, |stats| stats.record_non_cacheable());
     if let Err(response) = detach_direct_batch_outputs(compilations, original_args, cwd) {
@@ -497,6 +499,7 @@ pub(super) async fn run_unsupported_batch(
             })
         }
         StagedPlanOutcome::Unsupported(reason) => {
+            record_passthrough_reason(reason.id().into());
             state.profiler.staged.count(StagedCounter::PlanUnsupported);
             state.profiler.staged.failure(reason.failure());
             let response_family = direct_response_family(compilations[0].family, original_args);
