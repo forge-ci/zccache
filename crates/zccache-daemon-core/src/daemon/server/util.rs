@@ -242,21 +242,20 @@ pub(super) fn context_artifact_is_fresh_with(
     let graph = state.dep_graph.load();
     let includes = graph.get_includes(context_key).unwrap_or_default();
     graph
-        .try_fast_hit_for_artifact_with_env(
+        .try_fast_hit_for_artifact_with_normalized_inputs(
             context_key,
             expected_artifact,
             |path| {
-                let path: NormalizedPath = path.into();
-                if let Some(known) = memo.and_then(|memo| memo.get(&path).map(|entry| *entry)) {
+                if let Some(known) = memo.and_then(|memo| memo.get(path).map(|entry| *entry)) {
                     return known;
                 }
                 // No memo shard guard is held across the stat.
                 let hash = state
                     .cache_system
                     .metadata()
-                    .get_cached_hash_if_stat_valid(&path);
+                    .get_cached_hash_if_stat_valid(path);
                 if let Some(memo) = memo {
-                    memo.insert(path, hash);
+                    memo.insert(path.clone(), hash);
                 }
                 hash
             },
