@@ -221,9 +221,14 @@ fn main() {
     println!("cargo:rerun-if-changed=c/foo.c");
     let objects = cc::Build::new().cargo_metadata(false).file("c/foo.c").compile_intermediates();
     let old = std::fs::metadata("build.rs").unwrap().modified().unwrap();
-    for object in objects {
-        std::fs::File::options().write(true).open(&object).unwrap().set_modified(old).unwrap();
-        println!("cargo:rustc-link-arg-bins={}", object.display());
+    // A C-cache hit may materialize the object read-only and shared with the
+    // store, so stamp a private copy rather than the cc-rs output itself.
+    for (index, object) in objects.into_iter().enumerate() {
+        let linked = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join(format!("linked-{index}.o"));
+        let _ = std::fs::remove_file(&linked);
+        std::fs::write(&linked, std::fs::read(&object).unwrap()).unwrap();
+        std::fs::File::options().write(true).open(&linked).unwrap().set_modified(old).unwrap();
+        println!("cargo:rustc-link-arg-bins={}", linked.display());
     }
 }
 "#,
