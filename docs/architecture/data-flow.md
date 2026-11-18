@@ -320,6 +320,15 @@ its own:
   that escape supplied native directories are a preexisting limitation tracked
   in [#2173](https://github.com/forge-ci/zccache/issues/2173); this inventory does
   not certify those external native paths.
+- **Link-argument files are native inputs too (#2212).** A build script's
+  `cargo:rustc-link-arg*=$OUT_DIR/foo.o` keeps a byte-stable `-C link-arg`
+  string, so the same resolver content-hashes every link-argument operand
+  that names an existing regular file: bare operands, whitespace-split
+  `link-args`, `-Wl,` comma lists and `--option=path` values. Only
+  self-contained objects and regular archives are modeled. A linker script,
+  version script, shared object, thin archive, unknown format or `@`
+  response file refuses caching. Operands the linker resolves through its own
+  search (`-Tlink.x`, `-lfoo` inside a link argument) are not inventoried.
 
 ## Environment Keying Policy (#1806)
 

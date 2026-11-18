@@ -149,7 +149,69 @@ fn inputs(
     // Source #[link(kind="static")] can bundle an archive in an rlib
     // without any argv -l. Use the same native input owner for every product.
     add_transitive_archives(&dirs, cwd, &mut inputs)?;
+    add_link_arg_files(&parsed.linker_args, cwd, &mut inputs)?;
     Ok(inputs)
+}
+
+/// Candidate file operands of one `-C link-arg=` / `-C link-args=` value:
+/// bare operands, whitespace-split `link-args`, `-Wl,` comma lists and
+/// `--option=path` values. A response file is refused outright because its
+/// contents select further inputs.
+fn link_arg_operands(flag: &str) -> Result<Vec<&str>, &'static str> {
+    let tokens: Vec<&str> = match flag.split_once('=') {
+        Some(("link-arg", value)) => vec![value],
+        Some(("link-args", value)) => value.split_whitespace().collect(),
+        _ => return Ok(Vec::new()),
+    };
+    let mut operands = Vec::new();
+    for token in tokens {
+        let pieces: Vec<&str> = match token.strip_prefix("-Wl,") {
+            Some(list) => list.split(',').collect(),
+            None => vec![token],
+        };
+        for piece in pieces {
+            if piece.starts_with('@') {
+                return Err("linker response file has unmodeled indirect inputs");
+            }
+            match piece.split_once('=') {
+                Some((option, value)) if option.starts_with('-') => operands.push(value),
+                _ if !piece.starts_with('-') && !piece.is_empty() => operands.push(piece),
+                _ => {}
+            }
+        }
+    }
+    Ok(operands)
+}
+
+/// Build scripts hand the linker objects and archives directly with
+/// `cargo:rustc-link-arg*=<path>` (#2212). The link-arg string is already
+/// key material, but its path is stable across rebuilds, so the bytes it
+/// names must be keyed too. Only self-contained objects/archives are
+/// modeled; any other existing file (linker script, shared object, ...)
+/// refuses caching rather than keying a partial input set.
+fn add_link_arg_files(
+    linker_args: &[String],
+    cwd: &Path,
+    inputs: &mut Vec<ExternCrate>,
+) -> Result<(), &'static str> {
+    for (index, flag) in linker_args.iter().enumerate() {
+        for operand in link_arg_operands(flag)? {
+            let path = link_path_to_absolute(Path::new(operand), cwd);
+            if !path.is_file() {
+                continue;
+            }
+            require_self_contained_native(&path)?;
+            let path = NormalizedPath::new(path);
+            if inputs.iter().any(|input| input.path == path) {
+                continue;
+            }
+            inputs.push(ExternCrate {
+                name: format!("{NATIVE_INPUT_PREFIX}link-arg:{index}:{operand}"),
+                path,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Native names can be arbitrary with source `#[link(..., +verbatim)]`.
@@ -276,6 +338,7 @@ pub(super) async fn add_inputs_async(
         .iter()
         .any(|flag| flag.starts_with("-l "))
         && native_search_dirs(parsed).is_empty()
+        && parsed.linker_args.is_empty()
     {
         return true;
     }
