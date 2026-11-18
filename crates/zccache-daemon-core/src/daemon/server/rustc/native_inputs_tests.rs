@@ -194,3 +194,101 @@ fn native_search_refuses_indirect_and_unknown_formats() {
         assert!(inputs(&args, &raw, temp.path()).is_err(), "{name}");
     }
 }
+
+/// A minimal relocatable ELF header: `require_self_contained_native` accepts
+/// `e_type == ET_REL` objects as owning their bytes.
+fn relocatable_object(root: &Path, name: &str) -> NormalizedPath {
+    let path = root.join(name);
+    let mut header = vec![0u8; 64];
+    header[..4].copy_from_slice(b"\x7fELF");
+    header[4] = 2;
+    header[5] = 1;
+    header[16] = 1;
+    std::fs::write(&path, header).expect("object");
+    path.into()
+}
+
+#[test]
+fn link_arg_object_and_archive_operands_are_content_inputs() {
+    // #2212: `cargo:rustc-link-arg*=$OUT_DIR/foo.o` keeps a stable path, so
+    // only the file's bytes can tell two links apart.
+    let temp = tempfile::tempdir().expect("fixture");
+    let object = relocatable_object(temp.path(), "foo.o");
+    let archive = archive(temp.path(), "out", "libbar.a");
+    let absolute = format!("-Clink-arg={}", object.as_path().display());
+    for flags in [
+        vec![absolute.as_str()],
+        vec!["-Clink-arg=foo.o"],
+        vec!["-C", "link-args=-Wl,-O1 foo.o"],
+        vec!["-Clink-arg=-Wl,--whole-archive,foo.o,--no-whole-archive"],
+        vec!["-Clink-arg=-Wl,--just-symbols=foo.o"],
+    ] {
+        let mut raw = vec!["--crate-type=bin"];
+        raw.extend(flags.iter().copied());
+        let (args, raw) = parsed(&raw, temp.path());
+        let paths: Vec<_> = inputs(&args, &raw, temp.path())
+            .expect("resolved")
+            .into_iter()
+            .map(|input| input.path)
+            .collect();
+        assert_eq!(paths, vec![object.clone()], "{flags:?}");
+    }
+    let (args, raw) = parsed(
+        &[
+            "--crate-type=bin",
+            "-Clink-arg=out/libbar.a",
+            "-Clink-arg=foo.o",
+        ],
+        temp.path(),
+    );
+    let paths: Vec<_> = inputs(&args, &raw, temp.path())
+        .expect("resolved")
+        .into_iter()
+        .map(|input| input.path)
+        .collect();
+    assert_eq!(paths, vec![archive, object]);
+}
+
+#[test]
+fn link_arg_flags_without_file_operands_add_no_inputs() {
+    let temp = tempfile::tempdir().expect("fixture");
+    std::fs::create_dir(temp.path().join("dir")).expect("directory");
+    let (args, raw) = parsed(
+        &[
+            "--crate-type=bin",
+            "-Clink-arg=-Wl,-O1",
+            "-Clink-arg=-Wl,-rpath,dir",
+            "-Clink-arg=missing.o",
+            "-Clink-args=-nostartfiles -static",
+        ],
+        temp.path(),
+    );
+    assert!(inputs(&args, &raw, temp.path())
+        .expect("resolved")
+        .is_empty());
+}
+
+#[test]
+fn link_arg_indirect_or_unknown_files_refuse_caching() {
+    for (flag, name, bytes) in [
+        (
+            "-Clink-arg=-Wl,--version-script=f.map",
+            "f.map",
+            &b"{ local: *; };"[..],
+        ),
+        ("-Clink-arg=f.ld", "f.ld", &b"INPUT(/other/libx.a)"[..]),
+        (
+            "-Clink-arg=libthin.a",
+            "libthin.a",
+            &b"!<thin>\nmember.o"[..],
+        ),
+        ("-Clink-arg=@args.rsp", "args.rsp", &b"foo.o"[..]),
+    ] {
+        let temp = tempfile::tempdir().expect("fixture");
+        std::fs::write(temp.path().join(name), bytes).expect("input");
+        let (mut args, raw) = parsed(&["--crate-type=bin", flag], temp.path());
+        assert!(inputs(&args, &raw, temp.path()).is_err(), "{flag}");
+        assert!(!add_inputs(&mut args, &raw, temp.path()), "{flag}");
+        assert!(args.externs.is_empty(), "{flag}");
+    }
+}

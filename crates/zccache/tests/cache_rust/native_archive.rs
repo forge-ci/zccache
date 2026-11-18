@@ -1,4 +1,5 @@
-//! Bundled native inputs must invalidate an rlib even at the same path (#1945).
+//! Bundled native inputs must invalidate an rlib even at the same path (#1945),
+//! and build-script link-arg objects must invalidate a linked binary (#2212).
 #![allow(clippy::expect_used, clippy::panic)]
 
 use super::false_green_check::{cargo, Daemon};
@@ -188,6 +189,97 @@ fn main() {{
             journal.last().map(String::as_str),
             Some(if iteration == 1 { "hit" } else { "miss" }),
             "{journal:?}"
+        );
+    }
+}
+
+/// #2212: a build script that hands the linker an object through
+/// `cargo:rustc-link-arg-bins=$OUT_DIR/...` keeps a byte-stable link-arg
+/// string, so only the object's content may distinguish two links. Change
+/// only the C source and require the relinked binary to carry the new code.
+#[test]
+#[ignore = "integration: real Soldr/Cargo and native compiler"]
+fn link_arg_object_content_changes_invalidate_linked_binary() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let project = fixture.path().join("project");
+    write(
+        &project,
+        "Cargo.toml",
+        "[workspace]\nmembers=['linkargbin']\nresolver='2'\n",
+    );
+    write(
+        &project,
+        "rust-toolchain.toml",
+        include_str!("../../../../rust-toolchain.toml"),
+    );
+    write(&project, "linkargbin/Cargo.toml", "[package]\nname='linkargbin'\nversion='0.0.0'\nedition='2021'\n[build-dependencies]\ncc='1'\n");
+    write(
+        &project,
+        "linkargbin/build.rs",
+        r#"
+fn main() {
+    println!("cargo:rerun-if-changed=c/foo.c");
+    let objects = cc::Build::new().cargo_metadata(false).file("c/foo.c").compile_intermediates();
+    let old = std::fs::metadata("build.rs").unwrap().modified().unwrap();
+    // A C-cache hit may materialize the object read-only and shared with the
+    // store, so stamp a private copy rather than the cc-rs output itself.
+    for (index, object) in objects.into_iter().enumerate() {
+        let linked = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join(format!("linked-{index}.o"));
+        let _ = std::fs::remove_file(&linked);
+        std::fs::write(&linked, std::fs::read(&object).unwrap()).unwrap();
+        std::fs::File::options().write(true).open(&linked).unwrap().set_modified(old).unwrap();
+        println!("cargo:rustc-link-arg-bins={}", linked.display());
+    }
+}
+"#,
+    );
+    write(
+        &project,
+        "linkargbin/src/main.rs",
+        "extern \"C\" { fn foo_answer() -> i32; }\nfn main() { println!(\"{}\", unsafe { foo_answer() }); }\n",
+    );
+    let cache = fixture.path().join("cache");
+    let target = project.join("target");
+    let envs = [
+        ("CARGO_NET_OFFLINE", PathBuf::from("true")),
+        (
+            "SOLDR_RUSTC_WRAPPER",
+            PathBuf::from(env!("CARGO_BIN_EXE_zccache")),
+        ),
+        ("ZCCACHE_CACHE_DIR", cache.clone()),
+        (
+            "ZCCACHE_DAEMON_NAMESPACE",
+            PathBuf::from(format!("i2212-{}", std::process::id())),
+        ),
+    ];
+    let _daemon = Daemon { envs: &envs };
+    for (iteration, answer) in [7, 7, 9].into_iter().enumerate() {
+        write(
+            &project,
+            "linkargbin/c/foo.c",
+            &format!("int foo_answer(void) {{ return {answer}; }}\n"),
+        );
+        let clean = cargo(&project, "clean", &target, &envs);
+        assert!(clean.status.success(), "clean: {clean:?}");
+        let build = cargo(&project, "build", &target, &envs);
+        assert!(build.status.success(), "build: {build:?}");
+        let output = std::process::Command::new(
+            target
+                .join("debug")
+                .join(format!("linkargbin{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .output()
+        .expect("linked binary");
+        let linked = outcomes(&cache, "linkargbin");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            answer.to_string(),
+            "iteration {iteration}; journal={linked:?}"
+        );
+        assert_eq!(
+            linked.last().map(String::as_str),
+            Some(if iteration == 1 { "hit" } else { "miss" }),
+            "iteration {iteration}: {linked:?}"
         );
     }
 }
