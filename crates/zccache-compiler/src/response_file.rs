@@ -16,6 +16,7 @@ pub use family::{
     read_response_file_text_for,
 };
 mod format;
+mod limits;
 mod temporary;
 #[cfg(test)]
 use format::gnu as format_rsp_content;
@@ -246,11 +247,6 @@ fn decode_utf16(payload: &[u8], decode_word: fn([u8; 2]) -> u16) -> std::io::Res
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Maximum command-line length (in bytes) before we spill to a response file.
-/// Windows `CreateProcess` has a 32,767 character limit. We use a conservative
-/// threshold to account for the compiler path, env block, and quoting overhead.
-const MAX_CMDLINE_LEN: usize = 30_000;
-
 /// Atomic counter for unique response file names.
 static RSP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -273,9 +269,10 @@ static RSP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// args cannot be represented in rustc's line-oriented format; we
 /// return `None` and the caller falls back to passing the args directly
 /// on the command line.
-/// If the total length of `args` exceeds the Windows command-line limit, write
-/// them to a temporary `.rsp` file and return a single `@path` argument.
-/// Otherwise return `None` (caller should pass args directly).
+/// If `args` exceed the host's process-creation limit (the Windows command-line
+/// length, or Unix `MAX_ARG_STRLEN`/`ARG_MAX`; see `limits.rs`), write them to
+/// a temporary `.rsp` file and return a single `@path` argument. Otherwise
+/// return `None` (caller should pass args directly).
 ///
 /// `family_hint` selects the response-file dialect:
 ///
@@ -293,11 +290,7 @@ pub fn write_response_file_if_needed(
     tmp_dir: &Path,
     family_hint: crate::CompilerFamily,
 ) -> std::io::Result<Option<TempResponseFile>> {
-    if !kernal_api::platform::host::target_is_windows() {
-        return Ok(None);
-    }
-    let estimated_len: usize = args.iter().map(|a| a.len() + 3).sum();
-    if estimated_len < MAX_CMDLINE_LEN {
+    if !limits::exceeds_exec_limit(args, kernal_api::platform::host::target_is_windows()) {
         return Ok(None);
     }
 
