@@ -8,6 +8,10 @@ would silently corrupt arguments for one of them.
 
 ## Layout
 
+- `limits.rs` — when to spill: Windows above ~30,000 command-line bytes;
+  Unix when one argument reaches Linux `MAX_ARG_STRLEN` (128 KiB) or the argv
+  passes a quarter of `ARG_MAX`. Unix needs this because a cargo
+  `rustc @argfile` is expanded before rustc runs (#2210).
 - `temporary.rs` — shared temporary-file creation and ownership. Literal
   Rust `@` arguments use one-argument files so the compiler cannot expand
   them again; other argument values retain their bytes and ordering.
