@@ -397,3 +397,22 @@ def test_merged_manifest_declares_every_inlined_crate_dependency(
             if item.startswith("dep:"):
                 dep = declared[item[4:]]
                 assert isinstance(dep, dict) and dep.get("optional"), item
+
+
+def test_real_tree_amalgamation_is_self_contained(tmp_path: Path) -> None:
+    """Regression for the 1.15.15 crates.io failure.
+
+    Facade-native modules in `crates/zccache/src` (for example `platform.rs`)
+    are not rewritten by amalgamation, so a `zccache_core::` path there passes
+    every workspace build and fails only at release time with
+    `amalgamated crate is not self-contained: source references: zccache_core`
+    -- after PyPI has already published. Facade code must use `crate::<module>`.
+    """
+
+    repo = Path(__file__).parents[2]
+    shutil.copytree(
+        repo / "crates",
+        tmp_path / "crates",
+        ignore=shutil.ignore_patterns("target", "__pycache__", "*.pyc"),
+    )
+    prepare_zccache_crate_for_publish(tmp_path)
