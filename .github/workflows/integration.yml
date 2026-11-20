@@ -50,7 +50,7 @@ jobs:
   # job. `skip_<job>` is 'true' only for an attested, in-policy PR head;
   # never on push/dispatch/schedule, so main always runs every job (the
   # post-merge catch). [gate] mode = "shadow": an unattested head is
-  # reported here, not failed. The ref is ci/local_gate.py's CI_LINT_REF
+  # reported here, not failed. The ref is ci.toml's linter pin
   # (ci/tests/test_local_gate.py keeps the two in step).
   ci-mode:
     name: CI mode
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: zackees/ci.yml
-          ref: 41fcbca60a7901c8707411c4abf4d0b41dd71426
+          ref: 635fb1262b59702b9293a145e7201410612104e5
           path: .ci-lint
           persist-credentials: false
           sparse-checkout: ci_lint
@@ -198,7 +198,6 @@ jobs:
         shell: bash
         env:
           ZCCACHE_PCH_TESTS_REQUIRED: "1"
-          NEXTEST_TEST_THREADS: num-cpus
           SOLDR_CACHE_DIR: ${{ runner.temp }}/zccache-self-tests/integration
           SOLDR_CACHE_LIFECYCLE: command
           SOLDR_CACHE_SHUTDOWN_TIMEOUT_SECS: "30"
@@ -207,6 +206,7 @@ jobs:
           SOLDR_JOBS: "1"
         run: |
           set -euo pipefail
+          export NEXTEST_TEST_THREADS="${ZCCACHE_LOCAL_TEST_THREADS:-num-cpus}"
           unset ZCCACHE_CACHE_DIR
           export PATH="$PCH_TEST_TOOLS:$PATH"
           clang++ --version
@@ -215,9 +215,6 @@ jobs:
       - name: Test (full workspace)
         shell: bash
         env:
-          # ci-tests defaults to one nextest thread; preserve this workflow's
-          # parallel tests. Timing-sensitive cases still reserve every slot.
-          NEXTEST_TEST_THREADS: num-cpus
           SOLDR_CACHE_DIR: ${{ runner.temp }}/zccache-self-tests/integration
           SOLDR_CACHE_LIFECYCLE: command
           SOLDR_CACHE_SHUTDOWN_TIMEOUT_SECS: "30"
@@ -229,6 +226,9 @@ jobs:
           SOLDR_JOBS: "1"
         run: |
           set +e
+          # The local Bosn run caps concurrency using host load. On GitHub,
+          # use the whole runner. Timing-sensitive cases still reserve every slot.
+          export NEXTEST_TEST_THREADS="${ZCCACHE_LOCAL_TEST_THREADS:-num-cpus}"
           unset ZCCACHE_CACHE_DIR
           echo "Using isolated test SOLDR_CACHE_DIR=$SOLDR_CACHE_DIR"
           start=$SECONDS

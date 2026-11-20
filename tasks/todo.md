@@ -1,3 +1,9 @@
+# GATE-014 attested publishing
+
+- [ ] Guard the ci-lint pin and cover workspace Clippy and Linux unit tests.
+- [ ] Add and test `./push` and load-aware isolated test execution.
+- [ ] Publish through `./push`, land through the merge queue and verify hosted skips.
+
 # #2038 — bounded kernal-api waits
 
 - [x] Inspect 0.1.34–0.1.40 compatibility and inventory compiler deprecations.

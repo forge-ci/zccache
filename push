@@ -1,0 +1,107 @@
+#!/usr/bin/env -S uv run --no-project --python 3.13 --script
+"""Attest the committed feature branch, push it, and open its PR.
+
+The local gate runs the lanes in local-gate.toml, reuses current evidence
+for unchanged lane inputs, and stamps HEAD with CI attestations. After
+verification, the push uses a lease because stamping can rewrite HEAD.
+
+Exit codes: 0 success, 1 a step failed, 2 usage, 3 refused.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "ci"))
+from local_gate import CI_LINT_REF  # noqa: E402
+
+CI_LINT = [
+    "uvx",
+    "--with",
+    "pyyaml",
+    "--from",
+    f"git+https://github.com/zackees/ci.yml@{CI_LINT_REF}",
+    "ci-lint",
+]
+
+
+def read_command(*argv: str, check: bool = True) -> str:
+    return subprocess.run(
+        argv, cwd=ROOT, check=check, stdout=subprocess.PIPE, text=True
+    ).stdout.strip()
+
+
+def step(argv: list[str], *, env: dict[str, str] | None = None) -> None:
+    print(f"./push: $ {' '.join(argv)}", flush=True)
+    subprocess.run(argv, cwd=ROOT, check=True, env=env)
+
+
+def verify_head() -> bool:
+    head = read_command("git", "rev-parse", "HEAD")
+    with tempfile.TemporaryDirectory(prefix="zccache-push-") as scratch:
+        output = Path(scratch) / "verify-output"
+        output.touch()
+        step(
+            [
+                *CI_LINT, "local-gate", "verify", "--repo", ".", "--sha", head,
+                "--base-sha", head, "--event", "pull_request", "--github-output",
+            ],
+            env={**os.environ, "GITHUB_OUTPUT": str(output)},
+        )
+        # The repository's shadow policy exits zero even on missing proof.
+        return "attested=true" in output.read_text(encoding="utf-8").splitlines()
+
+
+def refusal(branch: str, remote: str) -> str | None:
+    default_ref = read_command(
+        "git", "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD", check=False
+    )
+    if branch in ("HEAD", "main", "master") or default_ref == f"refs/remotes/{remote}/{branch}":
+        return f"refusing to push {branch!r}; work on a feature branch"
+    if read_command("git", "status", "--porcelain", "--untracked-files=no"):
+        return "tracked files have uncommitted changes"
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--prove-only", action="store_true", help="attest HEAD locally")
+    parser.add_argument("--no-pr", action="store_true", help="push without opening a PR")
+    parser.add_argument("--remote", default="origin", help="git remote to push to")
+    args = parser.parse_args(argv)
+
+    try:
+        branch = read_command("git", "rev-parse", "--abbrev-ref", "HEAD")
+        reason = refusal(branch, args.remote)
+        if reason:
+            print(f"./push: {reason}", file=sys.stderr)
+            return 3
+
+        step([*CI_LINT, "local-gate", "run"])
+        if not verify_head():
+            print("./push: HEAD failed attestation verification", file=sys.stderr)
+            return 1
+        if args.prove_only:
+            return 0
+
+        target = f"HEAD:refs/heads/{branch}"
+        step(["git", "push", "--force-with-lease", "-u", "--", args.remote, target])
+        if not args.no_pr and read_command(
+            "gh", "pr", "list", "--head", branch, "--state", "open",
+            "--json", "number", "--jq", "length",
+        ) == "0":
+            step(["gh", "pr", "create", "--fill", "--head", branch])
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"./push: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

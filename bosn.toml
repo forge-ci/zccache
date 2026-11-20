@@ -58,26 +58,6 @@ cmd = "bash /work/ci/docker/profile/run_bosn_check.sh lint"
 stack = "perf"
 cmd = "bash /work/ci/docker/profile/run_bosn_check.sh test"
 
-# Local GitHub Actions runs with nektos/act (see ci/docker/act/README.md).
-# act drives the host Docker engine through the socket bind below; its job
-# containers are siblings outside bosn's label contract, so the runner script
-# labels and removes the ones it creates.
-[stack.act]
-dockerfile = "ci/docker/act/Dockerfile.bosn-act"
-family = "zccache-act"
-workdir = "/work"
-
-[stack.act.volumes]
-act-cache = { scope = "machine", destination = "/root/.cache" }
-
-[stack.act.mounts]
-repo = { source = ".", destination = "/work" }
-docker-sock = { source = "/var/run/docker.sock", destination = "/var/run/docker.sock" }
-
-[task.act-test-action]
-stack = "act"
-cmd = "bash /work/ci/docker/act/run_act_test_action.sh"
-
 # The local gate's isolated `tests` lane (local-gate.toml; zackees/ci.yml#168
 # GATE-005, #196 GATE-009). zccache's tests start zccache daemons, so they
 # never run on the developer host, whose live zccache serves every soldr
