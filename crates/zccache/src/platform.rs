@@ -20,7 +20,7 @@ pub(crate) fn force_process_group(child: &std::process::Child) {
                 "/PID",
                 &child.id().to_string(),
             ]);
-            drop(zccache_core::small_tool::output_for_recorded(
+            drop(crate::core::small_tool::output_for_recorded(
                 "taskkill",
                 spec,
                 TREE_KILL_BOUND,
