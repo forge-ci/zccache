@@ -31,8 +31,12 @@ from pathlib import Path
 MIB = 1024 * 1024
 # Largest healthy 1.14.0 wheel is 16.8 MB; the unstripped aarch64 one was 42.7 MB.
 MAX_WHEEL_BYTES = 24 * MIB
-# Six healthy wheels total ~93 MB; 1.14.0 with the aarch64 bloat was ~119 MB.
-MAX_RELEASE_BYTES = 100 * MIB
+# Six healthy wheels total ~93 MB at 1.15.0 and grew organically to 102.0 MiB by
+# 1.15.16 (run 44662758681); 1.14.0 with the aarch64 DWARF bloat was ~119 MB.
+# 110 MiB keeps headroom for normal growth while still failing that bloat class
+# (~26 MB on top of a healthy release); MAX_WHEEL_BYTES and the per-binary
+# debug-section check catch it independently.
+MAX_RELEASE_BYTES = 110 * MIB
 USER_AGENT = "zccache-release (https://github.com/zackees/zccache)"
 
 
