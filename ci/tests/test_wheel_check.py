@@ -152,3 +152,11 @@ def test_release_workflow_runs_the_check_before_upload() -> None:
     check = workflow.index("ci/wheel_check.py dist/wheels/*.whl")
     upload = workflow.index("name: pypi-wheels")
     assert build < check < upload
+
+
+def test_release_budget_admits_organic_growth_and_rejects_dwarf_bloat() -> None:
+    # 1.15.16's six healthy wheels totalled 102.0 MiB and failed the old
+    # 100 MiB budget (Auto-Release run 44662758681); 1.14.0 with the aarch64
+    # DWARF bloat was ~119 MB. The budget must sit between the two.
+    assert wheel_check.MAX_RELEASE_BYTES >= int(102.0 * wheel_check.MIB)
+    assert wheel_check.MAX_RELEASE_BYTES < 119 * 1000 * 1000
