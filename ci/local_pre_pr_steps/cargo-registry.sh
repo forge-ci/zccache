@@ -6,12 +6,16 @@ hash2="$($z cargo-registry hash --lockfile Cargo.lock)"
 test "${#hash1}" -eq 16
 test "$hash1" = "$hash2"
 if $z cargo-registry hash --lockfile nonexistent.lock >/dev/null 2>&1; then exit 1; fi
-cargo fetch
+soldr cargo fetch
+# The builder shares its source registry volume, but /tmp belongs to this run.
+scratch="$(mktemp -d)"
+export ZCCACHE_CACHE_DIR="$scratch/zccache"
 $z cargo-registry save --key local-pre-pr
 root="$($z cache-root)"
 test -f "$root/cargo-registry/local-pre-pr.tar.gz"
-rm -rf "$CARGO_HOME/registry/cache" "$CARGO_HOME/registry/index"
-$z cargo-registry restore --key local-pre-pr
-test "$(find "$CARGO_HOME/registry" -type f 2>/dev/null | wc -l)" -gt 0
+restore_home="$scratch/cargo-home"
+mkdir -p "$restore_home"
+$z cargo-registry restore --key local-pre-pr --cargo-home "$restore_home"
+test "$(find "$restore_home/registry" -type f | wc -l)" -gt 0
 $z cargo-registry clean
 test ! -e "$root/cargo-registry/local-pre-pr.tar.gz"

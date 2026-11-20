@@ -36,6 +36,7 @@ jobs:
   linux:
     name: Linux
     needs: ci-mode
+    if: ${{ needs.ci-mode.outputs.skip_linux != 'true' }}
     permissions:
       actions: read
       contents: read
@@ -84,15 +85,18 @@ jobs:
   # zackees/ci.yml#166/#190/#198 (GATE-002/003/008/010): decides, from the
   # PR base's local-gate.toml and ci-attestations.yml, whether this PR head
   # carries a valid local-gate attestation for every gate of a skippable
-  # job. `skip_<job>` is 'true' only for an attested, in-policy PR head;
+  # job. `skip_<job>` is 'true' only for an attested, in-policy PR or queue head;
   # never on push/dispatch/schedule, so main always runs every job (the
   # post-merge catch). [gate] mode = "shadow": an unattested head is
-  # reported here, not failed. The ref is ci/local_gate.py's CI_LINT_REF
+  # reported here, not failed. The ref is ci.toml's linter pin
   # (ci/tests/test_local_gate.py keeps the two in step).
   ci-mode:
     name: CI mode
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       trusted: ${{ steps.gate.outputs.trusted }}
       skip_fmt: ${{ steps.gate.outputs.skip_fmt }}
@@ -100,6 +104,8 @@ jobs:
       skip_msrv: ${{ steps.gate.outputs.skip_msrv }}
       skip_dylint: ${{ steps.gate.outputs.skip_dylint }}
       skip_dylint-product: ${{ steps.gate.outputs['skip_dylint-product'] }}
+      skip_clippy: ${{ steps.gate.outputs.skip_clippy }}
+      skip_linux: ${{ steps.gate.outputs.skip_linux }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -111,12 +117,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: zackees/ci.yml
-          ref: 41fcbca60a7901c8707411c4abf4d0b41dd71426
+          ref: 635fb1262b59702b9293a145e7201410612104e5
           path: .ci-lint
           persist-credentials: false
           sparse-checkout: ci_lint
       - name: Local gate attestation
         id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: PYTHONPATH=.ci-lint python3 -m ci_lint local-gate verify --repo . --trust --github-output
 
   cache-pre-prune:
@@ -761,7 +769,7 @@ jobs:
   # sweep at a time across runs.
   cache-janitor:
     name: Cache janitor
-    needs: [cancel-superseded, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, dylint-product, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
+    needs: [cancel-superseded, clippy, linux, python-tests, wire-stability, feature-matrix, ci-mode, cache-pre-prune, fmt, dylint, dylint-product, msrv, reflink-e2e, docs, miss-overhead, msvc-cl-cache]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -779,7 +787,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: zackees/ci.yml
-          ref: 41fcbca60a7901c8707411c4abf4d0b41dd71426
+          ref: 635fb1262b59702b9293a145e7201410612104e5
           path: .ci-lint
           persist-credentials: false
           sparse-checkout: ci_lint
@@ -793,6 +801,7 @@ jobs:
   clippy:
     name: Clippy
     needs: [cache-pre-prune, ci-mode]
+    if: ${{ needs.ci-mode.outputs.skip_clippy != 'true' }}
     uses: ./.github/workflows/clippy.yml
     secrets: inherit
     permissions:

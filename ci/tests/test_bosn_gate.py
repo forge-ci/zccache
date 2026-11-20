@@ -262,10 +262,14 @@ def test_a_check_proves_only_the_event_it_declares():
 
 def test_every_bosn_check_triggers_the_event_it_verifies():
     """#2039: integration.yml has no pull_request; replay and proof must agree."""
-    trigger_for = {"pull_request": "pr", "push": "push"}
+    option_for = {
+        "pull_request": ("--trigger", "pr"),
+        "push": ("--trigger", "push"),
+        "workflow_call": ("--event", "workflow_call"),
+    }
     for check in local_gate.checks():
         if not check.bosn_workflow:
             continue
         argv = list(check.argv)
-        trigger = argv[argv.index("--trigger") + 1]
-        assert trigger == trigger_for[check.bosn_event], check.name
+        option, event = option_for[check.bosn_event]
+        assert argv[argv.index(option) + 1] == event, check.name

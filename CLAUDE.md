@@ -69,10 +69,18 @@ heavy local lanes in that mode or claim a failed local gate passed. Apply the
 `ci-full` label to the PR so prior attestations cannot skip remote checks.
 
 ```bash
-uvx --from git+https://github.com/zackees/ci.yml@<CI_LINT_REF> ci-lint local-gate run   # pin: ci/local_gate.py CI_LINT_REF
+./push
 ```
 
-Runs `ci/local_gate.py` (lanes in `local-gate.toml`) on a clean committed tree and stamps HEAD with a tree-bound `Local-Gate:` trailer plus `Ci-Attestation:` trailers (`ci-attestations.yml`). The test suite runs only through `bosn ci run` replaying Integration and MSRV, never on the host: the nextest guard refuses outside CI or `ZCCACHE_TEST_ISOLATED=1`. CI's `ci-mode` jobs then skip the Formatting, Documentation, MSRV and Integration (Linux) jobs for an attested, in-policy PR head; `main` pushes always run them. Add a Formatting check to the `lint` lane, never as a workflow step (GATE-001), and keep the recorded workflow selection and required step evidence in step with Integration/MSRV (`ci/tests/test_local_gate.py`).
+Runs `ci/local_gate.py` (lanes in `local-gate.toml`) on a clean committed
+feature branch, stamps and verifies HEAD, pushes with a lease, and opens a PR.
+Use `./push --prove-only` to stop after verification or `./push --no-pr` to
+push without opening a PR. Bosn replays the Rust test workflows in isolation.
+CI's `ci-mode` job can credit the proofs for Formatting, Documentation, MSRV,
+Clippy, both Dylint jobs, and Linux checks and unit tests on PRs and in the
+merge queue. Main pushes run those jobs in full. Add Formatting checks to the
+`lint` lane (GATE-001). Keep the recorded workflow and required step evidence
+in sync with the hosted jobs (`ci/tests/test_local_gate.py`).
 
 ## Temporary dependent subgit integration
 

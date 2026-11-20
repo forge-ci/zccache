@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: zackees/ci.yml
-          ref: b93b8c4a20ce3cd476c75a278ad01a31bde2438b
+          ref: 635fb1262b59702b9293a145e7201410612104e5
           path: .ci-lint
           persist-credentials: false
       - name: Verified reuse decision (GEN-021, shadow)

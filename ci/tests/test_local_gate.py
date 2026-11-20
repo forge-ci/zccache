@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -34,10 +35,22 @@ def _job_block(workflow: str, job: str) -> str:
 def test_ci_lint_pin_is_the_same_everywhere() -> None:
     ref = local_gate.CI_LINT_REF
     assert re.fullmatch(r"[0-9a-f]{40}", ref)
-    for workflow in ("ci.yml", "integration.yml"):
-        block = _job_block(workflow, "ci-mode")
-        assert f"ref: {ref}" in block, workflow
-    assert f"ci.yml@{ref}" in (ROOT / "local-gate.toml").read_text(encoding="utf-8")
+    config = tomllib.loads((ROOT / "ci.toml").read_text(encoding="utf-8"))
+    assert config["linter"] == f"zackees/ci.yml@{ref}"
+    trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
+    assert {"ci.toml", "push"} <= set(trust["surfaces"])
+    for workflow, job in (
+        ("ci.yml", "ci-mode"),
+        ("ci.yml", "cache-janitor"),
+        ("ci-linux.yml", "reuse-shadow"),
+        ("integration.yml", "ci-mode"),
+    ):
+        steps = yaml.safe_load(_job_block(workflow, job))[job]["steps"]
+        assert [
+            step["with"]["ref"]
+            for step in steps
+            if step.get("with", {}).get("repository") == "zackees/ci.yml"
+        ] == [ref], (workflow, job)
 
 
 def test_formatting_job_runs_only_the_lint_lane() -> None:
@@ -77,6 +90,8 @@ def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
         ("ci.yml", "msrv"),
         ("ci.yml", "dylint"),
         ("ci.yml", "dylint-product"),
+        ("ci.yml", "clippy"),
+        ("ci.yml", "linux"),
         ("integration.yml", "integration"),
     ):
         block = _job_block(workflow, job)
@@ -86,8 +101,6 @@ def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
 
 
 def test_both_dylint_jobs_require_the_complete_attested_lane() -> None:
-    import tomllib
-
     attestations = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
     trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
     for name in ("dylint", "dylint-product"):
@@ -102,6 +115,30 @@ def test_both_dylint_jobs_require_the_complete_attested_lane() -> None:
         # Pinned ci-lint output_name preserves the job id, including hyphens.
         if "-" in name:
             assert f"{output}: ${{{{ steps.gate.outputs['skip_{name}'] }}}}" in mode
+
+
+def test_clippy_and_linux_skip_require_their_full_proofs() -> None:
+    policy = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
+    trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
+    mode = yaml.safe_load(_job_block("ci.yml", "ci-mode"))["ci-mode"]
+    for job, lanes in (("clippy", ["clippy"]), ("linux", ["check", "unit-tests"])):
+        key = f"ci.yml:{job}"
+        assert key in trust["skip"]
+        assert trust["covered-by"][key] == lanes
+        assert [policy["gates"][gate]["lane"] for gate in policy["jobs"][key]] == lanes
+        assert mode["outputs"][f"skip_{job}"] == f"${{{{ steps.gate.outputs.skip_{job} }}}}"
+    assert mode["permissions"]["pull-requests"] == "read"
+    verify = next(step for step in mode["steps"] if step.get("id") == "gate")
+    assert verify["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+
+
+def test_load_aware_test_threads() -> None:
+    assert local_gate.load_aware_test_threads(8, 0.0) == 8
+    assert local_gate.load_aware_test_threads(8, 16.0) == 4
+    assert local_gate.load_aware_test_threads(8, 100.0) == 2
+    assert local_gate.load_aware_test_threads(1, 100.0) == 1
+    assert local_gate.load_aware_test_threads(16, 0.0, runner_cpus=8) == 8
+    assert local_gate.load_aware_test_threads(16, 32.0, runner_cpus=8) == 4
 
 
 def test_legacy_harness_runs_every_integration_test_command() -> None:
@@ -155,7 +192,7 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     """
     isolated = [check for check in local_gate.checks() if check.bosn_workflow]
     by_job = {check.bosn_job: check for check in isolated}
-    assert len(isolated) == len(by_job) == 4
+    assert len(isolated) == len(by_job) == 6
     assert {
         job: (check.lane, check.bosn_workflow, check.selected_job)
         for job, check in by_job.items()
@@ -163,6 +200,8 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
         "msrv": ("check", ".github/workflows/ci.yml", "msrv"),
         "dylint": ("dylint", ".github/workflows/ci.yml", "dylint"),
         "dylint-product": ("dylint", ".github/workflows/ci.yml", "dylint-product"),
+        "clippy": ("clippy", ".github/workflows/clippy.yml", "clippy"),
+        "test": ("unit-tests", ".github/workflows/ci-check.yml", "test"),
         "integration": ("tests", ".github/workflows/integration.yml", None),
     }
     assert all(check.argv[:3] == ("bosn", "ci", "run") for check in isolated)
@@ -175,6 +214,11 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
         "Prove custom-lint selection for every OS",
     )
     assert by_job["dylint-product"].required_steps == ("Run Dylint product features",)
+    assert by_job["clippy"].required_steps == ("Run Clippy",)
+    assert by_job["test"].required_steps == ("Build test binaries", "Test")
+    assert "os=ubuntu-latest" in by_job["test"].argv
+    assert by_job["test"].test_threads_env == "RUST_TEST_THREADS"
+    assert by_job["integration"].test_threads_env == "ZCCACHE_LOCAL_TEST_THREADS"
     assert "Fetch-lock expiry regression" in by_job["msrv"].required_steps
     assert "Test (full workspace)" in by_job["integration"].required_steps
     assert "Install PCH regression toolchain" in by_job["integration"].required_steps

@@ -11,7 +11,7 @@
 # count -- over-stating the budget for every small shape.
 schema  = 3
 profile = "rust-cli"
-linter  = "zackees/ci.yml@aaf113ca50565244567c0d19f1e739e9d3120dda"
+linter  = "zackees/ci.yml@635fb1262b59702b9293a145e7201410612104e5"
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
 # The set is exactly the (runs-on, target) pairs the workflows actually build.

@@ -59,8 +59,9 @@ def test_integration_nextest_keeps_parallel_execution() -> None:
         (ROOT / ".github/workflows/integration.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["integration"]["steps"]
-    test = next(step for step in steps if step.get("name") == "Test (full workspace)")
-    assert test["env"]["NEXTEST_TEST_THREADS"] == "num-cpus"
+    for name in ("Strict PCH regressions (Clang 21)", "Test (full workspace)"):
+        test = next(step for step in steps if step.get("name") == name)
+        assert 'export NEXTEST_TEST_THREADS="${ZCCACHE_LOCAL_TEST_THREADS:-num-cpus}"' in test["run"]
 
 
 def test_integration_cache_planner_retires_and_reserves_generations() -> None:

@@ -8,11 +8,8 @@ ran (local-gate.toml [gate.trust], ci-attestations.yml):
     uv run --no-project --python 3.13 python ci/local_gate.py --lane lint # = the remote Formatting job
     uv run --no-project --python 3.13 python ci/local_gate.py --list
 
-Do not call it directly before pushing; call it through the attesting
-wrapper, which runs it on a clean tree and stamps HEAD with a tree-bound
-`Local-Gate:` trailer plus one `Ci-Attestation:` trailer per proven gate:
-
-    uvx --from git+https://github.com/zackees/ci.yml@<CI_LINT_REF> ci-lint local-gate run
+Use `./push` to run the lanes on a clean tree and stamp HEAD with a
+tree-bound `Local-Gate:` trailer and one `Ci-Attestation:` per proven gate.
 
 Lanes (GATE-007: each is cached on its own input set):
 
@@ -24,6 +21,8 @@ Lanes (GATE-007: each is cached on its own input set):
   and its nested Dylint cache contract.
 - `docs`: rustdoc with warnings denied (ci.yml `docs`).
 - `dylint`: both default and product-feature jobs from ci.yml, through Bosn.
+- `clippy`: the workspace Clippy job replayed through Bosn Actions.
+- `unit-tests`: the default-feature Linux lib/bin test job replayed through Bosn.
 - `tests`: the Integration (Linux) workflow replayed through `bosn ci run`,
   never on the host (GATE-005). Every successful receipt must
   prove this clean workspace/HEAD and completed required job steps (GATE-009).
@@ -47,18 +46,19 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TypeAlias
 
 ROOT = Path(__file__).resolve().parent.parent
-# The zackees/ci.yml commit whose ci_lint this repository uses. The `ci-mode`
-# jobs in ci.yml and integration.yml check out the same SHA;
-# ci/tests/test_local_gate.py keeps them in step.
-CI_LINT_REF = "41fcbca60a7901c8707411c4abf4d0b41dd71426"
-LANES = ("lint", "py-tests", "check", "docs", "dylint", "tests")
+# Workflow checkouts use the same pin (guarded by ci/tests/test_local_gate.py).
+CI_LINT_REF = tomllib.loads((ROOT / "ci.toml").read_text(encoding="utf-8"))[
+    "linter"
+].split("@", 1)[1]
+LANES = ("lint", "py-tests", "check", "docs", "dylint", "clippy", "unit-tests", "tests")
 PY = ("uv", "run", "--no-project", "--python", "3.13")
 # ci.yml's and integration.yml's workflow-level env: warnings are errors. It
 # also replaces .cargo/config.toml's build.rustflags, exactly as on CI.
@@ -82,6 +82,8 @@ class Check:
     required_steps: tuple[str, ...] = ()
     # The event the replayed workflow must have run under (`--trigger`).
     bosn_event: str = "pull_request"
+    # A test harness concurrency setting passed into the isolated job.
+    test_threads_env: str = ""
 
 
 def checks() -> list[Check]:
@@ -296,11 +298,45 @@ def checks() -> list[Check]:
             (*RUST_ENV, ("RUSTDOCFLAGS", "-D warnings")),
             exclusive=True,
         ),
+        Check(
+            "Workspace Clippy (isolated Bosn Actions)",
+            (
+                "bosn", "ci", "run", "--workspace", ".",
+                "--workflow", ".github/workflows/clippy.yml", "--job", "clippy",
+                "--event", "workflow_call", "--wait", "--json",
+            ),
+            "clippy",
+            exclusive=True,
+            min_version=(0, 1, 12),
+            bosn_workflow=".github/workflows/clippy.yml",
+            bosn_job="clippy",
+            selected_job="clippy",
+            bosn_event="workflow_call",
+            required_steps=("Run Clippy",),
+        ),
     ]
     # GATE-005/009: act sets CI=true in its job containers; the nextest
     # guard still refuses developer-host execution. Inspect the immutable
     # run receipt before allowing either real workflow to prove this lane.
     tests = [
+        Check(
+            "Linux unit tests (isolated Bosn Actions)",
+            (
+                "bosn", "ci", "run", "--workspace", ".",
+                "--workflow", ".github/workflows/ci-check.yml", "--job", "test",
+                "--event", "workflow_call", "--input", "os=ubuntu-latest",
+                "--wait", "--json",
+            ),
+            "unit-tests",
+            exclusive=True,
+            min_version=(0, 1, 12),
+            bosn_workflow=".github/workflows/ci-check.yml",
+            bosn_job="test",
+            selected_job="test",
+            bosn_event="workflow_call",
+            test_threads_env="RUST_TEST_THREADS",
+            required_steps=("Build test binaries", "Test"),
+        ),
         Check(
             "Integration (Linux, isolated Bosn Actions)",
             (
@@ -325,6 +361,7 @@ def checks() -> list[Check]:
             bosn_workflow=".github/workflows/integration.yml",
             bosn_job="integration",
             bosn_event="push",
+            test_threads_env="ZCCACHE_LOCAL_TEST_THREADS",
             required_steps=(
                 "Build integration test binaries",
                 "Install PCH regression toolchain",
@@ -680,19 +717,39 @@ def _diagnostic_command(argv: list[str]) -> Captured:
         return Captured(code, out.read().decode("utf-8", errors="replace"))
 
 
-def _host_context(label: str) -> str:
+def load_aware_test_threads(cpus: int, load1: float, runner_cpus: int | None = None) -> int:
+    """Scale the runner's slots by the shared host's available CPU share."""
+    cpus = max(1, cpus)
+    slots = min(cpus, runner_cpus or cpus)
+    share = cpus / max(cpus, load1)
+    return max(min(2, slots), int(slots * share))
+
+
+def _host_context(label: str) -> tuple[str, int]:
     sampled_at = time.time()
+    load1 = 0.0
     try:
-        load = "/".join(f"{value:.2f}" for value in os.getloadavg())
+        loads = os.getloadavg()
+        load1 = loads[0]
+        load = "/".join(f"{value:.2f}" for value in loads)
     except (AttributeError, OSError):
         load = "unavailable"
     runners = _diagnostic_command(["bosn", "ci", "runners", "list", "--json"])
+    runner_cpus = None
     try:
-        state = _document(_document(json.loads(runners.output))["runners"])
+        data = _document(json.loads(runners.output))
+        state = _document(data["runners"])
         concurrency = f"{state.get('running', '?')}/{state.get('limit', '?')} running/limit; queued={state.get('queued', '?')}"
+        capacity = _document(data.get("engine_capacity")).get("cpus")
+        if type(capacity) is int and capacity > 0:
+            runner_cpus = capacity
     except (KeyError, TypeError, ValueError):
         concurrency = "unavailable"
-    return f"  host sample ({label}, epoch {sampled_at:.0f}): load1/5/15={load}; runners={concurrency}\n"
+    threads = load_aware_test_threads(os.cpu_count() or 1, load1, runner_cpus)
+    return (
+        f"  host sample ({label}, epoch {sampled_at:.0f}): load1/5/15={load}; runners={concurrency}\n",
+        threads,
+    )
 
 
 def _run(check: Check) -> Result:
@@ -707,7 +764,13 @@ def _run(check: Check) -> Result:
         head = run_captured(["git", "rev-parse", "HEAD"])
         if head.returncode != 0:
             return Result(check, 1, 0.0, "cannot determine this checkout's HEAD")
-    context = _host_context("before replay") if check.bosn_workflow else ""
+    context = ""
+    if check.bosn_workflow:
+        context, threads = _host_context("before replay")
+        if check.test_threads_env:
+            setting = f"{check.test_threads_env}={threads}"
+            print(f"{check.name}: {setting}", flush=True)
+            check = replace(check, argv=(*check.argv, "--env", setting))
     result = _run_plain(check)
     if not check.bosn_workflow:
         return result
@@ -729,7 +792,7 @@ def _run(check: Check) -> Result:
         1 if error else 0,
         result.seconds,
         result.output + (f"\nlocal gate: {error}\n" + context
-                         + _host_context("after failed replay")
+                         + _host_context("after failed replay")[0]
                          + _bosn_failure_details(result.output) + "\n" if error else ""),
     )
 
