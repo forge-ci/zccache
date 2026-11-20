@@ -1723,6 +1723,16 @@ native kernal foreground/sync APIs are included in UI and the full gate.
 - [ ] Validate summary, workflow guards, and local gate; review final diff.
 - [ ] Update existing PR, verify head CI, enqueue and record matching merge-group run.
 
+## #2064 daemon death investigation
+
+- [x] Read upstream issue and OBS #3613; trace reported connection diagnostics.
+- [x] Inventory current and 1.15.5 termination mechanisms without conflating versions.
+- [x] Probe three concurrent cold PCHs in repo Docker image at 2 GiB and 1 GiB; daemon death not reproduced.
+- [x] Add opt-in external foreground-daemon observer and written unproven verdict.
+- [x] Validate observer real exit/signal/deadline probes; one subscription CLI review, cancellation evidence-loss fix with RED/GREEN.
+- [ ] Rust regressions / full repository gate: clone-wide local-gate lock is held by another agent; no passing attestation claimed.
+- [ ] Push isolated branch and open an unmerged PR; retain need for real CI attribution.
+
 ## Hosted runner observer prerequisite alignment (2026-11-04)
 
 - [x] Read CLAUDE.md and compare API timestamps for all four reported runs.
