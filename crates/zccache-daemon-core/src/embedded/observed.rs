@@ -43,8 +43,10 @@ impl CompileOptions {
 }
 
 /// What the service decided and measured for one compile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileObservation {
+    /// Where the miss executed (hits make no offer).
+    pub execution: super::CompileExecution,
     /// Hit, miss, or compiler error.
     pub cache_outcome: CacheOutcome,
     /// Whether the compile's artifacts were admitted to the cache.
@@ -101,6 +103,7 @@ impl ZccacheService {
             })?;
         Ok(ObservedCompileResponse {
             response: CompileResponse {
+                execution: observation.execution.clone(),
                 exit_code,
                 stdout,
                 stderr,

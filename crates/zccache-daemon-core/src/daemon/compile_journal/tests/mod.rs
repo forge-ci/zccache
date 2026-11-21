@@ -50,6 +50,7 @@ pub(super) fn legacy_entry(
     latency_ns: u128,
 ) -> JournalEntry {
     JournalEntry {
+        execution: None,
         ts: ts.to_string(),
         outcome,
         compiler: compiler.to_string(),

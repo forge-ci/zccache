@@ -27,6 +27,10 @@ pub use control::EmbeddedEventSink;
 pub use observed::{CompileObservation, CompileOptions, ObservedCompileResponse};
 
 mod control;
+pub(crate) mod executor;
+pub use executor::{
+    CompileExecution, CompileExecutor, CompileInput, CompileJob, ExecutorFuture, ExecutorOutcome,
+};
 mod observed;
 mod reporting;
 mod termination;
@@ -58,6 +62,7 @@ pub enum EmbeddedError {
 #[derive(Clone)]
 pub struct ZccacheService {
     daemon: Arc<EmbeddedDaemon>,
+    executor: Option<Arc<executor::Registration>>,
     shutdown: Arc<AtomicBool>,
     /// Snapshot of the host-supplied cancellation token captured at startup.
     /// Compile calls race it; flush checks only whether it was already latched
@@ -297,6 +302,8 @@ pub struct CompileRequest {
 /// Compile response returned by the embedded service.
 #[derive(Debug, Clone)]
 pub struct CompileResponse {
+    /// Execution placement for this request.
+    pub execution: CompileExecution,
     pub exit_code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -738,7 +745,9 @@ impl ZccacheService {
             stdin: request.stdin,
             test_harness_admission: options.test_harness_admission,
         });
-        let outcome = self.await_compile(compile_future).await;
+        let outcome = self
+            .await_compile(executor::scope(self.executor.clone(), compile_future))
+            .await;
         // Every `compile.started` must get a `compile.finished`, including on
         // the cancel and spawn-failure paths. An audit log with dangling
         // starts cannot be used to measure anything, and those are exactly
@@ -795,11 +804,13 @@ impl ZccacheService {
         Ok(ObservedCompileResponse {
             observation: CompileObservation {
                 cache_outcome,
+                execution: response.execution.clone(),
                 admission,
                 reason,
                 logical_artifact_bytes: response.logical_artifact_bytes,
             },
             response: CompileResponse {
+                execution: response.execution,
                 exit_code: response.exit_code,
                 stdout: response.stdout.as_ref().clone(),
                 stderr: response.stderr.as_ref().clone(),
@@ -972,3 +983,7 @@ mod metadata_persist_tests;
 #[cfg(test)]
 #[path = "embedded/rustc_stream_tests.rs"]
 mod rustc_stream_tests;
+
+#[cfg(test)]
+#[path = "embedded/executor_tests.rs"]
+mod executor_tests;

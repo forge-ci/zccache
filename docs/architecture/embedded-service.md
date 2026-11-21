@@ -167,6 +167,48 @@ usable guard without a semaphore reservation. Waiters return cancellation or
 shutdown errors when the host token fires or the service shuts down, rather
 than being left behind a retiring service.
 
+### Remote compiler executor
+
+Register an `Arc<dyn CompileExecutor>` with
+`service.with_executor(executor)?` before sharing the service. Only cacheable
+single-unit misses are offered; hits, native CPU selection, final Rust links, private PCH overlays,
+probes, and uncached passthroughs
+keep their existing paths. Without registration, compilation stays local.
+
+`CompileJob` contains the compiler family, executable basename (preserving driver
+mode such as clang versus clang++), and the exact compiler identity digest
+used by the cache key, expanded effective argv (including private staging and
+depfile flags), key-relevant environment, cwd, stdin, declared output paths,
+and known input files with raw BLAKE3 digests, lengths and executable bits.
+Executors resolve a matching toolchain by identity; the local compiler binary
+and daemon environment are not part of the manifest. Paths describe client
+destinations and must be mirrored or translated by the executor.
+
+Cold units and units with changed inputs have `inputs_complete: false`: an old
+dep-info/header closure cannot prove that changed source has no new includes.
+Unavailable input metadata also makes the manifest incomplete. Such jobs should
+be declined unless the executor independently resolves all missing inputs.
+When a key-relevant environment value fails the existing journal privacy policy,
+zccache declines locally before calling the executor. The hook never sends the
+full host environment or jobserver fds.
+
+An executor's nonzero `capacity()` is captured at registration and bounds
+simultaneous offers across cloned service handles. Admission waits are bounded
+to 300 seconds, after which the offer declines locally. Executor implementations
+own transport deadlines and cancellation: dropping their future must terminate
+remote work or prevent subsequent writes to the declared local output paths.
+Remote execution acquires neither local compiler admission nor its memory and
+exclusive-access permits. `Declined { reason }` resumes normal local admission.
+
+`Executed` means outputs have been written to the declared local paths before
+returning. Success enters the existing local publication and cache store path;
+nonzero exits forward stdout/stderr and never populate even the rustc error
+cache. Declining must leave output paths untouched. Embedded responses and
+observations expose `CompileExecution`; journal rows add an optional `execution`
+object with `kind: local|remote|declined` and the decline reason. Older journal
+rows remain readable. Hits report local because no execution offer occurred.
+This metadata does not change the IPC protocol.
+
 ### Host compiler-admission policy
 
 An embedded host may call

@@ -16,6 +16,7 @@
 
 mod compile_exec;
 mod hash_verify;
+mod remote_exec;
 mod request_prep;
 mod rustc_stream;
 mod store_outcome;

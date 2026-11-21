@@ -115,6 +115,7 @@ pub(crate) struct EmbeddedCompileRequest {
 }
 
 pub(crate) struct EmbeddedCompileResult {
+    pub execution: crate::embedded::CompileExecution,
     pub(crate) exit_code: i32,
     pub(crate) stdout: Arc<Vec<u8>>,
     pub(crate) stderr: Arc<Vec<u8>>,

@@ -347,11 +347,13 @@ impl EmbeddedDaemon {
                     latency_ns,
                 );
             }
-            let entry = JournalEntry::new(journal_ctx, outcome, exit_code, latency_ns, miss_reason)
-                .with_passthrough_reason(passthrough_reason)
-                .with_context_key(context_key)
-                .with_termination_signal(termination_signal)
-                .with_child_memory(child_memory);
+            let mut entry =
+                JournalEntry::new(journal_ctx, outcome, exit_code, latency_ns, miss_reason)
+                    .with_passthrough_reason(passthrough_reason)
+                    .with_context_key(context_key)
+                    .with_termination_signal(termination_signal)
+                    .with_child_memory(child_memory);
+            entry.execution = Some(crate::embedded::executor::execution());
             self.state.journal.log(&entry, None);
         }
         match response {
@@ -371,6 +373,7 @@ impl EmbeddedDaemon {
                     &compile_id,
                 );
                 Ok(EmbeddedCompileResult {
+                    execution: crate::embedded::executor::execution(),
                     exit_code,
                     stdout,
                     stderr,

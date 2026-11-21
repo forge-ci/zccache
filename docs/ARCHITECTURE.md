@@ -26,6 +26,8 @@ failed cache-root audit retain its diagnostic JSONL evidence.
 
 ## Quick Reference
 
+- [Remote compiler executor](architecture/embedded-service.md#remote-compiler-executor)
+
 - **Shared request-key encoding** → [data-flow.md](architecture/data-flow.md#shared-request-fingerprint-encoding)
 
 - **Python caller-owned byte caching** → [runtime.md § `exec_cached`](architecture/runtime.md#python-caller-owned-exec_cached)

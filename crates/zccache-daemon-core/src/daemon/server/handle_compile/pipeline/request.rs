@@ -391,12 +391,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
 
     // ── Slow path: hash + depgraph verify ────────────────────────────
     //
-    // Issue #401 plumbing: the `hash_map` extracted here is fed back
-    // into the cc/cpp miss path's `StoreOutcomeRequest.pre_hashed` so
-    // the post-compile parallel hash skips files we already hashed
-    // here. The rustc miss path receives its ready pre-hash map from
-    // `run_compile_exec`. The binding is marked `mut` so the rustc
-    // compat-check branch below can take it by `mem::take` without a clone.
     let HashVerifyOutcome {
         mut hash_map,
         hash_source_ns,
@@ -431,11 +425,16 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         }
     };
 
-    // Issue #353: include `key_root` and `path_remap` state in the diag line so
-    // cross-runner cache-miss bisection (two GHA runners hit the same cache via
-    // actions/cache@v4 but see 0% hit rate) can diff the per-runner resolution.
-    // `path_remap=auto_no_git` exposes the silent-fallback case where
-    // `ZCCACHE_PATH_REMAP=auto` was requested but `find_git_root` returned None.
+    let executor_manifest = super::remote_exec::prepare(
+        state,
+        &context_key,
+        &ctx,
+        &compiler,
+        &effective_args,
+        client_env.as_deref(),
+        matches!(verdict, crate::depgraph::CacheVerdict::Hit { .. }),
+    );
+
     write_session_log(
         &state.sessions,
         &sid,
@@ -795,6 +794,8 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         compile_start,
         snap_clock,
         dependency_mode,
+        stdin: &stdin,
+        executor_manifest,
     })
     .await;
     let CompileExecOutcome {
@@ -862,7 +863,9 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
     if exit_code != 0 {
         state.stats.record_error();
         record_session_stat(&state.sessions, &sid, |t| t.record_error());
-        if let Some(rustc_args) = rustc_args_opt.as_ref() {
+        if let Some(rustc_args) = rustc_args_opt.as_ref().filter(|_| {
+            crate::embedded::executor::execution() != crate::embedded::CompileExecution::Remote
+        }) {
             let dylint_input_hash = client_env.as_deref().and_then(|env| {
                 env.iter().find_map(|(name, value)| {
                     (name == "ZCCACHE_DYLINT_CACHE_INPUT_HASH").then_some(value.as_str())

@@ -234,6 +234,9 @@ fn daemon_generation() -> &'static str {
 /// serialization when absent so legacy journal lines remain unchanged.
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {
+    /// Embedded executor placement; absent in older persisted rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::embedded::CompileExecution>,
     /// ISO 8601 UTC timestamp.
     pub ts: String,
     /// Outcome: "hit", "miss", "passthrough", "error", "cached_error", "link_hit", "link_miss".
@@ -386,6 +389,7 @@ impl JournalEntry {
         miss_reason: Option<&'static str>,
     ) -> Self {
         Self {
+            execution: None,
             ts: format_timestamp(SystemTime::now()),
             outcome,
             compiler: ctx.compiler,

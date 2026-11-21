@@ -1914,3 +1914,11 @@ a separate behavior decision and regression coverage.
 - [x] Adapt staged cache paths with the existing native_call_path facade before ACL operations.
 - [x] Add a portable long-path seal/query/unseal/removal regression test.
 - [ ] Validate with the pinned local gate and full Windows PR coverage.
+
+# Embedded remote executor hook
+
+- [x] Define documented executor/job/outcome and service registration.
+- [x] Offer misses before local admission, preserve local fallback/publication.
+- [x] Record execution location in embedded responses and journal.
+- [x] Cover real C/Rust jobs, cache hits, decline and failure.
+- [ ] Run affected nextest, workspace clippy, local gate; push and open PR (no merge).

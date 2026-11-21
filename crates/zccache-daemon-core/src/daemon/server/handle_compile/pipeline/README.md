@@ -7,6 +7,9 @@ parent `handle_compile.rs` need no changes.
 
 ## Layout
 
+- `remote_exec.rs` — embedded miss manifests and executor offers before local admission.
+- `compile_exec_tests.rs` — compiler preparation and admission ordering regressions.
+
 | File | Responsibility |
 |---|---|
 | `mod.rs` | `handle_compile_request` orchestrator; wires the phases together |
