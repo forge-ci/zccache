@@ -319,6 +319,7 @@ def test_clippy_hosted_matches_the_clippy_workflow(monkeypatch):
     steps = workflow["jobs"]["clippy"]["steps"]
     ownership = next(s for s in steps if s.get("name", "").startswith("Enforce compiler spawn"))
     commands = []
+    monkeypatch.setattr(lint, "cargo_command", lambda *args: ["soldr", "cargo", *args])
     monkeypatch.setattr(
         lint, "run_cmd", lambda c: commands.append(c) or SimpleNamespace(returncode=0)
     )
