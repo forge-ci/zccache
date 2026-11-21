@@ -16,6 +16,12 @@ on:
         required: false
         type: boolean
         default: true
+      # JSON runs-on value from a pool-select job (ci-linux.yml), e.g.
+      # '["self-hosted","forge-pool"]' or '"ubuntu-latest"'. Empty: `os`.
+      runner:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -32,7 +38,7 @@ jobs:
       SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     name: Check
     if: inputs.run_check
-    runs-on: ${{ inputs.os }}
+    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -80,7 +86,7 @@ jobs:
       SOLDR_S3_CACHE_ACCESS_KEY: ${{ secrets.SOLDR_S3_CACHE_ACCESS_KEY }}
       SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     name: Test
-    runs-on: ${{ inputs.os }}
+    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.os }}
     # Without this the job inherits GitHub's 360-minute default, so a hung
     # test holds a scarce macOS/Windows runner slot for six hours. Observed
     # runtime is 2-5 minutes; 45 leaves ample headroom for a cold cache.

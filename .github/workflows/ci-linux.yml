@@ -3,6 +3,11 @@ name: Linux
 on:
   # Manual full run (includes native arm64); see the `arm` job.
   workflow_dispatch:
+    inputs:
+      forge_pool:
+        description: "RUN-005 canary: use the forge pool even while FORGE_POOL_LABELS is unset"
+        type: boolean
+        default: false
   workflow_call:
 
 permissions:
@@ -61,12 +66,44 @@ jobs:
       actions: read
       contents: read
 
+  # Forge pool (forge-ci/gh-runner docs/pool.md): picks the self-hosted Dell
+  # pool for the x86 Check/Test jobs when the repo variable FORGE_POOL_LABELS
+  # is set and the pool has an idle runner, else hosted. pool-select keeps
+  # fork PRs and pull_request_target hosted (trusted-only, the default).
+  # Unset FORGE_POOL_LABELS to send every job back to hosted at once.
+  pool:
+    name: Select runner
+    # Skipped while routing is off: the job below then runs hosted.
+    if: vars.FORGE_POOL_LABELS != '' || inputs.forge_pool
+    # forge-quick through the kill switch (RUN-004).
+    runs-on: ${{ vars.FORGE_QUICK_LABELS != '' && fromJSON(vars.FORGE_QUICK_LABELS) || 'ubuntu-latest' }}
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      runs-on: ${{ steps.select.outputs.runs-on || '"ubuntu-latest"' }}
+    steps:
+      - name: Select pool or hosted
+        id: select
+        continue-on-error: true
+        uses: forge-ci/ci.yml/actions/pool-select@a36bc81ad6ada5fb17398e3e7ba38435cc67a951 # ci.yml#550, tokenless signal source
+        with:
+          # The variable is the kill switch; a manual `forge_pool` dispatch
+          # proves one real job on the pool before the variable is set.
+          labels: ${{ vars.FORGE_POOL_LABELS || (inputs.forge_pool && '["self-hosted","forge-pool"]' || '') }}
+          fallback: ubuntu-latest
+
   x86:
-    needs: cache-pre-prune
+    needs: [cache-pre-prune, pool]
+    # Runs when the selector was skipped (routing off) or failed, too: an
+    # empty runner input means hosted `os`.
+    if: ${{ !cancelled() && needs.cache-pre-prune.result == 'success' }}
     uses: ./.github/workflows/ci-check.yml
     secrets: inherit # SOLDR_S3_CACHE_* for setup-soldr's S3 build cache
     with:
       os: ubuntu-latest
+      # The pool's runs-on JSON, or "ubuntu-latest"; `os` keeps naming the
+      # lane (cache keys and Linux-only steps read it).
+      runner: ${{ needs.pool.outputs.runs-on }}
 
   arm:
     needs: cache-pre-prune
