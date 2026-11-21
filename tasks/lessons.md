@@ -466,3 +466,9 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Test the header-edit contract with empty defaults: explicit `-isystem` and environment roots still need dependency hashes.
 - Daemon-core isolated unit tests require `--features test-support`; mtime fixtures use the platform `FileTime` conversion.
 - Inline pipeline tests also obey the host-platform boundary lint: use runtime `platform::host::is_windows()` and the product discovery API, rather than native cfg/imports.
+
+## Remote executor boundaries
+
+- A previously learned dependency closure is incomplete after input changes; do not advertise it as exhaustive.
+- Remote nonzero exits must bypass the rustc diagnostic cache as well as the successful artifact store.
+- Keep miss execution before local admission, and carry placement through task-local request context instead of changing IPC messages.

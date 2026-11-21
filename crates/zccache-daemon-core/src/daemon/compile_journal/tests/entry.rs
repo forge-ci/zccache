@@ -335,6 +335,7 @@ fn tree_peak_rss_serializes_with_its_sampled_source() {
 #[test]
 fn serializes_extended_fields_when_present() {
     let entry = JournalEntry {
+        execution: None,
         ts: "2026-03-17T10:30:00.123Z".to_string(),
         outcome: "miss",
         compiler: "/usr/bin/rustc".to_string(),

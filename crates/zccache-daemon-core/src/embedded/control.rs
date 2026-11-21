@@ -121,6 +121,7 @@ impl ZccacheService {
             .map(Arc::new);
         Ok(Self {
             daemon: Arc::new(daemon),
+            executor: None,
             shutdown: Arc::new(AtomicBool::new(false)),
             host_cancellation: config.cancellation,
             force_cancellation: CancellationSource::new(),

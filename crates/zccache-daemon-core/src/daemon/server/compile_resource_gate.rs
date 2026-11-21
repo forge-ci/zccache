@@ -123,8 +123,14 @@ pub(super) struct CompileResourceGate {
 }
 
 pub(super) enum CompileResourcePermit {
-    Shared { _guard: ReadPermit },
-    Exclusive { _guard: WritePermit },
+    /// Remote execution owns no local resource admission.
+    Remote,
+    Shared {
+        _guard: ReadPermit,
+    },
+    Exclusive {
+        _guard: WritePermit,
+    },
 }
 
 /// Owns both layers of compiler admission in their canonical lock order.
@@ -221,7 +227,7 @@ fn is_known_rust_amalgamation(args: &[String]) -> bool {
         && rust_crate_types_are_non_linking(args)
 }
 
-fn rust_crate_types_are_non_linking(args: &[String]) -> bool {
+pub(super) fn rust_crate_types_are_non_linking(args: &[String]) -> bool {
     if args.iter().any(|arg| arg == "--test") {
         return false;
     }

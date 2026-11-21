@@ -7,6 +7,8 @@
 use super::super::super::*;
 
 pub(super) struct CompileExecRequest<'a> {
+    pub(super) stdin: &'a [u8],
+    pub(super) executor_manifest: Option<super::remote_exec::Manifest>,
     pub(super) state_arc: &'a Arc<SharedState>,
     pub(super) compiler: &'a NormalizedPath,
     pub(super) effective_args: &'a [String],
@@ -69,7 +71,11 @@ impl Drop for PrivateHeaderTrace {
 /// admission. Exclusive compiles finish that work before spawning the compiler
 /// (issue #1555). Both paths return the ready map in `pre_hashed`.
 pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExecResult {
+    let mut req = req;
+    let executor_manifest = req.executor_manifest.take();
     let CompileExecRequest {
+        stdin: _,
+        executor_manifest: _,
         state_arc,
         compiler,
         effective_args,
@@ -287,6 +293,41 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         }
     }
     let break_outputs_ns = t_break_outputs.elapsed().as_nanos() as u64;
+
+    if let Some(crate::embedded::ExecutorOutcome::Executed {
+        exit_code,
+        stdout,
+        stderr,
+    }) = super::remote_exec::offer(
+        executor_manifest,
+        &req,
+        rsp_args,
+        &output_paths,
+        &depfile_strategy,
+        private_header_trace.as_ref().map(|t| &t.path),
+    )
+    .await
+    {
+        let (stdout, dependency_scan, stderr) = remote_output(
+            stdout,
+            stderr,
+            &depfile_strategy,
+            injected_show_includes,
+            stderr_header_trace,
+            private_header_trace.as_ref(),
+            &req,
+        );
+        let elapsed = t_exec.elapsed().as_nanos() as u64;
+        return remote_outcome(
+            exit_code,
+            stdout,
+            stderr,
+            dependency_scan,
+            depfile_strategy,
+            staged_plan,
+            (pre_exec_ns, break_outputs_ns, elapsed),
+        );
+    }
 
     let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
         compiler.as_path(),
@@ -776,225 +817,73 @@ fn should_inject_header_trace_for_source(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        finish_pre_hash, header_trace_is_supported, prepare_private_clang_header_trace,
-        schedule_pre_hash, should_inject_header_trace, should_inject_header_trace_for_source,
-        use_full_clang_depfile_for_cpp, use_private_clang_header_trace,
-    };
-    use crate::compiler::CompilerFamily;
-    use crate::daemon::server::dependency_policy::DependencyDiscoveryMode;
-    use crate::depgraph::UserDepFlags;
+#[path = "compile_exec_tests.rs"]
+mod tests;
 
-    fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[tokio::test]
-    async fn exclusive_pre_hash_finishes_before_the_compiler_phase() {
-        let (task, ready) = schedule_pre_hash(true, || 42_u32).await;
-
-        assert!(
-            task.is_none(),
-            "exclusive hashing must not overlap the compiler"
-        );
-        assert_eq!(ready, Some(42));
-    }
-
-    #[tokio::test]
-    async fn shared_pre_hash_retains_compiler_overlap() {
-        let (task, ready) = schedule_pre_hash(false, || 42_u32).await;
-
-        assert!(
-            ready.is_none(),
-            "shared hashing must stay on the overlap path"
-        );
-        assert_eq!(finish_pre_hash(task, ready).await, Some(42));
-    }
-
-    #[test]
-    fn header_trace_is_limited_to_unmodified_gnu_diagnostic_streams() {
-        assert!(header_trace_is_supported(
-            CompilerFamily::Clang,
-            &args(&["-c", "main.c", "-Iinclude"]),
-        ));
-        assert!(header_trace_is_supported(
-            CompilerFamily::Gcc,
-            &args(&["-c", "main.cc"]),
-        ));
-        assert!(!header_trace_is_supported(
-            CompilerFamily::Msvc,
-            &args(&["/c", "main.c"]),
-        ));
-        for incompatible in [
-            "-H",
-            "-Wp,-H",
-            "-Wp,-DTRACE,-H,-UOLD",
-            "-Xpreprocessor=-H",
-            "-Xclang=-H",
-            "-fshow-skipped-includes",
-            "-header-include-file",
-            "-sys-header-deps",
-            "-Xclang=-header-include-file",
-            "-Xclang=-sys-header-deps",
-            "-dependency-dot",
-            "-Xclang=-dependency-dot",
-            "-Wp,-dependency-dot,custom.dot",
-            "-Wp,-header-include-file,custom.headers,-sys-header-deps",
-            "-fdiagnostics-format=json",
-        ] {
-            assert!(!header_trace_is_supported(
-                CompilerFamily::Clang,
-                &args(&["-c", "main.c", incompatible]),
-            ));
-        }
-        assert!(!header_trace_is_supported(
-            CompilerFamily::Gcc,
-            &args(&["-c", "main.c", "-Xpreprocessor", "-H"]),
-        ));
-    }
-
-    #[test]
-    fn user_depfiles_never_enable_private_header_trace() {
-        let compile_args = args(&["-c", "main.c"]);
-        assert!(should_inject_header_trace(
-            DependencyDiscoveryMode::AllHeaders,
-            CompilerFamily::Clang,
-            &compile_args,
-            &UserDepFlags::default(),
-        ));
-        for dep_flags in [
-            UserDepFlags {
-                has_md: true,
-                has_mmd: true,
-                ..Default::default()
-            },
-            UserDepFlags {
-                has_md: true,
-                has_mmd: true,
-                mf_path: Some("custom.d".into()),
-                ..Default::default()
-            },
-            UserDepFlags {
-                depfile_to_stdout: true,
-                ..Default::default()
-            },
-        ] {
-            assert!(!should_inject_header_trace(
-                DependencyDiscoveryMode::AllHeaders,
-                CompilerFamily::Clang,
-                &compile_args,
-                &dep_flags,
-            ));
-        }
-    }
-
-    #[test]
-    fn private_clang_trace_is_bounded_to_plain_c_translation_units() {
-        assert!(use_private_clang_header_trace(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.c"),
-            &args(&["-c", "main.c"]),
-        ));
-        assert!(!use_private_clang_header_trace(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.cpp"),
-            &args(&["-c", "main.cpp"]),
-        ));
-        assert!(!use_private_clang_header_trace(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.C"),
-            &args(&["-c", "main.C"]),
-        ));
-        assert!(!use_private_clang_header_trace(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.cxx"),
-            &args(&["-c", "main.cxx"]),
-        ));
-        assert!(!use_private_clang_header_trace(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.c"),
-            &args(&["-x", "c++", "-c", "main.c"]),
-        ));
-        assert!(!use_private_clang_header_trace(
-            CompilerFamily::Gcc,
-            std::path::Path::new("main.c"),
-            &args(&["-c", "main.c"]),
-        ));
-        for incompatible in [
-            "-Xclang=-header-include-file",
-            "-Xclang=-sys-header-deps",
-            "-Xclang=-dependency-dot",
-            "-Wp,-dependency-dot,custom.dot",
-            "-Wp,-header-include-file,custom.headers,-sys-header-deps",
-            "--sysroot=/sdk",
-            "-isysroot/sdk",
-            "-Xclang=-isysroot",
-            "-Xclang=-isysroot=/sdk",
-            "-Xclang=--sysroot",
-            "-Xclang=--sysroot=/sdk",
-            "-Wp,-isysroot,/sdk",
-            "-Wp,--sysroot,/sdk",
-        ] {
-            assert!(!use_private_clang_header_trace(
-                CompilerFamily::Clang,
-                std::path::Path::new("main.c"),
-                &args(&["-c", "main.c", incompatible]),
-            ));
-        }
-    }
-
-    #[test]
-    fn plain_clang_cpp_uses_exact_full_depfile_without_header_trace() {
-        let dep_flags = UserDepFlags::default();
-        for source in ["main.cc", "main.cpp", "main.cxx", "main.c++", "main.C"] {
-            assert!(use_full_clang_depfile_for_cpp(
-                CompilerFamily::Clang,
-                std::path::Path::new(source),
-            ));
-            assert!(!should_inject_header_trace_for_source(
-                DependencyDiscoveryMode::AllHeaders,
-                CompilerFamily::Clang,
-                std::path::Path::new(source),
-                &args(&["-c", source]),
-                &dep_flags,
-            ));
-        }
-        assert!(!use_full_clang_depfile_for_cpp(
-            CompilerFamily::Clang,
-            std::path::Path::new("main.c"),
-        ));
-        assert!(should_inject_header_trace_for_source(
-            DependencyDiscoveryMode::AllHeaders,
-            CompilerFamily::Clang,
-            std::path::Path::new("main.c"),
-            &args(&["-c", "main.c"]),
-            &dep_flags,
-        ));
-        assert!(!use_full_clang_depfile_for_cpp(
-            CompilerFamily::Gcc,
-            std::path::Path::new("main.cpp"),
-        ));
-    }
-
-    #[test]
-    fn private_clang_trace_does_not_duplicate_the_header_graph_in_mmd() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let depfile = temp.path().join("main.d");
-        let mut extra_args = args(&["-MMD", "-MF", depfile.to_str().unwrap()]);
-        let mut strategy = crate::depgraph::DepfileStrategy::InjectedMmd {
-            path: depfile.into(),
-        };
-
-        let trace = prepare_private_clang_header_trace(&mut extra_args, &mut strategy);
-
-        assert_eq!(strategy, crate::depgraph::DepfileStrategy::CompilerTrace);
-        assert!(!extra_args.iter().any(|arg| arg == "-MMD" || arg == "-MF"));
-        assert!(extra_args.iter().any(|arg| arg == "-dependency-dot"));
-        assert!(!extra_args.iter().any(|arg| arg == "-sys-header-deps"));
-        assert_eq!(
-            trace.path.extension(),
-            Some(std::ffi::OsStr::new("headers"))
+fn remote_output(
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    strategy: &DepfileStrategy,
+    injected: bool,
+    header_trace: bool,
+    private: Option<&PrivateHeaderTrace>,
+    req: &CompileExecRequest<'_>,
+) -> (Vec<u8>, Option<crate::depgraph::ScanResult>, Vec<u8>) {
+    let (source, cwd) = (req.source_path, req.cwd_path);
+    if let Some(trace) = private {
+        return (
+            stdout,
+            Some(crate::depgraph::header_trace::parse_dependency_graph_file(
+                trace.path.as_path(),
+                source,
+                cwd,
+            )),
+            stderr,
         );
     }
+    if *strategy == DepfileStrategy::ShowIncludes {
+        let (scan, filtered) =
+            crate::depgraph::show_includes::parse_show_includes(&stdout, source, cwd);
+        return (if injected { filtered } else { stdout }, Some(scan), stderr);
+    }
+    if header_trace {
+        let (scan, filtered) =
+            crate::depgraph::header_trace::parse_header_trace(&stderr, source, cwd);
+        return (stdout, Some(scan), filtered);
+    }
+    (stdout, None, stderr)
+}
+
+fn remote_outcome(
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    dependency_scan: Option<crate::depgraph::ScanResult>,
+    depfile_strategy: DepfileStrategy,
+    staged_plan: Option<StagedCompilePlan>,
+    timings: (u64, u64, u64),
+) -> CompileExecResult {
+    let (pre_exec_ns, break_outputs_ns, elapsed) = timings;
+    CompileExecResult::Ok(CompileExecOutcome {
+        exit_code,
+        stdout: Arc::new(stdout),
+        stderr: Arc::new(stderr),
+        depfile_strategy,
+        dependency_scan,
+        pre_hashed: None,
+        compiler_priority_decision: crate::daemon::process::CompilePriorityDecision {
+            requested: CompilePriority::Normal,
+            effective: CompilePriority::Normal,
+            cpu_usage_percent: None,
+        },
+        pre_exec_ns,
+        break_outputs_ns,
+        compiler_process_ns: elapsed,
+        compiler_exec_ns: elapsed,
+        compiler_prep_ns: 0,
+        post_exec_ns: 0,
+        staged_plan,
+        resource_admission:
+            crate::daemon::server::compile_resource_gate::CompileResourcePermit::Remote,
+    })
 }

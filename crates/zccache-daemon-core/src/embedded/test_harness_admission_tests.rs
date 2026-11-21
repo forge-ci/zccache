@@ -209,9 +209,9 @@ async fn request_scoped_admission_alternates_on_one_running_service() {
 
     // all: miss, then the identical request hits with the same byte total.
     let miss = observe(&service, workspace.harness(&[], &[]), ALL).await;
-    assert_observed(miss, CacheOutcome::Miss, Admitted, RustcTestHarness);
+    assert_observed(miss.clone(), CacheOutcome::Miss, Admitted, RustcTestHarness);
     let hit = observe(&service, workspace.harness(&[], &[]), ALL).await;
-    assert_observed(hit, CacheOutcome::Hit, Admitted, RustcTestHarness);
+    assert_observed(hit.clone(), CacheOutcome::Hit, Admitted, RustcTestHarness);
     assert_eq!(hit.logical_artifact_bytes, miss.logical_artifact_bytes);
 
     // shared-only again: the stored harness is neither served nor restored.

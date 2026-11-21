@@ -56,6 +56,7 @@ mod tests {
 
     fn response(exit_code: i32) -> EmbeddedCompileResult {
         EmbeddedCompileResult {
+            execution: crate::embedded::CompileExecution::Local,
             child_memory: crate::daemon::compile_journal::ChildMemory::default(),
             exit_code,
             stdout: Arc::new(Vec::new()),
