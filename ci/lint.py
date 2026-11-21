@@ -486,6 +486,12 @@ def lint_dylint_libraries() -> int:
             return result.returncode
     env = dylint_tool_env()
     env.pop("SOLDR_DYLINT_TOOLCHAIN", None)
+    # dylint_testing looks the driver up by the bare nightly name under
+    # DYLINT_DRIVER_PATH and otherwise builds dylint_driver from a git
+    # checkout. `soldr dylint prepare` fills this lane-owned root.
+    drivers = SCRIPT_DIR / "target" / "dylint-drivers"
+    drivers.mkdir(parents=True, exist_ok=True)
+    env["DYLINT_DRIVER_PATH"] = str(drivers)
     prepare = subprocess.run(
         ["soldr", "dylint", "prepare"],
         text=True,
