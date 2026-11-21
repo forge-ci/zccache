@@ -50,10 +50,6 @@ cmd = "bash /work/ci/docker/profile/run_bosn_profile.sh massif"
 stack = "perf"
 cmd = "bash /work/ci/docker/profile/run_bosn_profile.sh all"
 
-[task.lint]
-stack = "perf"
-cmd = "bash /work/ci/docker/profile/run_bosn_check.sh lint"
-
 [task.test]
 stack = "perf"
 cmd = "bash /work/ci/docker/profile/run_bosn_check.sh test"
@@ -118,9 +114,11 @@ stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache --features test-support --test cache_rust library_search --locked -- --test-threads=1"
 
 # Focused backend transport checks use the existing isolated gate stack.
+# Lint never runs under bosn: Clippy for these crates runs on the host via
+# `soldr lint` (local-gate.toml lane `rust-lint`).
 [task.compiler-snapshot-test]
 stack = "gate"
-cmd = "soldr toolchain ensure --json && soldr rustup component add clippy && ZCCACHE_LEGACY_PATH_VALIDATE=1 CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cache_root_writer_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features cli --lib compiler_snapshot --locked && CARGO_TARGET_DIR=/target soldr cargo clippy -p zccache-artifact -p zccache-core --all-targets --locked -- -D warnings && CARGO_TARGET_DIR=/target soldr cargo clippy -p zccache-cli-core --features cli --all-targets --locked -- -D warnings"
+cmd = "soldr toolchain ensure --json && ZCCACHE_LEGACY_PATH_VALIDATE=1 CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib cache_root_writer_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features cli --lib compiler_snapshot --locked"
 
 # Bounded synchronization regressions, isolated from the developer daemon.
 [task.bounded-sync-test]
@@ -206,52 +204,6 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.staged-sweep-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib sweep_tests --locked"
-
-# Reuse the gate's owned volumes for the compiler-fixture feedback loop. The
-# Cargo shim mirrors CI: even the Dylint driver's nested builds go through soldr.
-[task.staged-clear-transfer-ui]
-stack = "gate"
-cmd = '''
-set -eu
-task_prepare=$(env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1)
-printf '%s\n' "$task_prepare"
-task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: tool bin dir //p' | paste -sd: -)
-mkdir -p /target/dylint-ui-shim
-printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
-chmod +x /target/dylint-ui-shim/cargo
-export PATH="/target/dylint-ui-shim:/home/gate/.soldr/bin:$task_tools:$PATH"
-export RUSTUP_TOOLCHAIN=nightly-2026-08-15
-export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
-export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
-export CARGO_TARGET_DIR=/target/dylint-ui
-export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
-soldr rustup run nightly-2026-08-15 cargo test --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --lib
-'''
-
-[task.staged-cleanup-product-dylint]
-stack = "gate"
-cmd = '''
-set -eu
-task_prepare=$(env -u RUSTUP_TOOLCHAIN SOLDR_DYLINT_TOOLCHAIN=nightly-2026-08-15 soldr dylint prepare 2>&1)
-printf '%s\n' "$task_prepare"
-task_tools=$(printf '%s\n' "$task_prepare" | sed -n 's/^soldr: dylint prepare: tool bin dir //p' | paste -sd: -)
-mkdir -p /target/dylint-ui-shim
-printf '#!/usr/bin/env bash\nunset IN_SOLDR_PID\nexport RUSTUP_TOOLCHAIN=nightly-2026-08-15\nexec soldr rustup run nightly-2026-08-15 cargo "$@"\n' > /target/dylint-ui-shim/cargo
-chmod +x /target/dylint-ui-shim/cargo
-export PATH="/target/dylint-ui-shim:/home/gate/.soldr/bin:$task_tools:$PATH"
-export RUSTUP_TOOLCHAIN=nightly-2026-08-15
-export RUSTC=$(soldr rustup which --toolchain nightly-2026-08-15 rustc)
-export PATH="/target/dylint-ui-shim:$(dirname "$RUSTC"):$PATH"
-export CARGO_TARGET_DIR=/target/dylint-ui
-export DYLINT_DRIVER_PATH=/home/gate/.soldr/dylint/drivers
-unset RUSTUP_TOOLCHAIN RUSTC
-set +e
-: > /target/1964-effects-trace.log
-SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS=1 ZCCACHE_DYLINT_EXPLAIN=1 ZCCACHE_DYLINT_EXPLAIN_TRACE=/target/1964-effects-trace.log SOLDR_VERDICTS=off soldr dylint --lib ban_sweep_under_exclusion -- -p zccache-daemon-core --lib
-task_status=$?
-head -n 100 /target/1964-effects-trace.log
-exit "$task_status"
-'''
 
 [task.clear-index-detach-test]
 stack = "gate"

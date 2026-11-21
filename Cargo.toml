@@ -121,6 +121,22 @@ zccache-fingerprint = { path = "crates/zccache-fingerprint" }
 [workspace.metadata.dylint]
 libraries = [{ path = "dylints/*" }]
 
+# `soldr lint` is the one local linter, and it runs on the host: lint never
+# runs under bosn (local-gate.toml lane `rust-lint`). The built-in steps run
+# fmt, workspace Clippy and the host Dylint pass over `dylints/*` (above);
+# the extras cover the rest of ci.yml's `dylint`/`dylint-product` jobs and
+# clippy.yml's `clippy` job. ci/check_dylint_wiring.py keeps this in step.
+[workspace.metadata.soldr.lint]
+steps = ["fmt", "clippy", "dylint"]
+extra = [
+    ["uv", "run", "--no-project", "python", "ci/check_dylint_wiring.py"],
+    ["uv", "run", "--no-project", "python", "-m", "ci.lint", "--clippy-hosted"],
+    ["uv", "run", "--no-project", "python", "-m", "ci.lint", "--dylint-libraries"],
+    ["uv", "run", "--no-project", "python", "-m", "ci.lint", "--dylint-only", "--pass", "cross"],
+    ["uv", "run", "--no-project", "python", "-m", "ci.lint", "--dylint-only", "--pass", "product"],
+    ["uv", "run", "--no-project", "python", "-m", "ci.lint", "--dylint-fixture"],
+]
+
 # The workspace MSRV tracks rust-toolchain.toml. Lint configuration is also
 # enforced via CI clippy flags.
 #

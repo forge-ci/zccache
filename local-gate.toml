@@ -62,7 +62,9 @@ weight = "light"
 # The October 21 audit found 438 excluded-but-read paths under the original
 # broad exclusions, so this lane keeps all inputs rather than reuse stale tests.
 
-# Replay MSRV (workspace check plus the nested Dylint test) through Bosn Actions.
+# Replay MSRV (workspace check plus its ignored cache regression tests,
+# including the nested Dylint *cache* test) through Bosn Actions. It runs no
+# lint: Clippy and Dylint live in the host `rust-lint` lane.
 [gate.lanes.check]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "check"]
 tools = ["bosn"]
@@ -77,16 +79,13 @@ tools = ["soldr"]
 # what kept it at 0% reuse.
 exclude = ["docs/**", ".github/**"]
 
-# The Dylint job, replayed in bosn: the longest job on a PR and, until this
-# lane existed, unskippable even for a fully attested head.
-[gate.lanes.dylint]
-run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "dylint"]
-tools = ["bosn"]
-
-# The workspace Clippy job with the hosted feature selection.
-[gate.lanes.clippy]
-run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "clippy"]
-tools = ["bosn"]
+# Lint never runs under bosn. `soldr lint rust --check` on the host runs
+# fmt, Clippy, the host Dylint pass and Cargo.toml's
+# [workspace.metadata.soldr.lint] extras, which together cover ci.yml's
+# `dylint` and `dylint-product` jobs and clippy.yml's `clippy` job.
+[gate.lanes.rust-lint]
+run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "rust-lint"]
+tools = ["soldr", "uv"]
 
 # The Linux caller's default-feature lib/bin tests.
 # Keep the two test replays serial with each other and let Bosn's runner
@@ -115,7 +114,7 @@ group = "tests"
 [gate.trust]
 mode = "enforce"
 skip = ["ci.yml:fmt", "ci.yml:docs", "ci.yml:msrv", "ci.yml:dylint", "ci.yml:dylint-product", "ci.yml:clippy", "ci.yml:linux", "integration.yml:integration"]
-covered-by = { "ci.yml:docs" = ["docs"], "ci.yml:msrv" = ["check", "tests"], "ci.yml:dylint" = ["dylint"], "ci.yml:dylint-product" = ["dylint"], "ci.yml:clippy" = ["clippy"], "ci.yml:linux" = ["check", "unit-tests"], "integration.yml:integration" = ["tests"] }
+covered-by = { "ci.yml:docs" = ["docs"], "ci.yml:msrv" = ["check", "tests"], "ci.yml:dylint" = ["rust-lint"], "ci.yml:dylint-product" = ["rust-lint"], "ci.yml:clippy" = ["rust-lint"], "ci.yml:linux" = ["check", "unit-tests"], "integration.yml:integration" = ["tests"] }
 # What the isolated lane runs and how it is isolated, plus the scripts only
 # the skipped Integration job runs (its CI-only telemetry audit can only be
 # validated remotely).
