@@ -76,6 +76,8 @@ Runs `ci/local_gate.py` (lanes in `local-gate.toml`) on a clean committed
 feature branch, stamps and verifies HEAD, pushes with a lease, and opens a PR.
 Use `./push --prove-only` to stop after verification or `./push --no-pr` to
 push without opening a PR. Bosn replays the Rust test workflows in isolation.
+Lint never runs under bosn: the `rust-lint` lane runs `soldr lint rust --check`
+on the host (Cargo.toml `[workspace.metadata.soldr.lint]`).
 CI's `ci-mode` job can credit the proofs for Formatting, Documentation, MSRV,
 Clippy, both Dylint jobs, and Linux checks and unit tests on PRs and in the
 merge queue. Main pushes run those jobs in full. Add Formatting checks to the
