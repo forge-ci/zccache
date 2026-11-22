@@ -1951,3 +1951,11 @@ a separate behavior decision and regression coverage.
 - [ ] Notify dist workers, land PR, coordinate 1.15.18 after 1.15.17.
 
 Review: fixed journal writer race with a bounded wait; retained the 1000-line request module limit. Isolated daemon-core tests require `--features test-support`. Hosted Clippy/MSRV/docs passed on the prior API-identical head; new regression covers both cold and discovered custom env-deps.
+
+# Release 1.15.18 — complete executor request environment
+
+- [x] Confirm main contains #2234 / c8817eb7: exec_env, request_args, private
+  environment protection and the known-env-dep executor-offer refusal fix.
+- [x] Refresh the workspace lockfile and run narrow release metadata checks.
+- [ ] Publish through full remote CI and the merge queue; verify crates.io,
+  GitHub and all six PyPI wheels plus the tested source archive at 1.15.18.
