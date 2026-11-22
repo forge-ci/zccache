@@ -93,6 +93,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+      - name: Ensure Clang is available for native test fixtures
+        if: startsWith(inputs.os, 'ubuntu')
+        shell: bash
+        run: |
+          if ! command -v clang >/dev/null || ! command -v clang++ >/dev/null; then
+            apt=(apt-get)
+            if [[ "$EUID" != 0 ]]; then apt=(sudo apt-get); fi
+            "${apt[@]}" update
+            "${apt[@]}" install -y clang
+          fi
+          clang --version
+          clang++ --version
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       # pyo3-build-config's build script registers `rerun-if-env-changed=PATH`
