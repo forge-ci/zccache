@@ -257,17 +257,7 @@ fn remote_result_is_stored_and_hit_makes_no_offer() {
         );
         let log_dir = crate::core::config::log_dir_from_cache_dir(&root);
         let journal_path = log_dir.as_path().join("compile_journal.jsonl");
-        let journal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let text = std::fs::read_to_string(&journal_path).unwrap_or_default();
-                if text.lines().count() >= 2 && text.ends_with('\n') {
-                    break text;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .expect("two complete journal rows");
+        let journal = wait_for_journal(&journal_path, 2).await;
         assert!(hit.cached, "response={hit:?}; journal={journal}");
         assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
         assert_eq!(hit.execution, CompileExecution::Local);
@@ -587,8 +577,7 @@ fn execution_environment_is_private_and_does_not_change_keys() {
                 &temp.path().join("cache").into(),
             );
             let logs = crate::core::config::log_dir_from_cache_dir(&root);
-            let journal =
-                std::fs::read_to_string(logs.as_path().join("compile_journal.jsonl")).unwrap();
+            let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
             assert!(!journal.contains(sentinel));
             let rows: Vec<serde_json::Value> = journal
                 .lines()
@@ -599,4 +588,18 @@ fn execution_environment_is_private_and_does_not_change_keys() {
             assert_eq!(rows[0]["context_key"], rows[1]["context_key"]);
         }
     });
+}
+
+async fn wait_for_journal(path: &Path, rows: usize) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            if text.lines().count() >= rows && text.ends_with('\n') {
+                break text;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("complete journal rows")
 }

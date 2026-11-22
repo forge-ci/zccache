@@ -136,7 +136,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         Err(response) => return response,
     };
 
-    // ── Phase: build context + register ──────────────────────────────
     wait_for_startup_depgraph_load(state, &sid).await;
 
     record_native_cpu_family(&build_result);
@@ -776,7 +775,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         view.append_args(&mut execution_args);
     }
 
-    // ── Phase: compiler exec ────────────────────────────────────────
     let exec_result = run_compile_exec(CompileExecRequest {
         state_arc,
         compiler: &compiler,
