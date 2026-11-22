@@ -18,7 +18,8 @@ pub(super) struct Verification {
 }
 
 struct Snapshot {
-    _root: tempfile::TempDir,
+    root: NormalizedPath,
+    retirer: crate::daemon::server::PrivateRootRetirer,
     files: Vec<(NormalizedPath, Option<NormalizedPath>)>,
 }
 
@@ -27,6 +28,7 @@ impl Snapshot {
         root: &Path,
         outputs: &[NormalizedPath],
         cleanup: &[NormalizedPath],
+        retirer: crate::daemon::server::PrivateRootRetirer,
     ) -> io::Result<Self> {
         let root = tempfile::Builder::new()
             .prefix("executor-verification-")
@@ -47,7 +49,11 @@ impl Snapshot {
         }
         // Never let a file left by the remote compile masquerade as local output.
         clear_outputs(cleanup)?;
-        Ok(Self { _root: root, files })
+        Ok(Self {
+            root: root.keep().into(),
+            retirer,
+            files,
+        })
     }
 
     fn matches(&self) -> io::Result<bool> {
@@ -64,6 +70,13 @@ impl Snapshot {
             }
         }
         Ok(true)
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        // Retirement only sends a message, including on cancellation/admission errors.
+        self.retirer.retire(self.root.as_path());
     }
 }
 
@@ -105,11 +118,15 @@ fn io_fault(detail: impl std::fmt::Display) -> ExecutorFault {
 
 async fn terminal(executor: &Registration, job: &CompileJob, mut fault: ExecutorFault) -> Offer {
     let paths = job.outputs.clone();
-    let cleanup = kernal_api::async_engine::launch_blocking(move || clear_outputs(&paths)).await;
-    if !matches!(cleanup, Ok(Ok(()))) {
-        fault
-            .detail
-            .push_str("; failed to remove partial remote outputs");
+    let cleanup = kernal_api::async_engine::launch_blocking(move || clear_outputs(&paths))
+        .await
+        .map_err(io_fault)
+        .and_then(|result| result.map_err(io_fault));
+    if let Err(error) = cleanup {
+        fault.detail.push_str(&format!(
+            "; partial-output cleanup failed: {}",
+            error.detail
+        ));
     }
     executor.report_fault(job, &fault);
     Offer::Outcome(ExecutorOutcome::Faulted {
@@ -123,7 +140,7 @@ pub(super) async fn complete_offer(
     job: CompileJob,
     outcome: ExecutorOutcome,
     outputs: &[NormalizedPath],
-    root: &Path,
+    state: &SharedState,
 ) -> Offer {
     match outcome {
         ExecutorOutcome::Faulted { kind, detail } => {
@@ -139,9 +156,17 @@ pub(super) async fn complete_offer(
                 Ok(true) => {
                     let paths = outputs.to_vec();
                     let cleanup = job.outputs.clone();
-                    let root: NormalizedPath = root.into();
+                    let Some(retirer) = state.staging.retirer() else {
+                        return terminal(
+                            &executor,
+                            &job,
+                            io_fault("verification cleanup owner unavailable"),
+                        )
+                        .await;
+                    };
+                    let root = state.depfile_tmpdir.clone();
                     let snapshot = kernal_api::async_engine::launch_blocking(move || {
-                        Snapshot::capture(root.as_path(), &paths, &cleanup)
+                        Snapshot::capture(root.as_path(), &paths, &cleanup, retirer)
                     })
                     .await;
                     return match snapshot {
@@ -224,13 +249,16 @@ pub(super) async fn uncached_fault_result(
             }
         })
         .await;
-        match materialized {
-            Ok(Ok(())) => {}
-            error => {
-                return Some(Response::Error {
-                    message: format!("failed to materialize trusted local outputs: {error:?}"),
-                })
-            }
+        if let Err(error) = materialized
+            .map_err(io_fault)
+            .and_then(|result| result.map_err(io_fault))
+        {
+            return Some(Response::Error {
+                message: format!(
+                    "failed to materialize trusted local outputs: {}",
+                    error.detail
+                ),
+            });
         }
     }
     Some(Response::CompileResult {

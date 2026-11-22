@@ -171,7 +171,7 @@ pub(super) async fn offer(
             job,
             outcome,
             verification_outputs,
-            req.state_arc.depfile_tmpdir.as_path(),
+            req.state_arc,
         )
         .await,
     )

@@ -1966,3 +1966,5 @@ Review: fixed journal writer race with a bounded wait; retained the 1000-line re
 - [x] Add deterministic sampling, normal admitted local reference, and terminal infrastructure faults.
 - [x] GREEN: isolated Bosn job 130: all 30 executor/key-env tests passed, including admission, matching outputs, journal faults and default-off behavior.
 - [ ] Review, ci-full PR, merge queue, release-worker handoff for 1.15.19.
+
+Review: private snapshots now retire through the existing staging sweeper on every drop, including cancellation/admission rejection. Narrow host Clippy passed; final cleanup change is being rechecked with the same isolated target suite.
