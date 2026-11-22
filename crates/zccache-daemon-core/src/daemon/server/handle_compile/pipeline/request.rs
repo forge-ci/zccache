@@ -31,6 +31,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         client_env,
         stdin,
     } = req;
+    let executor_request = super::remote_exec::capture(args, client_env.as_deref());
     let state = state_arc;
     let compile_start = std::time::Instant::now();
     let ParsedRequestArguments {
@@ -135,7 +136,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         Err(response) => return response,
     };
 
-    // ── Phase: build context + register ──────────────────────────────
     wait_for_startup_depgraph_load(state, &sid).await;
 
     record_native_cpu_family(&build_result);
@@ -433,6 +433,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         &effective_args,
         client_env.as_deref(),
         matches!(verdict, crate::depgraph::CacheVerdict::Hit { .. }),
+        executor_request,
     );
 
     write_session_log(
@@ -774,7 +775,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         view.append_args(&mut execution_args);
     }
 
-    // ── Phase: compiler exec ────────────────────────────────────────
     let exec_result = run_compile_exec(CompileExecRequest {
         state_arc,
         compiler: &compiler,

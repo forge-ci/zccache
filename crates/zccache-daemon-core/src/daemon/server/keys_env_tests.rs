@@ -216,3 +216,54 @@ fn request_fingerprint_cargo_keying_follows_the_compiler() {
     let so: Vec<String> = ["-shared", "-o", "libx.so"].map(String::from).into();
     assert!(fingerprint_vars(Some(&e), "clang", &so).is_empty());
 }
+
+/// Freeze the pre-exec_env byte encoding for representative Rust and C requests.
+#[test]
+fn execution_environment_preserves_preexisting_key_bytes() {
+    use std::path::Path;
+    let request_env = env(&[
+        ("CARGO_MANIFEST_DIR", "/private/cargo"),
+        ("OUT_DIR", "/private/out"),
+        ("COLD_CUSTOM_INPUT", "private"),
+    ]);
+    for (compiler, args, expected) in [
+        (
+            "rustc",
+            vec!["--crate-name=unit", "--emit=link,dep-info", "unit.rs"],
+            b"zccache-request-v2\0rustc\0--crate-name=unit\0--emit=link,dep-info\0unit.rs\0work\0"
+                .as_slice(),
+        ),
+        (
+            "clang",
+            vec!["-c", "unit.c", "-o", "unit.o"],
+            b"zccache-request-v2\0clang\0-c\0unit.c\0-o\0unit.o\0work\0".as_slice(),
+        ),
+    ] {
+        let args: Vec<String> = args.into_iter().map(String::from).collect();
+        let selected = fingerprint_vars(Some(&request_env), compiler, &args);
+        let mut bytes = Vec::new();
+        crate::hash::request_fingerprint::emit_request_fingerprint(
+            compiler,
+            &args,
+            &args,
+            "work",
+            &selected,
+            |fragment| {
+                bytes.extend_from_slice(fragment);
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(bytes, expected);
+        assert_eq!(
+            super::request_fingerprint(
+                Path::new(compiler),
+                &args,
+                Path::new("work"),
+                None,
+                Some(&request_env)
+            ),
+            crate::hash::hash_bytes(expected),
+        );
+    }
+}

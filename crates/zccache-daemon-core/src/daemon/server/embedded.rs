@@ -289,7 +289,13 @@ impl EmbeddedDaemon {
             request.compiler.to_string_lossy().into_owned(),
             request.args.clone(),
             request.cwd.to_string_lossy().into_owned(),
-            request.env.clone(),
+            // Executor requests carry private cold env! inputs. Keep the full
+            // execution environment transient, including diagnostic copies.
+            if crate::embedded::executor::current().is_some() {
+                None
+            } else {
+                request.env.clone()
+            },
             None,
         );
         // zccache#940: open the inner-trace scope so the deep pipeline seams

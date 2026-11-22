@@ -178,7 +178,7 @@ keep their existing paths. Without registration, compilation stays local.
 `CompileJob` contains the compiler family, executable basename (preserving driver
 mode such as clang versus clang++), and the exact compiler identity digest
 used by the cache key, expanded effective argv (including private staging and
-depfile flags), key-relevant environment, cwd, stdin, declared output paths,
+depfile flags), unchanged key-relevant `env`, cwd, stdin, declared output paths,
 and known input files with raw BLAKE3 digests, lengths and executable bits.
 Executors resolve a matching toolchain by identity; the local compiler binary
 and daemon environment are not part of the manifest. Paths describe client
@@ -188,9 +188,18 @@ Cold units and units with changed inputs have `inputs_complete: false`: an old
 dep-info/header closure cannot prove that changed source has no new includes.
 Unavailable input metadata also makes the manifest incomplete. Such jobs should
 be declined unless the executor independently resolves all missing inputs.
-When a key-relevant environment value fails the existing journal privacy policy,
-zccache declines locally before calling the executor. The hook never sends the
-full host environment or jobserver fds.
+Journal privacy filters the diagnostic/key subset, without refusing execution:
+discovered custom env-deps remain available through the transient `exec_env`.
+
+`exec_env` separately holds the complete original request environment, including
+Cargo variables and cold `env!`/`option_env!` inputs. It lives only in memory;
+zccache never hashes, journals, logs, serializes or persists it, and job Debug
+output redacts it. Embedded services with an executor omit journal environment
+copies, including on hits and declined offers. Executors select safe variables to transport (excluding
+client jobserver descriptors and lineage), then verify worker dep-info env-deps
+against the original values. Never substitute daemon ambient environment.
+`request_args` preserves the exact received argv before expansion/injections;
+`args` remains the effective compiler argv needed to produce declared outputs.
 
 An executor's nonzero `capacity()` is captured at registration and bounds
 simultaneous offers across cloned service handles. Admission waits are bounded

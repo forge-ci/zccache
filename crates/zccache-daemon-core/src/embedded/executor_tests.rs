@@ -108,7 +108,7 @@ async fn mirror_compile(compiler: &Path, root: &Path, job: &CompileJob) -> Execu
         .args(job.args.iter().map(|s| remap(s)))
         .current_dir(remap(&job.cwd.to_string_lossy()))
         .clear_env(true);
-    for (name, value) in &job.env {
+    for (name, value) in &job.exec_env {
         builder = builder.env(name, value);
     }
     let result = crate::daemon::process::async_builder_output_with_priority(
@@ -257,17 +257,7 @@ fn remote_result_is_stored_and_hit_makes_no_offer() {
         );
         let log_dir = crate::core::config::log_dir_from_cache_dir(&root);
         let journal_path = log_dir.as_path().join("compile_journal.jsonl");
-        let journal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let text = std::fs::read_to_string(&journal_path).unwrap_or_default();
-                if text.lines().count() >= 2 && text.ends_with('\n') {
-                    break text;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .expect("two complete journal rows");
+        let journal = wait_for_journal(&journal_path, 2).await;
         assert!(hit.cached, "response={hit:?}; journal={journal}");
         assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
         assert_eq!(hit.execution, CompileExecution::Local);
@@ -505,6 +495,8 @@ fn executor_capacity_is_shared_across_service_clones() {
             compiler_identity: [0; 32],
             args: vec![],
             env: vec![],
+            exec_env: vec![],
+            request_args: vec![],
             cwd: temp.path().into(),
             stdin: vec![],
             inputs: vec![],
@@ -554,5 +546,99 @@ fn host_dependent_native_cpu_jobs_stay_local() {
             );
             service.shutdown(ShutdownMode::Graceful).await.unwrap();
         }
+    });
+}
+
+#[test]
+fn execution_environment_is_private_and_does_not_change_keys() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for rust in [true, false] {
+            let temp = TempDir::new().unwrap();
+            let mut req = request(&temp, rust);
+            let sentinel = "EXEC_ENV_PRIVATE_SENTINEL_28371";
+            req.env = ["CARGO_MANIFEST_DIR", "OUT_DIR", "COLD_CUSTOM_INPUT"]
+                .map(|name| (name.to_owned(), sentinel.to_owned()))
+                .to_vec();
+            let executor = fake(&temp, &req, 1);
+            let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+            let baseline = service.compile(req.clone()).await.unwrap();
+            assert_eq!(baseline.exit_code, 0);
+            let job = executor.jobs.lock().unwrap()[0].clone();
+            assert_eq!(job.exec_env, req.env);
+            assert_eq!(job.request_args, req.args);
+            assert_eq!(job.cwd, req.cwd);
+            assert!(!job.env.iter().any(|(_, value)| value == sentinel));
+            assert!(!format!("{job:?}").contains(sentinel));
+            req.env.clear();
+            let unchanged = service.compile(req).await.unwrap();
+            assert!(unchanged.cached, "execution-only env must not move the key");
+            service.shutdown(ShutdownMode::Graceful).await.unwrap();
+            let root = crate::core::config::effective_cache_root_from_top_level(
+                &temp.path().join("cache").into(),
+            );
+            let logs = crate::core::config::log_dir_from_cache_dir(&root);
+            let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
+            assert!(!journal.contains(sentinel));
+            let rows: Vec<serde_json::Value> = journal
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0]["outcome"], "miss");
+            assert_eq!(rows[1]["outcome"], "hit");
+        }
+    });
+}
+
+async fn wait_for_journal(path: &Path, rows: usize) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            if text.lines().count() >= rows && text.ends_with('\n') {
+                break text;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("complete journal rows")
+}
+
+#[test]
+fn discovered_private_env_deps_remain_available_to_the_executor() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let mut req = request(&temp, true);
+        let sentinel = "EXEC_ENV_COLD_READ_SENTINEL_28371";
+        req.env.push(("COLD_CUSTOM_INPUT".into(), sentinel.into()));
+        let executor = fake(&temp, &req, 0);
+        let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+        for revision in 0..2 {
+            std::fs::write(
+                temp.path().join("work/unit.rs"),
+                format!("pub fn value() -> &'static str {{ env!(\"COLD_CUSTOM_INPUT\") }} // {revision}\n"),
+            ).unwrap();
+            let result = service.compile(req.clone()).await.unwrap();
+            assert_eq!(result.exit_code, 0, "{}", String::from_utf8_lossy(&result.stderr));
+            assert_eq!(result.execution, CompileExecution::Remote);
+        }
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+        {
+            let jobs = executor.jobs.lock().unwrap();
+            assert_eq!(jobs.len(), 2);
+            for job in jobs.iter() {
+                assert_eq!(job.exec_env, req.env);
+                assert!(!job.env.iter().any(|(_, value)| value == sentinel));
+                assert!(!format!("{job:?}").contains(sentinel));
+            }
+        }
+        let dep_info = std::fs::read_to_string(temp.path().join("work/unit.d")).unwrap();
+        assert!(dep_info.contains(&format!("# env-dep:COLD_CUSTOM_INPUT={sentinel}")));
+        let root = crate::core::config::effective_cache_root_from_top_level(
+            &temp.path().join("cache").into(),
+        );
+        let logs = crate::core::config::log_dir_from_cache_dir(&root);
+        let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
+        assert!(!journal.contains(sentinel));
     });
 }
