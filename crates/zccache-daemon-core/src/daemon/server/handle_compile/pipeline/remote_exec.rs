@@ -7,7 +7,6 @@ pub(super) struct Manifest {
     identity: [u8; 32],
     env: Vec<(String, String)>,
     complete: bool,
-    private_env: bool,
     request: RequestInvocation,
 }
 
@@ -62,7 +61,6 @@ pub(super) fn prepare(
     }
     keyed.sort();
     keyed.dedup();
-    let count = keyed.len();
     let safe = crate::daemon::compile_journal::sanitize_journal_env(Some(keyed));
     let env = safe.map_or_else(Vec::new, |s| s.as_slice().to_vec());
     Some(Manifest {
@@ -70,7 +68,6 @@ pub(super) fn prepare(
         request,
         identity: *ctx.compiler_hash.as_bytes(),
         complete,
-        private_env: count != env.len(),
         env,
     })
 }
@@ -85,9 +82,9 @@ pub(super) async fn offer(
 ) -> Option<ExecutorOutcome> {
     let executor = crate::embedded::executor::current()?;
     let mut manifest = manifest?;
-    let refusal = if manifest.private_env {
-        Some("key-relevant environment excluded by privacy policy")
-    } else if req
+    // Journal privacy filters only the diagnostic/key subset. The trusted
+    // embedded executor selects transport-safe values from the transient exec_env.
+    let refusal = if req
         .effective_args
         .iter()
         .any(|arg| crate::depgraph::native_cpu::is_cxx_native_cpu_flag(arg))
@@ -95,8 +92,7 @@ pub(super) async fn offer(
             rust.codegen_flags
                 .iter()
                 .any(|flag| crate::depgraph::native_cpu::is_rustc_native_cpu_flag(flag))
-        })
-    {
+        }) {
         Some("native CPU selection requires local execution")
     } else if req.is_rustc
         && !crate::daemon::server::compile_resource_gate::rust_crate_types_are_non_linking(

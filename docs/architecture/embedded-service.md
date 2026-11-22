@@ -188,8 +188,8 @@ Cold units and units with changed inputs have `inputs_complete: false`: an old
 dep-info/header closure cannot prove that changed source has no new includes.
 Unavailable input metadata also makes the manifest incomplete. Such jobs should
 be declined unless the executor independently resolves all missing inputs.
-When a key-relevant environment value fails the existing journal privacy policy,
-zccache declines locally before calling the executor.
+Journal privacy filters the diagnostic/key subset, without refusing execution:
+discovered custom env-deps remain available through the transient `exec_env`.
 
 `exec_env` separately holds the complete original request environment, including
 Cargo variables and cold `env!`/`option_env!` inputs. It lives only in memory;

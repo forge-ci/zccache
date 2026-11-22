@@ -603,3 +603,42 @@ async fn wait_for_journal(path: &Path, rows: usize) -> String {
     .await
     .expect("complete journal rows")
 }
+
+#[test]
+fn discovered_private_env_deps_remain_available_to_the_executor() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let mut req = request(&temp, true);
+        let sentinel = "EXEC_ENV_COLD_READ_SENTINEL_28371";
+        req.env.push(("COLD_CUSTOM_INPUT".into(), sentinel.into()));
+        let executor = fake(&temp, &req, 0);
+        let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+        for revision in 0..2 {
+            std::fs::write(
+                temp.path().join("work/unit.rs"),
+                format!("pub fn value() -> &'static str {{ env!(\"COLD_CUSTOM_INPUT\") }} // {revision}\n"),
+            ).unwrap();
+            let result = service.compile(req.clone()).await.unwrap();
+            assert_eq!(result.exit_code, 0, "{}", String::from_utf8_lossy(&result.stderr));
+            assert_eq!(result.execution, CompileExecution::Remote);
+        }
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+        {
+            let jobs = executor.jobs.lock().unwrap();
+            assert_eq!(jobs.len(), 2);
+            for job in jobs.iter() {
+                assert_eq!(job.exec_env, req.env);
+                assert!(!job.env.iter().any(|(_, value)| value == sentinel));
+                assert!(!format!("{job:?}").contains(sentinel));
+            }
+        }
+        let dep_info = std::fs::read_to_string(temp.path().join("work/unit.d")).unwrap();
+        assert!(dep_info.contains(&format!("# env-dep:COLD_CUSTOM_INPUT={sentinel}")));
+        let root = crate::core::config::effective_cache_root_from_top_level(
+            &temp.path().join("cache").into(),
+        );
+        let logs = crate::core::config::log_dir_from_cache_dir(&root);
+        let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
+        assert!(!journal.contains(sentinel));
+    });
+}
