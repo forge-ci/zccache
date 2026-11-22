@@ -37,10 +37,10 @@ macos-arm64      = { target = "aarch64-apple-darwin",       runs-on = "macos-15"
 [suites]
 lint     = { run = "ci/local_gate.py --lane lint",     required = true }
 py-tests = { run = "ci/local_gate.py --lane py-tests", required = true }
-check    = { run = "ci/local_gate.py --lane check",    required = true }
+check    = { run = "soldr cargo check --workspace",    required = true }
 docs     = { run = "ci/local_gate.py --lane docs",     required = true }
-dylint   = { run = "ci/local_gate.py --lane dylint",   required = true }
-tests    = { run = "ci/local_gate.py --lane tests",    required = true }
+dylint   = { run = "ci/local_gate.py --lane rust-lint",   required = true }
+tests    = { run = "soldr cargo nextest run --workspace",    required = true }
 
 # ── Flows ─────────────────────────────────────────────────────────────────────
 [flow.pr]
@@ -206,18 +206,13 @@ mode = "ancestor"
 
 # ── Local runs ────────────────────────────────────────────────────────────────
 # NOTE: this repository's local gate is declared in `local-gate.toml`
-# (`[gate]`, `[gate.isolation]`, `[gate.lanes.*]`, `[gate.trust]`) -- zccache's
+# (`[gate]`, `[gate.lanes.*]`, `[gate.trust]`) -- zccache's
 # first-class declaration (GATE-001..010, ci.yml#166/#168/#177/#190/#196/#198).
 # NO `[local.gate]` table is declared here on purpose: local_gate.py prefers
 # ci.toml's `[local.gate]` whenever that table EXISTS (ci_lint.local_gate.
 # _gate_table, and it flags a both-declared repository), so declaring an empty
 # one would silently take the gate's configuration source away from
 # local-gate.toml. Absent here, local-gate.toml stays authoritative.
-[local]
-runner = "bosn-act"
-lanes  = ["precheck", "lint", "check", "dylint", "tests"]
-cache  = "machine"
-
 # ── Allowlists ────────────────────────────────────────────────────────────────
 [allow]
 workflows = { "ci.yml" = ["push:main", "pull_request", "merge_group"], "ci-linux.yml" = ["push:main", "workflow_dispatch"], "ci-macos.yml" = ["push:main"], "ci-windows.yml" = ["push:main"], "ci-check.yml" = ["workflow_call"], "ci-check-cross.yml" = ["workflow_call"], "integration.yml" = ["push:main", "schedule", "workflow_dispatch"], "python-tests.yml" = ["push:main", "pull_request"], "clippy.yml" = ["push:main"], "coverage.yml" = ["push:main"], "wrapper-e2e.yml" = ["push:main"], "auto-release.yml" = ["push:main", "push:tags", "workflow_dispatch"], "cache-pre-prune.yml" = ["push:main"], "wait-cache-pre-prune.yml" = ["workflow_call"], "reflink-e2e.yml" = ["workflow_call"], "cache-budget.yml" = ["schedule", "workflow_dispatch"], "cache-cleanup.yml" = ["schedule", "workflow_dispatch"] }

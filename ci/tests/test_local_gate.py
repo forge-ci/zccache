@@ -1,16 +1,7 @@
-"""The local gate stays in step with the remote jobs it stands in for.
-
-An attested PR head skips the remote Formatting, Documentation, MSRV and
-Integration (Linux) jobs (local-gate.toml [gate.trust], ci-attestations.yml),
-so the gate must keep running what those jobs run. These checks catch the
-drift a reviewer would miss: a ci-lint pin bumped in one place only, a step
-added to the mirrored job instead of the lane, or an Integration test command
-the isolated lane never learned about.
-"""
+"""Keep local gate proofs in step with the hosted jobs they cover."""
 
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 from pathlib import Path
@@ -43,7 +34,6 @@ def test_ci_lint_pin_is_the_same_everywhere() -> None:
         ("ci.yml", "ci-mode"),
         ("ci.yml", "cache-janitor"),
         ("ci-linux.yml", "reuse-shadow"),
-        ("integration.yml", "ci-mode"),
     ):
         steps = yaml.safe_load(_job_block(workflow, job))[job]["steps"]
         assert [
@@ -87,12 +77,9 @@ def test_skippable_jobs_consume_their_ci_mode_decision() -> None:
     for workflow, job in (
         ("ci.yml", "fmt"),
         ("ci.yml", "docs"),
-        ("ci.yml", "msrv"),
         ("ci.yml", "dylint"),
         ("ci.yml", "dylint-product"),
         ("ci.yml", "clippy"),
-        ("ci.yml", "linux"),
-        ("integration.yml", "integration"),
     ):
         block = _job_block(workflow, job)
         output = f"skip_{job}"
@@ -117,28 +104,18 @@ def test_both_dylint_jobs_require_the_complete_attested_lane() -> None:
             assert f"{output}: ${{{{ steps.gate.outputs['skip_{name}'] }}}}" in mode
 
 
-def test_clippy_and_linux_skip_require_their_full_proofs() -> None:
+def test_clippy_skip_requires_the_complete_attested_lane() -> None:
     policy = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
     trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
     mode = yaml.safe_load(_job_block("ci.yml", "ci-mode"))["ci-mode"]
-    for job, lanes in (("clippy", ["rust-lint"]), ("linux", ["check", "unit-tests"])):
-        key = f"ci.yml:{job}"
-        assert key in trust["skip"]
-        assert trust["covered-by"][key] == lanes
-        assert [policy["gates"][gate]["lane"] for gate in policy["jobs"][key]] == lanes
-        assert mode["outputs"][f"skip_{job}"] == f"${{{{ steps.gate.outputs.skip_{job} }}}}"
+    key = "ci.yml:clippy"
+    assert key in trust["skip"]
+    assert trust["covered-by"][key] == ["rust-lint"]
+    assert [policy["gates"][gate]["lane"] for gate in policy["jobs"][key]] == ["rust-lint"]
+    assert mode["outputs"]["skip_clippy"] == "${{ steps.gate.outputs.skip_clippy }}"
     assert mode["permissions"]["pull-requests"] == "read"
     verify = next(step for step in mode["steps"] if step.get("id") == "gate")
     assert verify["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
-
-
-def test_load_aware_test_threads() -> None:
-    assert local_gate.load_aware_test_threads(8, 0.0) == 8
-    assert local_gate.load_aware_test_threads(8, 16.0) == 4
-    assert local_gate.load_aware_test_threads(8, 100.0) == 2
-    assert local_gate.load_aware_test_threads(1, 100.0) == 1
-    assert local_gate.load_aware_test_threads(16, 0.0, runner_cpus=8) == 8
-    assert local_gate.load_aware_test_threads(16, 32.0, runner_cpus=8) == 4
 
 
 def test_legacy_harness_runs_every_integration_test_command() -> None:
@@ -184,43 +161,7 @@ def test_termination_proof_reuses_the_integration_build_environment() -> None:
     assert "unset ZCCACHE_CACHE_DIR" in proof["run"]
 
 
-def test_isolated_lanes_replay_the_real_workflows() -> None:
-    """Every lane that attests a remote job replays that job through Bosn.
-
-    Keyed by lane so adding a lane cannot be satisfied by reordering the ones
-    already covered -- each row below is a job a PR head can now skip.
-    """
-    isolated = [check for check in local_gate.checks() if check.bosn_workflow]
-    by_job = {check.bosn_job: check for check in isolated}
-    assert len(isolated) == len(by_job) == 3
-    assert {
-        job: (check.lane, check.bosn_workflow, check.selected_job)
-        for job, check in by_job.items()
-    } == {
-        "msrv": ("check", ".github/workflows/ci.yml", "msrv"),
-        "test": ("unit-tests", ".github/workflows/ci-check.yml", "test"),
-        "integration": ("tests", ".github/workflows/integration.yml", None),
-    }
-    assert all(check.argv[:3] == ("bosn", "ci", "run") for check in isolated)
-    assert all("--wait" in check.argv and "--json" in check.argv for check in isolated)
-    assert all(check.min_version == (0, 1, 12) for check in isolated)
-    assert "Verify nested Dylint cache contract" in by_job["msrv"].required_steps
-    assert by_job["test"].required_steps == ("Build test binaries", "Test")
-    assert "os=ubuntu-latest" in by_job["test"].argv
-    assert by_job["test"].test_threads_env == "RUST_TEST_THREADS"
-    assert by_job["integration"].test_threads_env == "ZCCACHE_LOCAL_TEST_THREADS"
-    assert "Fetch-lock expiry regression" in by_job["msrv"].required_steps
-    assert "Test (full workspace)" in by_job["integration"].required_steps
-    assert "Install PCH regression toolchain" in by_job["integration"].required_steps
-    assert "Strict PCH regressions (Clang 21)" in by_job["integration"].required_steps
-    for check in isolated:
-        workflow = check.bosn_workflow.rsplit("/", 1)[-1]
-        block = _job_block(workflow, check.bosn_job)
-        for step in check.required_steps:
-            assert f"name: {step}" in block
-
-
-def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
+def test_rustc_argfile_regressions_run_in_hosted_ci() -> None:
     block = _job_block("ci.yml", "msrv")
     assert "name: Rust argfile execution regressions" in block
     assert "soldr rustup which rustc" in block
@@ -228,86 +169,6 @@ def test_rustc_argfile_regressions_run_in_attested_ci() -> None:
         "soldr cargo test -p zccache --features test-support --test cache_rust "
         "daemon_rustc_response_file_test:: -- --ignored --test-threads=1"
     ) in block
-    check = next(check for check in local_gate.checks() if check.lane == "check")
-    assert "Rust argfile execution regressions" in check.required_steps
-
-
-def _receipt(sections: list[dict[str, object]]) -> str:
-    return json.dumps(
-        {
-            "id": "run-1",
-            "act_version": "0.2.89-act2.36",
-            "created_at": 100.0,
-            "started_at": 130.0,
-            "finished_at": 730.0,
-            "tree": {"groups": [{"jobs": [{"job_id": "dylint", "sections": sections}]}]},
-        }
-    )
-
-
-def test_bosn_timing_summary_names_queue_wait_and_slowest_steps() -> None:
-    summary = local_gate.bosn_timing_summary(
-        _receipt(
-            [
-                {
-                    "name": "Run Dylint",
-                    "started_at": "2026-11-02T21:00:00Z",
-                    "completed_at": "2026-11-02T21:03:39Z",
-                },
-                {
-                    "name": "zackees/setup-soldr@v0",
-                    "started_at": "2026-11-02T20:58:00Z",
-                    "completed_at": "2026-11-02T20:59:34Z",
-                },
-                {"name": "never started", "started_at": None, "completed_at": None},
-            ]
-        )
-    )
-    assert summary is not None
-    lines = summary.splitlines()
-    assert "queued 30s, ran 600s (act 0.2.89-act2.36)" in lines[0]
-    assert lines[1].split() == ["219s", "dylint:", "Run", "Dylint"]
-    assert "setup-soldr" in lines[2]
-    assert len(lines) == 3
-
-
-def test_bosn_timing_summary_never_fails_the_gate_on_odd_output() -> None:
-    assert local_gate.bosn_timing_summary("not json") is None
-    assert local_gate.bosn_timing_summary('{"tree": {}}') is None
-
-
-def test_failure_summary_strips_color_and_keeps_nextest_identity() -> None:
-    output = '\x1b[31;1m        FAIL\x1b[0m [ 0.372s] (1282/3702) zccache-core blocking_sync::handoff_latency_tests::contended_rwlock_writer_handoff_is_sub_millisecond'
-    summary = local_gate.bosn_failure_summary(output, 100)
-    assert 'blocking_sync::handoff_latency_tests::contended_rwlock_writer_handoff_is_sub_millisecond' in summary
-    assert '\x1b' not in summary
-
-
-def test_failure_summary_never_emits_an_empty_failure_list() -> None:
-    assert 'unknown failure (exit 100)' in local_gate.bosn_failure_summary('## Integration Test Failures\n```\n```', 100)
-
-
-def test_failure_summary_classifies_137_without_claiming_oom() -> None:
-    summary = local_gate.bosn_failure_summary('act exit 137; engine cleanup failed: act serve close failed', 1)
-    assert 'killed (SIGKILL/OOM?) under load' in summary
-    assert 'OOM confirmed' not in summary
-
-
-def test_failed_step_diagnostics_fetches_scoped_logs(monkeypatch) -> None:
-    calls = []
-    def capture(argv):
-        calls.append(argv)
-        if 'report' in argv:
-            # A valid report returns the failed run's exit status.
-            return local_gate.Captured(1, json.dumps({'first_failure': {'job': 'job-key', 'section': 'Main:9', 'step': 'Test', 'exit_code': 100}}))
-        return local_gate.Captured(0, 'FAIL [0.3s] crate test_name\n' + 'later doctest output\n' * 50)
-    monkeypatch.setattr(local_gate, '_diagnostic_command', capture)
-    summary = local_gate._bosn_failure_details(json.dumps({'id': 'run-id'}))
-    assert 'FAIL [0.3s] crate test_name' in summary
-    assert 'failing step: job-key: Test (exit 100)' in summary
-    assert calls[1] == ['bosn', 'ci', 'logs', 'run-id', '--job', 'job-key', '--step', 'Main:9']
-    assert summary.count('later doctest output') == 40
-    assert 'diagnostics unavailable' not in summary
 
 
 def test_integration_workflow_summary_handles_colored_nextest(tmp_path) -> None:
@@ -323,14 +184,6 @@ def test_integration_workflow_summary_handles_colored_nextest(tmp_path) -> None:
     assert 'FAIL [0.3s] crate test_name' in ' '.join(summary.read_text().split())
 
 
-def test_failed_report_keeps_diagnostic_error_and_unknown_status(monkeypatch) -> None:
-    monkeypatch.setattr(local_gate, '_diagnostic_command', lambda argv: local_gate.Captured(1, 'daemon unavailable'))
-    summary = local_gate._bosn_failure_details(json.dumps({'id': 'run-id'}))
-    assert 'unknown failure (exit unknown)' in summary
-    assert 'daemon unavailable' in summary
-    assert 'receipt/output tail' in summary
-
-
 def test_integration_workflow_unknown_failure_is_explicit(tmp_path) -> None:
     import os
     import subprocess
@@ -341,23 +194,6 @@ def test_integration_workflow_unknown_failure_is_explicit(tmp_path) -> None:
     subprocess.run(['bash', '-c', 'status=137\nif [ $status -ne 0 ]; then' + script], cwd=tmp_path,
                    env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)}, timeout=10, check=True)
     assert 'unknown failure (exit 137)' in summary.read_text()
-
-
-def test_lint_never_runs_under_bosn() -> None:
-    """Lint runs on the host through `soldr lint`; no bosn lane or replay lints."""
-    lanes = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["lanes"]
-    for name, lane in lanes.items():
-        if "bosn" in lane["tools"]:
-            assert "lint" not in name and name not in ("dylint", "clippy"), name
-    assert lanes["rust-lint"]["tools"] == ["soldr", "uv"]
-    rust_lint = [c for c in local_gate.checks() if c.lane == "rust-lint"]
-    assert [c.argv[:4] for c in rust_lint] == [("soldr", "lint", "rust", "--check")]
-    assert not any(c.bosn_workflow for c in rust_lint)
-    for check in local_gate.checks():
-        if check.bosn_workflow:
-            block = _job_block(check.bosn_workflow.rsplit("/", 1)[-1], check.bosn_job)
-            assert "cargo clippy" not in block and "soldr dylint" not in block, check.name
-            assert "ci.lint" not in block and "cargo fmt" not in block, check.name
 
 
 def test_soldr_lint_covers_the_skipped_lint_jobs() -> None:
@@ -383,3 +219,17 @@ def test_soldr_lint_covers_the_skipped_lint_jobs() -> None:
     assert "clippy" not in _job_block("ci.yml", "msrv").lower().replace(
         "clippy.toml", ""
     )
+
+
+def test_hosted_test_jobs_do_not_depend_on_local_attestations() -> None:
+    gate = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]
+    attestations = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
+    assert set(gate["lanes"]) == {check.lane for check in local_gate.checks()}
+    assert all(check.argv[0] != "bosn" for check in local_gate.checks())
+    assert all("bosn" not in lane["tools"] for lane in gate["lanes"].values())
+    for workflow, job in (("ci.yml", "msrv"), ("ci.yml", "linux"),
+                          ("integration.yml", "integration")):
+        key = f"{workflow}:{job}"
+        assert key not in gate["trust"]["skip"]
+        assert key not in attestations["jobs"]
+        assert f"skip_{job}" not in _job_block(workflow, job)
