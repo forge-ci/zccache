@@ -4,6 +4,13 @@ Python scripts for development tooling. Rust commands go through `soldr <tool>` 
 
 ## Top-Level Scripts
 
+- **`ci/source_dist.py --verify`** — Builds the setuptools source archive with
+  `uv build --sdist`, enforces a 20 MiB budget and excludes build outputs/test
+  fixtures, then installs it in a clean venv and checks the CLI and all native
+  imports. `ci/source_package.py` owns the setuptools native build commands;
+  every Rust build goes through soldr. Release preflight requires six wheels
+  plus the sdist before considering PyPI complete.
+
 - **`ci/perf_standalone.py`** — Runs the pinned four-language Docker campaign.
   `perf_standalone_artifacts.py` validates its evidence and publishes host-side
   JSON replacements, including summaries created by root in the container.

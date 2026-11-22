@@ -143,7 +143,7 @@ def test_command_check_registries_writes_registry_completion_outputs(
         "read_project_meta",
         lambda: ("zccache", "1.2.3", "", ">=3.9", ""),
     )
-    expected_wheels = release_workflow.expected_pypi_wheel_filenames("zccache", "1.2.3")
+    expected_wheels = release_workflow.expected_pypi_filenames("zccache", "1.2.3")
     monkeypatch.setattr(
         release_workflow,
         "check_pypi_version",

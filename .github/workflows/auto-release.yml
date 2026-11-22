@@ -444,6 +444,37 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: true
 
+  build-sdist:
+    name: Build and test PyPI sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: preflight
+    if: needs.preflight.outputs.pypi_complete != 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - uses: zackees/setup-soldr@v0
+        with:
+          toolchain: 1.95.0
+          job-status: ${{ job.status }}
+          cache: "false"
+          save-cache: "false"
+          solo-toolchain-cache: false
+          cook-delta: false
+          prebuild-deps: none
+      - name: Build, budget and install source distribution
+        run: uv run --no-project python -m ci.source_dist --verify
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pypi-sdist
+          path: dist/sdist/*.tar.gz
+          if-no-files-found: error
+
   build-wheels:
     name: Build PyPI Wheels
     runs-on: ubuntu-latest
@@ -603,7 +634,7 @@ jobs:
   publish-pypi:
     name: Publish PyPI
     runs-on: ubuntu-latest
-    needs: [preflight, publish-release, build-wheels, test-wheels]
+    needs: [preflight, publish-release, build-wheels, test-wheels, build-sdist]
     if: |
       always()
       && needs.preflight.result == 'success'
@@ -612,6 +643,7 @@ jobs:
       && needs.preflight.outputs.pypi_complete != 'true'
       && needs.build-wheels.result == 'success'
       && needs.test-wheels.result == 'success'
+      && needs.build-sdist.result == 'success'
     environment: pypi
     permissions:
       actions: read
@@ -623,7 +655,11 @@ jobs:
           name: pypi-wheels
           path: dist/wheels
 
-      - name: Publish wheel distributions to PyPI
+      - uses: actions/download-artifact@v8
+        with:
+          name: pypi-sdist
+          path: dist/wheels
+      - name: Publish wheel and source distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/wheels/
@@ -652,7 +688,11 @@ jobs:
         with:
           name: pypi-wheels
           path: dist/wheels
-      - name: Verify all wheels visible on PyPI
+      - uses: actions/download-artifact@v8
+        with:
+          name: pypi-sdist
+          path: dist/wheels
+      - name: Verify all distributions visible on PyPI
         run: |
           python -m ci.release_workflow verify-pypi \
             --project zccache \

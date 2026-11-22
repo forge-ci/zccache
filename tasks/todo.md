@@ -1,3 +1,12 @@
+# PyPI source distribution (1.15.17 recovery)
+
+- [x] Inspect setuptools backend and native release artifact build commands.
+- [x] Add source build hooks, source-only manifest and 20 MiB archive guard.
+- [x] Require clean-venv source installation and native imports in release/PR CI.
+- [ ] Measure archive size, validate packaging tests and run source install.
+- [ ] Land follow-up PR, dispatch recovery from main with an empty tag input,
+  and verify 1.15.17 has a source archive alongside all six wheels.
+
 # Release 1.15.17
 
 - [x] Diagnose 1.15.16: initial wheel budget failure, then PyPI project quota;

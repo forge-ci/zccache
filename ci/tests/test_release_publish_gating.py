@@ -27,7 +27,7 @@ JOB_RE = re.compile(r"^  [a-z][a-z0-9_-]*:$")
 # Jobs that can make something public, and the upstreams each must require.
 PUBLISH_GATES: dict[str, tuple[str, ...]] = {
     "publish-release": ("preflight", "build"),
-    "publish-pypi": ("preflight", "publish-release", "build-wheels", "test-wheels"),
+    "publish-pypi": ("preflight", "publish-release", "build-wheels", "test-wheels", "build-sdist"),
     "publish-crates": ("preflight", "publish-release"),
 }
 
