@@ -23,11 +23,16 @@ use crate::compiler::CompilerFamily;
 use super::SharedState;
 
 const EXCLUSIVE_ADMISSION_WAIT: Duration = Duration::from_secs(30);
+
+kernal_api::task_local! {
+    pub(super) static HOST_ADMISSION_CLASS: Option<u32> = HOST_ADMISSION_CLASS_TLS;
+}
+
 const AMALGAMATION_BYTES: u64 = 1_000_000;
 const KNOWN_C_AMALGAMATIONS: &[&str] = &["sqlite3.c", "zstd.c", "rocksdb.cc"];
 const KNOWN_RUST_AMALGAMATIONS: &[&str] = &["zccache", "zccache_cli_core", "zccache_daemon_core"];
 
-/// Stable compiler facts supplied to an embedded host admission policy.
+/// Compiler facts and request context supplied to an embedded host policy.
 ///
 /// This deliberately exposes neither the daemon's semaphore nor its resource
 /// lock. The host can classify the child zccache is about to spawn, but only
@@ -38,6 +43,7 @@ pub struct HostCompilerRequest<'a> {
     args: &'a [String],
     source: Option<&'a Path>,
     env: &'a [(String, String)],
+    host_admission_class: Option<u32>,
 }
 
 impl std::fmt::Debug for HostCompilerRequest<'_> {
@@ -58,6 +64,7 @@ impl<'a> HostCompilerRequest<'a> {
             args,
             source,
             env: &[],
+            host_admission_class: HOST_ADMISSION_CLASS.try_with(|class| *class).ok().flatten(),
         }
     }
 
@@ -88,6 +95,12 @@ impl<'a> HostCompilerRequest<'a> {
     #[must_use]
     pub fn source(&self) -> Option<&'a Path> {
         self.source
+    }
+
+    /// Scheduling class set by the embedded host for this request.
+    #[must_use]
+    pub fn host_admission_class(&self) -> Option<u32> {
+        self.host_admission_class
     }
 }
 

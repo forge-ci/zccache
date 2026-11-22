@@ -14,15 +14,16 @@ struct CountingHostPolicy {
 impl HostAdmissionClassifier for CountingHostPolicy {
     fn requires_exclusive(
         &self,
-        _request: &HostCompilerRequest<'_>,
+        request: &HostCompilerRequest<'_>,
     ) -> std::result::Result<bool, HostAdmissionError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(request.host_admission_class(), Some(7));
         Ok(false)
     }
 
     fn acquire<'a>(
         &'a self,
-        _request: HostCompilerRequest<'a>,
+        request: HostCompilerRequest<'a>,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
@@ -32,6 +33,7 @@ impl HostAdmissionClassifier for CountingHostPolicy {
         >,
     > {
         self.acquires.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(request.host_admission_class(), Some(7));
         Box::pin(async { Ok(HostAdmissionPermit::default()) })
     }
 }
@@ -93,8 +95,17 @@ async fn host_policy_runs_for_a_miss_but_not_its_cache_hit() {
         stdin: Vec::new(),
     };
 
-    let miss = service.compile(request.clone()).await.expect("cache miss");
-    assert!(!miss.cached, "first compile must execute the compiler");
+    let miss = service
+        .compile_with_options(
+            request.clone(),
+            CompileOptions::new().with_host_admission_class(7),
+        )
+        .await
+        .expect("cache miss");
+    assert!(
+        !miss.response.cached,
+        "first compile must execute the compiler"
+    );
     assert_eq!(calls.load(Ordering::Relaxed), 1, "miss invokes policy once");
     assert_eq!(acquires.load(Ordering::Relaxed), 1, "miss acquires once");
 

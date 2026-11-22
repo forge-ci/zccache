@@ -311,15 +311,18 @@ impl EmbeddedDaemon {
             Box::pin(capture_miss_reason(Box::pin(capture_passthrough_reason(
                 super::inner_trace::scope(
                     compile_id.clone(),
-                    handle_compile_ephemeral(
-                        &self.state,
-                        std::process::id(),
-                        &request.cwd,
-                        &request.compiler,
-                        &request.args,
-                        &request.cwd,
-                        request.env,
-                        request.stdin,
+                    super::compile_resource_gate::HOST_ADMISSION_CLASS.scope(
+                        request.host_admission_class,
+                        handle_compile_ephemeral(
+                            &self.state,
+                            std::process::id(),
+                            &request.cwd,
+                            &request.compiler,
+                            &request.args,
+                            &request.cwd,
+                            request.env,
+                            request.stdin,
+                        ),
                     ),
                 ),
             )))),

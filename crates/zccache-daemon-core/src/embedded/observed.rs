@@ -23,6 +23,9 @@ pub struct CompileOptions {
     /// request's forwarded environment, else from the service process. Never
     /// mutates the environment or any service state.
     pub test_harness_admission: Option<TestHarnessAdmission>,
+    /// Opaque scheduling class supplied to the embedded host policy on a
+    /// miss. It does not affect compiler execution or cache identity.
+    pub host_admission_class: Option<u32>,
 }
 
 impl CompileOptions {
@@ -31,6 +34,7 @@ impl CompileOptions {
     pub const fn new() -> Self {
         Self {
             test_harness_admission: None,
+            host_admission_class: None,
         }
     }
 
@@ -38,6 +42,13 @@ impl CompileOptions {
     #[must_use]
     pub const fn with_test_harness_admission(mut self, admission: TestHarnessAdmission) -> Self {
         self.test_harness_admission = Some(admission);
+        self
+    }
+
+    /// Set the scheduling class understood by the host admission policy.
+    #[must_use]
+    pub const fn with_host_admission_class(mut self, class: u32) -> Self {
+        self.host_admission_class = Some(class);
         self
     }
 }
