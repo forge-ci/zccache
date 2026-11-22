@@ -170,17 +170,21 @@ pub(super) enum CompileResourcePermit {
 /// while also ensuring nobody holds the resource gate while waiting for a
 /// scarce compile slot.
 pub(super) struct CompilerAdmission {
-    _resource: CompileResourcePermit,
+    resource: CompileResourcePermit,
     _compile: super::compile_progress::CompileGateGuard,
     _host: HostAdmissionPermit,
 }
 
 impl CompilerAdmission {
+    pub(super) fn is_exclusive(&self) -> bool {
+        matches!(self.resource, CompileResourcePermit::Exclusive { .. })
+    }
+
     /// Return scarce compiler capacity while preserving build-wide resource
     /// ownership for the request's hashing and publication phases.
     pub(super) fn release_compiler_slot(self) -> CompileResourcePermit {
         let Self {
-            _resource: resource,
+            resource,
             _compile: compile,
             _host: host,
         } = self;
@@ -225,7 +229,7 @@ pub(super) async fn acquire_compiler_admission(
     let resource = state.compile_resource_gate.acquire(exclusive).await;
     Ok((
         CompilerAdmission {
-            _resource: resource,
+            resource,
             _compile: compile,
             _host: host,
         },
@@ -697,7 +701,7 @@ mod tests {
         }
         let host_live = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let admission = CompilerAdmission {
-            _resource: resource_gate.acquire(false).await,
+            resource: resource_gate.acquire(false).await,
             _compile: compile,
             _host: HostAdmissionPermit::new(DropProbe(Arc::clone(&host_live))),
         };

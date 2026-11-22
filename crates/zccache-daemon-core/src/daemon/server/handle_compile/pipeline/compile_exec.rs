@@ -406,7 +406,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
                 })
             }
         };
-    if exclusive {
+    if compiler_admission.is_exclusive() {
         tracing::info!(
             event = "compile_exclusive",
             source = %source_path.display(),
@@ -440,8 +440,8 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
 
     // Issue #532: hash pre-known rustc inputs (source + externs) on a blocking
     // thread. Shared compiles retain the fast overlap with the compiler. Issue
-    // #1555: exclusive compiles await this work while holding the exclusive
-    // admission guard, before spawning the memory-heavy compiler child.
+    // #1555: memory-heavy compiles await this work before spawning rustc,
+    // including when their exclusive request fell back to shared admission.
     let (pre_hash_task, pre_hashed) = if is_rustc && !rustc_extern_paths.is_empty() {
         let pre_state = Arc::clone(state_arc);
         let pre_source = source_path.clone();
