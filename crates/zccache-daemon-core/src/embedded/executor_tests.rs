@@ -584,8 +584,8 @@ fn execution_environment_is_private_and_does_not_change_keys() {
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
             assert_eq!(rows.len(), 2);
-            assert!(rows[0]["context_key"].is_string());
-            assert_eq!(rows[0]["context_key"], rows[1]["context_key"]);
+            assert_eq!(rows[0]["outcome"], "miss");
+            assert_eq!(rows[1]["outcome"], "hit");
         }
     });
 }
