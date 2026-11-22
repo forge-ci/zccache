@@ -44,6 +44,7 @@ pub struct HostCompilerRequest<'a> {
     source: Option<&'a Path>,
     env: &'a [(String, String)],
     host_admission_class: Option<u32>,
+    exclusive: bool,
 }
 
 impl std::fmt::Debug for HostCompilerRequest<'_> {
@@ -65,6 +66,7 @@ impl<'a> HostCompilerRequest<'a> {
             source,
             env: &[],
             host_admission_class: HOST_ADMISSION_CLASS.try_with(|class| *class).ok().flatten(),
+            exclusive: false,
         }
     }
 
@@ -101,6 +103,13 @@ impl<'a> HostCompilerRequest<'a> {
     #[must_use]
     pub fn host_admission_class(&self) -> Option<u32> {
         self.host_admission_class
+    }
+
+    /// Effective exclusivity after combining the built-in and host
+    /// classifiers. Populated for the host's `acquire` callback.
+    #[must_use]
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive
     }
 }
 
@@ -380,12 +389,13 @@ pub(super) async fn host_admission(
     built_in: bool,
     client_env: Option<&[(String, String)]>,
 ) -> Result<(bool, HostAdmissionPermit), HostAdmissionError> {
-    let request = HostCompilerRequest::new(family, args, source).with_environment(client_env);
+    let mut request = HostCompilerRequest::new(family, args, source).with_environment(client_env);
     let exclusive = combines_exclusive_admission(
         built_in,
         state.host_admission_classifier.as_deref(),
         request,
     )?;
+    request.exclusive = exclusive;
     let permit = match state.host_admission_classifier.as_deref() {
         Some(classifier) => classifier.acquire(request).await?,
         None => HostAdmissionPermit::default(),

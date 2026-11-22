@@ -18,7 +18,7 @@ impl HostAdmissionClassifier for CountingHostPolicy {
     ) -> std::result::Result<bool, HostAdmissionError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         assert_eq!(request.host_admission_class(), Some(7));
-        Ok(false)
+        Ok(true)
     }
 
     fn acquire<'a>(
@@ -34,6 +34,10 @@ impl HostAdmissionClassifier for CountingHostPolicy {
     > {
         self.acquires.fetch_add(1, Ordering::Relaxed);
         assert_eq!(request.host_admission_class(), Some(7));
+        assert!(
+            request.is_exclusive(),
+            "acquire receives effective exclusivity"
+        );
         Box::pin(async { Ok(HostAdmissionPermit::default()) })
     }
 }
