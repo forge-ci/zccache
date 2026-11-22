@@ -10,6 +10,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+import tomllib
+
 MAX_SDIST_BYTES = 20 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +25,22 @@ def check_sdist(archive: Path) -> int:
     if size > MAX_SDIST_BYTES:
         raise SystemExit("sdist exceeds the 20 MiB budget")
     with tarfile.open(archive) as stream:
-        names = {Path(*Path(member.name).parts[1:]) for member in stream.getmembers()}
+        members = stream.getmembers()
+        names = {Path(*Path(member.name).parts[1:]) for member in members}
+        # Explicit benchmark targets are validated even in CLI-only builds.
+        # Keep their small Rust sources, without the benchmark fixtures.
+        for member in members:
+            if not member.isfile() or Path(member.name).name != "Cargo.toml":
+                continue
+            manifest = Path(*Path(member.name).parts[1:])
+            with stream.extractfile(member) as source:
+                data = tomllib.loads(source.read().decode())
+            for bench in data.get("bench", []):
+                path = manifest.parent / bench.get(
+                    "path", f"benches/{bench['name']}.rs"
+                )
+                if path not in names and path.with_suffix("") / "main.rs" not in names:
+                    raise SystemExit(f"sdist missing manifest benchmark target: {path}")
     excluded = {
         "target",
         "fixtures",
@@ -47,7 +64,7 @@ def check_sdist(archive: Path) -> int:
         if (
             len(name.parts) > 2
             and name.parts[0] == "crates"
-            and name.parts[2] in {"tests", "benches", "python"}
+            and name.parts[2] in {"tests", "python"}
         ):
             raise SystemExit(f"sdist includes excluded test fixture: {name}")
     for required in (

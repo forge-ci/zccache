@@ -1,5 +1,6 @@
 """Source release contracts, including recovery of wheel-only releases."""
 
+import io
 import shutil
 import subprocess
 import sys
@@ -74,6 +75,19 @@ def test_sdist_rejects_build_artifacts(tmp_path: Path) -> None:
     with tarfile.open(archive, "w:gz") as stream:
         stream.addfile(tarfile.TarInfo("zccache-1.15.17/target/debug/unwanted"))
     with pytest.raises(SystemExit, match="excluded"):
+        check_sdist(archive)
+
+
+def test_sdist_keeps_manifest_declared_benchmark_sources(tmp_path: Path) -> None:
+    archive = tmp_path / "zccache-1.15.17.tar.gz"
+    manifest = b'[[bench]]\nname = "exec"\nharness = false\n'
+    with tarfile.open(archive, "w:gz") as stream:
+        member = tarfile.TarInfo(
+            str(Path("zccache-1.15.17/crates/zccache") / "Cargo.toml")
+        )
+        member.size = len(manifest)
+        stream.addfile(member, io.BytesIO(manifest))
+    with pytest.raises(SystemExit, match="missing manifest benchmark target"):
         check_sdist(archive)
 
 

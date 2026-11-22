@@ -4,7 +4,6 @@ recursive-include crates Cargo.toml README.md *.rs *.proto *.json
 recursive-include python/zccache *.py py.typed
 recursive-include ci *.py *.json
 prune crates/*/tests
-prune crates/*/benches
 prune crates/*/python
 prune ci/tests
 prune python/tests
