@@ -22,6 +22,7 @@ mod rustc_stream;
 mod store_outcome;
 mod system_includes;
 mod time_macros;
+mod verify_exec;
 
 use super::super::*;
 use super::cached_hit::{

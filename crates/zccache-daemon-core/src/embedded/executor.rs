@@ -1,4 +1,5 @@
 //! Opt-in miss execution for embedded hosts.
+use super::{ExecutorFault, ExecutorFaultKind, VerificationPolicy};
 use kernal_api::async_engine::Semaphore;
 use std::{cell::RefCell, future::Future, pin::Pin, sync::Arc, time::Duration};
 use zccache_core::path::NormalizedPath;
@@ -15,6 +16,15 @@ pub trait CompileExecutor: Send + Sync + 'static {
     /// Declining must leave those paths untouched. An incomplete manifest should
     /// be declined unless the implementation can independently resolve its inputs.
     fn execute<'a>(&'a self, job: &'a CompileJob) -> ExecutorFuture<'a>;
+    /// Evaluated after remote success, when the executor knows the selected worker.
+    fn verification_policy(&self, _job: &CompileJob) -> VerificationPolicy {
+        VerificationPolicy::Off
+    }
+    /// Nonblocking notification before publication; use it to quarantine workers
+    /// and record a red end-of-build summary. Never put execution env in detail.
+    fn on_fault(&self, _job: &CompileJob, _fault: &ExecutorFault) {}
+    /// The admitted local reference matched the remote artifacts byte for byte.
+    fn on_verified(&self, _job: &CompileJob) {}
 }
 
 /// One input file identified by its raw BLAKE3 content digest.
@@ -91,8 +101,8 @@ impl std::fmt::Debug for CompileJob {
     }
 }
 
-/// An executor must report infrastructure failure as Declined before writing
-/// outputs, or as a nonzero Executed result. Failed compiles are never stored.
+/// Declined is an intentional local placement decision. Infrastructure faults
+/// must use Faulted; compiler diagnostics use a nonzero Executed result.
 #[derive(Debug)]
 pub enum ExecutorOutcome {
     /// Outputs have been written to their declared local destinations.
@@ -103,6 +113,11 @@ pub enum ExecutorOutcome {
     },
     /// Run locally with the normal memory and exclusive-access admission.
     Declined { reason: String },
+    /// Terminal infrastructure fault: no silent fallback or cache write.
+    Faulted {
+        kind: ExecutorFaultKind,
+        detail: String,
+    },
 }
 
 /// Where a miss ran. A hit reports Local because no executor was offered work.
@@ -114,6 +129,10 @@ pub enum CompileExecution {
     Local,
     /// The registered executor completed the invocation, including failed exits.
     Remote,
+    /// Remote artifacts matched an admitted local reference.
+    Verified,
+    /// Mismatches return the trusted local result, without caching it.
+    Faulted { fault: ExecutorFault },
     /// The executor declined and normal local execution followed.
     Declined { reason: String },
 }
@@ -178,6 +197,21 @@ pub(crate) fn record(value: CompileExecution) {
 }
 
 impl Registration {
+    pub(crate) fn verification_policy(&self, job: &CompileJob) -> VerificationPolicy {
+        self.executor.verification_policy(job)
+    }
+
+    pub(crate) fn report_fault(&self, job: &CompileJob, fault: &ExecutorFault) {
+        record(CompileExecution::Faulted {
+            fault: fault.clone(),
+        });
+        tracing::error!(kind = ?fault.kind, detail = %fault.detail, "distributed compiler fault");
+        self.executor.on_fault(job, fault);
+    }
+
+    pub(crate) fn report_verified(&self, job: &CompileJob) {
+        self.executor.on_verified(job);
+    }
     pub(crate) async fn execute(&self, job: &CompileJob) -> ExecutorOutcome {
         let permit = match self.slots.acquire_within(Duration::from_secs(300)).await {
             Ok(permit) => permit,

@@ -201,6 +201,41 @@ against the original values. Never substitute daemon ambient environment.
 `request_args` preserves the exact received argv before expansion/injections;
 `args` remains the effective compiler argv needed to produce declared outputs.
 
+`CompileExecutor::verification_policy(job)` is evaluated after a successful
+remote execution, when the executor knows the selected worker. It defaults to
+`VerificationPolicy::Off`; `Sampled { percent }` deterministically selects
+0–100 percent from compiler identity, original request argv and known input
+digests, excluding execution env and private staging argv. Invalid percentages
+fail terminally. An executor can force `Always` for a worker/toolchain's first
+job and sample later jobs.
+
+For selected jobs the engine snapshots the remote cache artifacts, removes all
+remote outputs (including dependency-discovery sidecars), and resumes the same
+local compiler spawn/admission path used without an executor. It uses the
+original compiler and the request's normal expanded/staged argv, with no new
+verification remaps, compiler paths, raw child spawn, or cache recursion.
+Both compilations use the same output paths: the snapshot directory is never a
+compiler argument. Internal diagnostic traces are regenerated locally rather
+than compared as cache artifacts. While local admission is held, the engine
+compares exit status and every artifact byte using bounded streaming buffers.
+Matches call `on_verified(job)`, journal `execution.kind: verified`, and permit
+only the trusted local outputs to enter the normal store path.
+
+A mismatch calls `on_fault(job, ExecutorFault { kind: OutputMismatch, detail })`
+before publication, journals `execution.kind: faulted`, returns the trusted
+local result and materializes its outputs, and bypasses **both** successful and
+compiler-error cache stores. Hosts use this typed callback to quarantine the
+worker and mark the end-of-build summary red even when local compilation
+succeeded. Callback implementations must be nonblocking and must not include
+execution environment values in fault details.
+
+`ExecutorOutcome::Faulted { kind, detail }` is terminal infrastructure failure;
+it never silently falls back locally. `ExecutorFaultKind` distinguishes
+`WorkerCrash`, `Drained`, `Transport`, `OutputMismatch`, `VerificationIo` and
+`InvalidPolicy`. The engine removes partial remote outputs, invokes `on_fault`,
+journals the typed fault and returns an error. `Declined` remains an intentional
+local placement decision; failed compiler diagnostics remain nonzero `Executed`.
+
 An executor's nonzero `capacity()` is captured at registration and bounds
 simultaneous offers across cloned service handles. Admission waits are bounded
 to 300 seconds, after which the offer declines locally. Executor implementations

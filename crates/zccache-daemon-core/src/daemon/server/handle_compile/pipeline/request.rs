@@ -56,12 +56,9 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         Err(response) => return response,
     };
 
-    // Snap the journal clock once so all file hashes in this request see a
-    // consistent view (avoids per-file current_clock() syscalls).
+    // Share one journal clock across this request's file hashes.
     let snap_clock = state.cache_system.current_clock();
-
-    // Ultra-fast request-level cache: skip request preparation when the exact
-    // compiler/args/root request still maps to a fresh fast-hit entry.
+    // Reuse a fresh entry for this exact compiler/args/root request.
     if let Some(response) = try_request_cache_hit(RequestCacheHitProbe {
         state,
         sid: &sid,
@@ -104,7 +101,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
     };
 
     state.sessions.touch(&sid);
-
     let ParsedSingleRequest {
         compilation,
         build_result,
@@ -753,7 +749,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         ),
     );
 
-    // Private snapshots provide recorded metadata without rewinding source files.
     let _pch_overlay = match super::super::pch_overlay::prepare_loaded_pch_overlay(
         state,
         &sid,
@@ -812,7 +807,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         compiler_exec_ns,
         compiler_prep_ns,
         post_exec_ns,
-        staged_plan,
+        mut staged_plan,
         resource_admission: _resource_admission,
     } = match exec_result {
         CompileExecResult::Ok(outcome) => outcome,
@@ -854,6 +849,18 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
             )
         };
 
+    if let Some(result) = super::verify_exec::uncached_fault_result(
+        state_arc,
+        &mut staged_plan,
+        exit_code,
+        &response_stdout,
+        &response_stderr,
+        state.non_rustc_materialization_mode(client_env.as_deref()),
+    )
+    .await
+    {
+        return result;
+    }
     if exit_code != 0 {
         if let Some(plan) = staged_plan.as_ref() {
             let _ = plan.cleanup();
@@ -916,7 +923,6 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         }
     }
 
-    // Only cache successful compilations
     if exit_code == 0 {
         let synchronous_persist = staged_plan.is_some();
         let rustc_dylint_input_hash = client_env.as_deref().and_then(|env| {
@@ -953,13 +959,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
             exit_code,
             depfile_strategy,
             compiler_dependency_scan: dependency_scan,
-            // Issue #401: hand the cc/cpp miss path the hashes already
-            // computed in `hash_and_verify` so `store_outcome.rs` skips
-            // re-hashing the same headers in its parallel `t_hash` phase.
-            // For rustc the same hashes arrive from `run_compile_exec` after
-            // shared admission has covered the entire background task. If we
-            // got here via cold context or fell back to a direct compile,
-            // `hash_map` is empty and the store path hashes everything.
+            // Reuse hashes already covered by compiler/resource admission.
             pre_hashed: if is_rustc {
                 exec_pre_hashed
             } else if hash_map.is_empty() {

@@ -35,11 +35,23 @@ struct Fake {
     mode: u8,
     calls: AtomicUsize,
     jobs: Mutex<Vec<CompileJob>>,
+    policy: VerificationPolicy,
+    faults: Mutex<Vec<ExecutorFault>>,
+    verified: AtomicUsize,
 }
 
 impl CompileExecutor for Fake {
     fn capacity(&self) -> usize {
         2
+    }
+    fn verification_policy(&self, _: &CompileJob) -> VerificationPolicy {
+        self.policy
+    }
+    fn on_fault(&self, _: &CompileJob, fault: &ExecutorFault) {
+        self.faults.lock().unwrap().push(fault.clone());
+    }
+    fn on_verified(&self, _: &CompileJob) {
+        self.verified.fetch_add(1, Ordering::SeqCst);
     }
     fn execute<'a>(&'a self, job: &'a CompileJob) -> ExecutorFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -53,6 +65,20 @@ impl CompileExecutor for Fake {
                     exit_code: 42,
                     stdout: vec![],
                     stderr: b"remote failure".to_vec(),
+                },
+                3 => {
+                    for path in &job.outputs {
+                        std::fs::write(path, b"wrong remote bytes").unwrap();
+                    }
+                    ExecutorOutcome::Executed {
+                        exit_code: 0,
+                        stdout: vec![],
+                        stderr: vec![],
+                    }
+                }
+                4 => ExecutorOutcome::Faulted {
+                    kind: ExecutorFaultKind::WorkerCrash,
+                    detail: "worker crashed".into(),
                 },
                 _ => mirror_compile(&self.compiler, &self.root, job).await,
             }
@@ -220,6 +246,9 @@ fn fake(temp: &TempDir, req: &CompileRequest, mode: u8) -> Arc<Fake> {
         mode,
         calls: AtomicUsize::new(0),
         jobs: Mutex::new(Vec::new()),
+        policy: VerificationPolicy::Off,
+        faults: Mutex::new(Vec::new()),
+        verified: AtomicUsize::new(0),
     })
 }
 
@@ -641,4 +670,191 @@ fn discovered_private_env_deps_remain_available_to_the_executor() {
         let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
         assert!(!journal.contains(sentinel));
     });
+}
+
+#[test]
+fn verification_mismatch_never_stores_and_local_bytes_win() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let local_cache = TempDir::new().unwrap();
+        let mut req = request(&temp, true);
+        *req.args
+            .iter_mut()
+            .find(|arg| arg.starts_with("--emit="))
+            .unwrap() = "--emit=metadata,dep-info".into();
+        let local = start(&local_cache).await;
+        assert_eq!(local.compile(req.clone()).await.unwrap().exit_code, 0);
+        local.shutdown(ShutdownMode::Graceful).await.unwrap();
+        let output = temp.path().join("work/libunit.rmeta");
+        let expected = std::fs::read(&output).unwrap();
+        let mut executor = fake(&temp, &req, 3);
+        Arc::get_mut(&mut executor).unwrap().policy = VerificationPolicy::Always;
+        let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+        for _ in 0..2 {
+            let result = service.compile(req.clone()).await.unwrap();
+            assert_eq!(result.exit_code, 0);
+            assert_eq!(
+                std::fs::read(&output).unwrap(),
+                expected,
+                "local bytes must win"
+            );
+            assert!(!result.cached);
+            assert!(matches!(
+                result.execution,
+                CompileExecution::Faulted {
+                    fault: ExecutorFault {
+                        kind: ExecutorFaultKind::OutputMismatch,
+                        ..
+                    }
+                }
+            ));
+        }
+        assert_eq!(
+            executor.calls.load(Ordering::SeqCst),
+            2,
+            "a mismatch must not populate the cache"
+        );
+        assert_eq!(executor.faults.lock().unwrap().len(), 2);
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+        let root = crate::core::config::effective_cache_root_from_top_level(
+            &temp.path().join("cache").into(),
+        );
+        let logs = crate::core::config::log_dir_from_cache_dir(&root);
+        let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 2).await;
+        for row in journal
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        {
+            assert_eq!(row["execution"]["fault"]["kind"], "output_mismatch");
+        }
+    });
+}
+
+#[test]
+fn verification_match_is_cached_and_not_reverified_on_hit() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let req = request(&temp, false);
+        let mut executor = fake(&temp, &req, 0);
+        Arc::get_mut(&mut executor).unwrap().policy = VerificationPolicy::Always;
+        let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+        let first = service.compile(req.clone()).await.unwrap();
+        assert_eq!(first.exit_code, 0);
+        assert_eq!(first.execution, CompileExecution::Verified);
+        let second = service.compile(req).await.unwrap();
+        assert!(second.cached);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(executor.verified.load(Ordering::SeqCst), 1);
+        assert!(executor.faults.lock().unwrap().is_empty());
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+    });
+}
+
+#[test]
+fn executor_fault_is_terminal_and_typed() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let req = request(&temp, false);
+        let executor = fake(&temp, &req, 4);
+        let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+        let error = service.compile(req).await.unwrap_err();
+        assert!(error.to_string().contains("WorkerCrash"));
+        assert!(!temp.path().join("work/unit.o").exists());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            executor.faults.lock().unwrap()[0].kind,
+            ExecutorFaultKind::WorkerCrash
+        );
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+        let root = crate::core::config::effective_cache_root_from_top_level(
+            &temp.path().join("cache").into(),
+        );
+        let logs = crate::core::config::log_dir_from_cache_dir(&root);
+        let journal = wait_for_journal(&logs.as_path().join("compile_journal.jsonl"), 1).await;
+        let row: serde_json::Value = serde_json::from_str(journal.trim()).unwrap();
+        assert_eq!(row["execution"]["fault"]["kind"], "worker_crash");
+        assert_eq!(row["outcome"], "error");
+    });
+}
+
+#[test]
+fn verification_uses_normal_host_admission() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = TempDir::new().unwrap();
+        let req = request(&temp, false);
+        let mut audit = AuditConfig::default();
+        audit.mode = crate::audit::AuditMode::Off;
+        let service = ZccacheService::start_with_host_admission_classifier(
+            ZccacheConfig {
+                host: HostIdentity::default_for_product("verification-admission"),
+                cache_root: temp.path().join("cache").into(),
+                audit,
+                limits: ServiceLimits::default(),
+                runtime: RuntimeHooks::default(),
+                cancellation: None,
+            },
+            Arc::new(RejectLocal),
+        )
+        .await
+        .unwrap();
+        let mut executor = fake(&temp, &req, 3);
+        Arc::get_mut(&mut executor).unwrap().policy = VerificationPolicy::Always;
+        let service = service.with_executor(executor.clone()).unwrap();
+        let error = service.compile(req).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("local memory admission must not run"));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(!temp.path().join("work/unit.o").exists());
+        service.shutdown(ShutdownMode::Graceful).await.unwrap();
+    });
+}
+
+#[test]
+fn verification_sampling_is_deterministic_and_ignores_private_execution_state() {
+    let job = CompileJob {
+        compiler_kind: crate::compiler::CompilerFamily::Rustc,
+        compiler_name: "rustc".into(),
+        compiler_identity: [1; 32],
+        args: vec!["private-stage".into()],
+        request_args: vec!["unit.rs".into()],
+        env: vec![],
+        exec_env: vec![],
+        cwd: "work".into(),
+        stdin: vec![],
+        inputs: vec![],
+        inputs_complete: false,
+        outputs: vec![],
+    };
+    let policy = VerificationPolicy::Sampled { percent: 37 };
+    let samples: Vec<bool> = (0..=255)
+        .map(|i| {
+            let mut job = job.clone();
+            job.compiler_identity[0] = i;
+            policy.selects(&job).unwrap()
+        })
+        .collect();
+    assert!(samples.iter().any(|selected| *selected));
+    assert!(samples.iter().any(|selected| !selected));
+    for i in (0..=255).rev() {
+        let mut job = job.clone();
+        job.compiler_identity[0] = i;
+        job.exec_env
+            .push(("PRIVATE".into(), "not a sampling input".into()));
+        job.args.push("another-random-stage".into());
+        assert_eq!(policy.selects(&job).unwrap(), samples[usize::from(i)]);
+        assert!(!VerificationPolicy::Sampled { percent: 0 }
+            .selects(&job)
+            .unwrap());
+        assert!(VerificationPolicy::Sampled { percent: 100 }
+            .selects(&job)
+            .unwrap());
+    }
+    assert_eq!(
+        VerificationPolicy::Sampled { percent: 101 }
+            .selects(&job)
+            .unwrap_err()
+            .kind,
+        ExecutorFaultKind::InvalidPolicy
+    );
 }

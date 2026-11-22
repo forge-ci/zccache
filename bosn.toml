@@ -354,3 +354,7 @@ cmd = "CARGO_TARGET_DIR=/target/1984-cli-fixed soldr cargo nextest run --locked 
 [task.journal-1865-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core -p zccache-cli-core --features zccache-daemon-core/test-support,zccache-cli-core/cli -E 'test(deleted_non_cacheable_response_file_keeps_parse_time_reason) | test(compile_journal::) | test(journal_passthrough) | test(analyze_passthrough)' --test-threads 2 --no-fail-fast --status-level fail --final-status-level fail --failure-output immediate"
+
+[task.executor-verification-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo nextest run --locked --lib -p zccache-daemon-core --features test-support -E 'test(executor_tests) | test(keys_env_tests)' --test-threads 2 --no-fail-fast --status-level fail --final-status-level fail --failure-output immediate"
