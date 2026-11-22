@@ -108,7 +108,7 @@ async fn mirror_compile(compiler: &Path, root: &Path, job: &CompileJob) -> Execu
         .args(job.args.iter().map(|s| remap(s)))
         .current_dir(remap(&job.cwd.to_string_lossy()))
         .clear_env(true);
-    for (name, value) in &job.env {
+    for (name, value) in &job.exec_env {
         builder = builder.env(name, value);
     }
     let result = crate::daemon::process::async_builder_output_with_priority(
@@ -505,6 +505,8 @@ fn executor_capacity_is_shared_across_service_clones() {
             compiler_identity: [0; 32],
             args: vec![],
             env: vec![],
+            exec_env: vec![],
+            request_args: vec![],
             cwd: temp.path().into(),
             stdin: vec![],
             inputs: vec![],
@@ -553,6 +555,48 @@ fn host_dependent_native_cpu_jobs_stay_local() {
                 }
             );
             service.shutdown(ShutdownMode::Graceful).await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn execution_environment_is_private_and_does_not_change_keys() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for rust in [true, false] {
+            let temp = TempDir::new().unwrap();
+            let mut req = request(&temp, rust);
+            let sentinel = "EXEC_ENV_PRIVATE_SENTINEL_28371";
+            req.env = ["CARGO_MANIFEST_DIR", "OUT_DIR", "COLD_CUSTOM_INPUT"]
+                .map(|name| (name.to_owned(), sentinel.to_owned()))
+                .to_vec();
+            let executor = fake(&temp, &req, 1);
+            let service = start(&temp).await.with_executor(executor.clone()).unwrap();
+            let baseline = service.compile(req.clone()).await.unwrap();
+            assert_eq!(baseline.exit_code, 0);
+            let job = executor.jobs.lock().unwrap()[0].clone();
+            assert_eq!(job.exec_env, req.env);
+            assert_eq!(job.request_args, req.args);
+            assert_eq!(job.cwd, req.cwd);
+            assert!(!job.env.iter().any(|(_, value)| value == sentinel));
+            assert!(!format!("{job:?}").contains(sentinel));
+            req.env.clear();
+            let unchanged = service.compile(req).await.unwrap();
+            assert!(unchanged.cached, "execution-only env must not move the key");
+            service.shutdown(ShutdownMode::Graceful).await.unwrap();
+            let root = crate::core::config::effective_cache_root_from_top_level(
+                &temp.path().join("cache").into(),
+            );
+            let logs = crate::core::config::log_dir_from_cache_dir(&root);
+            let journal =
+                std::fs::read_to_string(logs.as_path().join("compile_journal.jsonl")).unwrap();
+            assert!(!journal.contains(sentinel));
+            let rows: Vec<serde_json::Value> = journal
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(rows.len(), 2);
+            assert!(rows[0]["context_key"].is_string());
+            assert_eq!(rows[0]["context_key"], rows[1]["context_key"]);
         }
     });
 }

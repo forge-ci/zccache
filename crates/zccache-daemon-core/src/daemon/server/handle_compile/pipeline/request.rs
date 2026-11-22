@@ -31,6 +31,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         client_env,
         stdin,
     } = req;
+    let executor_request = super::remote_exec::capture(args, client_env.as_deref());
     let state = state_arc;
     let compile_start = std::time::Instant::now();
     let ParsedRequestArguments {
@@ -433,6 +434,7 @@ pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(
         &effective_args,
         client_env.as_deref(),
         matches!(verdict, crate::depgraph::CacheVerdict::Hit { .. }),
+        executor_request,
     );
 
     write_session_log(

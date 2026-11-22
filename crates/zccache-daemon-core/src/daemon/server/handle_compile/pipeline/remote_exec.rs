@@ -8,8 +8,28 @@ pub(super) struct Manifest {
     env: Vec<(String, String)>,
     complete: bool,
     private_env: bool,
+    request: RequestInvocation,
 }
 
+/// Captured before request preparation can modify environment or arguments.
+pub(super) struct RequestInvocation {
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+pub(super) fn capture(
+    args: &[String],
+    env: Option<&[(String, String)]>,
+) -> Option<RequestInvocation> {
+    crate::embedded::executor::current()?;
+    // Both copies outlive preparation and are owned only by the executor offer.
+    Some(RequestInvocation {
+        args: args.to_vec(),
+        env: env.unwrap_or_default().to_vec(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
     state: &SharedState,
     context_key: &ContextKey,
@@ -18,8 +38,9 @@ pub(super) fn prepare(
     args: &[String],
     env: Option<&[(String, String)]>,
     complete: bool,
+    request: Option<RequestInvocation>,
 ) -> Option<Manifest> {
-    crate::embedded::executor::current()?;
+    let request = request?;
     let paths = request_cache_input_paths(state, context_key, &ctx.source_file, ctx);
     let mut keyed: Vec<(String, String)> =
         request_env_fingerprint_vars(env, &compiler.to_string_lossy(), args)
@@ -46,6 +67,7 @@ pub(super) fn prepare(
     let env = safe.map_or_else(Vec::new, |s| s.as_slice().to_vec());
     Some(Manifest {
         paths,
+        request,
         identity: *ctx.compiler_hash.as_bytes(),
         complete,
         private_env: count != env.len(),
@@ -118,6 +140,8 @@ pub(super) async fn offer(
         compiler_identity: manifest.identity,
         args: args.to_vec(),
         env: manifest.env,
+        exec_env: manifest.request.env,
+        request_args: manifest.request.args,
         cwd: req.cwd_path.clone(),
         stdin: req.stdin.to_vec(),
         inputs: Vec::new(),

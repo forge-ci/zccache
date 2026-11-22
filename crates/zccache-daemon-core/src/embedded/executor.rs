@@ -31,7 +31,14 @@ pub struct CompileInput {
 }
 
 /// Resolved compiler invocation. Toolchain files are supplied by the executor.
-#[derive(Debug, Clone)]
+/// Jobs deliberately cannot be serialized; execution environments stay in memory.
+///
+/// ```compile_fail
+/// fn persist(job: &zccache_daemon_core::embedded::CompileJob) {
+///     serde_json::to_string(job).unwrap();
+/// }
+/// ```
+#[derive(Clone)]
 pub struct CompileJob {
     /// Compiler family detected by zccache.
     pub compiler_kind: crate::compiler::CompilerFamily,
@@ -44,6 +51,14 @@ pub struct CompileJob {
     pub args: Vec<String>,
     /// Key-relevant environment only; excludes daemon lineage and jobserver fds.
     pub env: Vec<(String, String)>,
+    /// Complete environment of the original compile request, before key/privacy
+    /// filtering. Memory only: never journal, hash, log, serialize or persist this
+    /// field. Executors must select what is safe to forward and verify discovered
+    /// env-deps against these values; never substitute the daemon environment.
+    pub exec_env: Vec<(String, String)>,
+    /// Exact argv received in the request, before response-file expansion or
+    /// zccache injections. Use `args` to execute with the declared outputs.
+    pub request_args: Vec<String>,
     /// Absolute client working directory.
     pub cwd: NormalizedPath,
     /// Standard input supplied by the caller.
@@ -54,6 +69,26 @@ pub struct CompileJob {
     pub inputs_complete: bool,
     /// Absolute local output paths, including dependency-discovery sidecars.
     pub outputs: Vec<NormalizedPath>,
+}
+
+// Deliberately no Serialize/Deserialize implementation: a job is transient.
+impl std::fmt::Debug for CompileJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompileJob")
+            .field("compiler_kind", &self.compiler_kind)
+            .field("compiler_name", &self.compiler_name)
+            .field("compiler_identity", &self.compiler_identity)
+            .field("args", &self.args)
+            .field("env", &self.env)
+            .field("exec_env", &"<redacted>")
+            .field("request_args", &self.request_args)
+            .field("cwd", &self.cwd)
+            .field("stdin", &self.stdin)
+            .field("inputs", &self.inputs)
+            .field("inputs_complete", &self.inputs_complete)
+            .field("outputs", &self.outputs)
+            .finish()
+    }
 }
 
 /// An executor must report infrastructure failure as Declined before writing

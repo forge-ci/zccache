@@ -1932,3 +1932,10 @@ a separate behavior decision and regression coverage.
 - [x] Record execution location in embedded responses and journal.
 - [x] Cover real C/Rust jobs, cache hits, decline and failure.
 - [ ] Run affected nextest, workspace clippy, local gate; push and open PR (no merge).
+
+## CompileJob request execution environment
+
+- [x] Preserve original request argv and full environment separately from key env.
+- [x] Redact execution environment from Debug and keep jobs non-serializable.
+- [ ] Validate Rust/C key stability and journal privacy; run clippy/nextest.
+- [ ] Notify dist workers, land PR, coordinate 1.15.18 after 1.15.17.
