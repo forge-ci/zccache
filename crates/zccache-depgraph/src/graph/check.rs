@@ -744,7 +744,7 @@ impl DepGraph {
         G: Fn(&Path) -> Option<ContentHash>,
         E: Fn(&str) -> Option<String>,
     {
-        self.try_fast_hit_expected_with_env(key, None, get_hash, env_value)
+        self.try_fast_hit_expected_with_env(key, None, |path| get_hash(path.as_path()), env_value)
     }
 
     /// Prove reuse of a particular fast entry's artifact, rather than just
@@ -760,6 +760,31 @@ impl DepGraph {
         G: Fn(&Path) -> Option<ContentHash>,
         E: Fn(&str) -> Option<String>,
     {
+        self.try_fast_hit_for_artifact_with_normalized_inputs(
+            key,
+            expected_artifact,
+            |path| get_hash(path.as_path()),
+            env_value,
+        )
+    }
+
+    /// Validate a fast entry while borrowing the graph's normalized inputs.
+    ///
+    /// Callers with a normalized-path metadata cache or request memo can reuse
+    /// each input's cached comparison key instead of normalizing it again for
+    /// every translation unit. Fresh hashes and artifact identity are still
+    /// checked exactly as by [`Self::try_fast_hit_for_artifact_with_env`].
+    pub fn try_fast_hit_for_artifact_with_normalized_inputs<G, E>(
+        &self,
+        key: &ContextKey,
+        expected_artifact: &str,
+        get_hash: G,
+        env_value: E,
+    ) -> Option<ArtifactKey>
+    where
+        G: Fn(&NormalizedPath) -> Option<ContentHash>,
+        E: Fn(&str) -> Option<String>,
+    {
         self.try_fast_hit_expected_with_env(key, Some(expected_artifact), get_hash, env_value)
     }
 
@@ -771,7 +796,7 @@ impl DepGraph {
         env_value: E,
     ) -> Option<ArtifactKey>
     where
-        G: Fn(&Path) -> Option<ContentHash>,
+        G: Fn(&NormalizedPath) -> Option<ContentHash>,
         E: Fn(&str) -> Option<String>,
     {
         let key = self.resolve_instance_key(key)?;
@@ -805,7 +830,10 @@ impl DepGraph {
         }
 
         let computed = if let Some(externs) = rustc_externs.as_deref() {
-            let mut extern_hashes = collect_rustc_extern_hashes(externs, &get_hash)?;
+            let mut extern_hashes = externs
+                .iter()
+                .map(|(name, path)| get_hash(path).map(|hash| (name.clone(), hash)))
+                .collect::<Option<Vec<_>>>()?;
             let base = compute_rustc_artifact_key_with_root_with(
                 &entry.logical_key,
                 &mut file_hashes,
