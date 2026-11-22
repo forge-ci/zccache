@@ -587,22 +587,12 @@ jobs:
           # families; cache-cleanup.yml retires the disabled solo-toolchain
           # family through its explicit main-only policy.
           cache-eviction-policy: protect-foundations
-      - name: Install compiler ownership Clippy
-        # Rustup may stage components across OverlayFS mounts in Docker replay.
-        env:
-          RUSTUP_PERMIT_COPY_RENAME: "1"
-        run: soldr rustup component add clippy
       - name: Check MSRV
         run: soldr cargo check --workspace
       - name: Verify nested Dylint cache contract
         run: "soldr cargo test -p zccache --test cache_rust daemon_dylint_cache_test:: -- --ignored"
       - name: Verify ignored Cargo cache regressions (#2002/#2117)
         run: "soldr cargo test -p zccache --features zccache-bin --test cache_rust -- false_green_check:: cow_readonly_cargo:: native_archive:: --ignored --test-threads=1"
-      - name: Enforce compiler spawn ownership (clippy disallowed-methods)
-        # #2027: crates/zccache-daemon-core/clippy.toml bans
-        # kernal_api::SpawnSpec::new outside daemon::server::compiler_spawn.
-        # Enforce the ban for every PR and merge group.
-        run: soldr cargo clippy -p zccache-daemon-core --all-targets --features test-support -- -A clippy::all -D clippy::disallowed_methods
       - name: Rust argfile execution regressions
         run: |
           native_compiler_dir="$(dirname "$(soldr rustup which rustc)")"

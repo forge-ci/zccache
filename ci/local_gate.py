@@ -17,11 +17,13 @@ Lanes (GATE-007: each is cached on its own input set):
   job runs exactly `ci/local_gate.py --lane lint` and nothing else
   (GATE-001), so this list is the single source of truth for it.
 - `py-tests`: the `ci/tests` pytest suite (python-tests.yml `ci/tests`).
-- `check`: the MSRV job through Bosn Actions, including workspace check
-  and its nested Dylint cache contract.
+- `check`: the MSRV job through Bosn Actions: workspace check and its
+  ignored cache regression tests. It runs no lint.
 - `docs`: rustdoc with warnings denied (ci.yml `docs`).
-- `dylint`: both default and product-feature jobs from ci.yml, through Bosn.
-- `clippy`: the workspace Clippy job replayed through Bosn Actions.
+- `rust-lint`: `soldr lint rust --check` on the host -- fmt, Clippy, Dylint
+  and the Cargo.toml `[workspace.metadata.soldr.lint]` extras. It covers
+  ci.yml's `dylint` and `dylint-product` jobs and clippy.yml's `clippy` job.
+  Lint never runs under bosn.
 - `unit-tests`: the default-feature Linux lib/bin test job replayed through Bosn.
 - `tests`: the Integration (Linux) workflow replayed through `bosn ci run`,
   never on the host (GATE-005). Every successful receipt must
@@ -58,7 +60,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CI_LINT_REF = tomllib.loads((ROOT / "ci.toml").read_text(encoding="utf-8"))[
     "linter"
 ].split("@", 1)[1]
-LANES = ("lint", "py-tests", "check", "docs", "dylint", "clippy", "unit-tests", "tests")
+LANES = ("lint", "py-tests", "check", "docs", "rust-lint", "unit-tests", "tests")
 PY = ("uv", "run", "--no-project", "--python", "3.13")
 # ci.yml's and integration.yml's workflow-level env: warnings are errors. It
 # also replaces .cargo/config.toml's build.rustflags, exactly as on CI.
@@ -202,7 +204,7 @@ def checks() -> list[Check]:
     ]
     rust = [
         Check(
-            "MSRV check and nested Dylint (isolated Bosn Actions)",
+            "MSRV check and cache regressions (isolated Bosn Actions)",
             (
                 "bosn",
                 "ci",
@@ -225,70 +227,11 @@ def checks() -> list[Check]:
             bosn_job="msrv",
             selected_job="msrv",
             required_steps=(
-                "Install compiler ownership Clippy",
                 "Check MSRV",
                 "Verify nested Dylint cache contract",
                 "Verify ignored Cargo cache regressions (#2002/#2117)",
-                "Enforce compiler spawn ownership (clippy disallowed-methods)",
                 "Rust argfile execution regressions",
                 "Fetch-lock expiry regression",
-            ),
-        ),
-        # #2202: replay both parallel feature selections in the same lane.
-        # A partial proof must never skip either remote Dylint job.
-        Check(
-            "Dylint (isolated Bosn Actions)",
-            (
-                "bosn",
-                "ci",
-                "run",
-                "--workspace",
-                ".",
-                "--workflow",
-                ".github/workflows/ci.yml",
-                "--job",
-                "dylint",
-                "--trigger",
-                "pr",
-                "--wait",
-                "--json",
-            ),
-            "dylint",
-            exclusive=True,
-            min_version=(0, 1, 12),
-            bosn_workflow=".github/workflows/ci.yml",
-            bosn_job="dylint",
-            selected_job="dylint",
-            required_steps=(
-                "Run Dylint",
-                "Prove custom-lint selection for every OS",
-            ),
-        ),
-        Check(
-            "Dylint product features (isolated Bosn Actions)",
-            (
-                "bosn",
-                "ci",
-                "run",
-                "--workspace",
-                ".",
-                "--workflow",
-                ".github/workflows/ci.yml",
-                "--job",
-                "dylint-product",
-                "--trigger",
-                "pr",
-                "--wait",
-                "--json",
-            ),
-            "dylint",
-            exclusive=True,
-            min_version=(0, 1, 12),
-            bosn_workflow=".github/workflows/ci.yml",
-            bosn_job="dylint-product",
-            selected_job="dylint-product",
-            required_steps=(
-                "Run Dylint product features",
             ),
         ),
         Check(
@@ -298,21 +241,19 @@ def checks() -> list[Check]:
             (*RUST_ENV, ("RUSTDOCFLAGS", "-D warnings")),
             exclusive=True,
         ),
+    ]
+    # Lint never runs under bosn. `soldr lint` runs fmt, Clippy and the host
+    # Dylint pass, then the Cargo.toml extras: clippy.yml's hosted features
+    # and spawn ownership, the dylints/* library tests, the cross-OS and
+    # product-feature Dylint passes and the per-OS selection proof. `--lib
+    # --bins` is the Dylint scope ci.lint has always used (#1740); Clippy
+    # keeps `--all-targets`.
+    rust_lint = [
         Check(
-            "Workspace Clippy (isolated Bosn Actions)",
-            (
-                "bosn", "ci", "run", "--workspace", ".",
-                "--workflow", ".github/workflows/clippy.yml", "--job", "clippy",
-                "--event", "workflow_call", "--wait", "--json",
-            ),
-            "clippy",
+            "soldr lint (fmt, Clippy, Dylint and repo extras)",
+            ("soldr", "lint", "rust", "--check", "--lib", "--bins"),
+            "rust-lint",
             exclusive=True,
-            min_version=(0, 1, 12),
-            bosn_workflow=".github/workflows/clippy.yml",
-            bosn_job="clippy",
-            selected_job="clippy",
-            bosn_event="workflow_call",
-            required_steps=("Run Clippy",),
         ),
     ]
     # GATE-005/009: act sets CI=true in its job containers; the nextest
@@ -374,7 +315,7 @@ def checks() -> list[Check]:
             ),
         ),
     ]
-    return lint + py_tests + rust + tests
+    return lint + py_tests + rust + rust_lint + tests
 
 
 @dataclass(frozen=True)

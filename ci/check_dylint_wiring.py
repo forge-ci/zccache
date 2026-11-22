@@ -173,6 +173,30 @@ def check_feature_inventory(root: Path) -> list[str]:
     ]
 
 
+def check_soldr_lint_wiring(workspace: dict, expected: set[str]) -> list[str]:
+    """`soldr lint` must run every Dylint library (lint never runs under bosn)."""
+    metadata = workspace.get("workspace", {}).get("metadata", {})
+    errors: list[str] = []
+    steps = metadata.get("soldr", {}).get("lint", {}).get("steps", [])
+    if "dylint" not in steps:
+        errors.append(
+            "[workspace.metadata.soldr.lint] steps must include \"dylint\" "
+            "so `soldr lint` runs the dylints/* libraries"
+        )
+    paths = {
+        entry.get("path")
+        for entry in metadata.get("dylint", {}).get("libraries", [])
+        if isinstance(entry, dict)
+    }
+    if "dylints/*" not in paths:
+        for manifest in sorted(expected):
+            if Path(manifest).parent.as_posix() not in paths:
+                errors.append(
+                    f"[workspace.metadata.dylint] libraries omits {manifest}"
+                )
+    return errors
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Return wiring errors; kept pure so pytest can exercise fixtures."""
     expected = manifests(root)
@@ -195,6 +219,7 @@ def check(root: Path = ROOT) -> list[str]:
     workspace_file = root / ("Cargo" + ".toml")
     workspace = tomllib.loads(workspace_file.read_text(encoding="utf-8"))
     excluded = set(workspace.get("workspace", {}).get("exclude", []))
+    errors.extend(check_soldr_lint_wiring(workspace, expected))
     for manifest in expected:
         lint_dir = Path(manifest).parent
         if lint_dir.as_posix() not in excluded:

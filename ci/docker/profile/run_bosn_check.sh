@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# Run repository lint and unit-test contracts in Bosn's Linux toolchain.
+# Run repository unit-test contracts in Bosn's Linux toolchain. Lint never
+# runs under bosn; it runs on the host through `soldr lint`.
 # The checkout is bind-mounted from the host and may contain Windows-local
 # .cargo/.rustup homes, so every Rust command runs outside it with the seeded
 # Linux homes explicitly preserved.
@@ -8,10 +9,10 @@ set -euo pipefail
 
 MODE="${1:-}"
 case "${MODE}" in
-    lint|test)
+    test)
         ;;
     *)
-        echo "usage: run_bosn_check.sh {lint|test}" >&2
+        echo "usage: run_bosn_check.sh {test}" >&2
         exit 2
         ;;
 esac
@@ -46,10 +47,6 @@ run_soldr() {
 
 seed_soldr_home
 case "${MODE}" in
-    lint)
-        run_soldr cargo fmt --manifest-path /work/Cargo.toml --all -- --check
-        run_soldr cargo clippy --manifest-path /work/Cargo.toml --workspace --all-targets -- -D warnings
-        ;;
     test)
         # Mirror ci/test.py's required-bin prebuild and serial unit-test path
         # without letting its /work subprocess rediscover host toolchain homes.

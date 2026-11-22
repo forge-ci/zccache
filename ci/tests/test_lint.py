@@ -206,7 +206,7 @@ def test_split_dylint_passes_preserve_every_os_and_product_check(monkeypatch, pa
     assert product_targets == ([] if pass_name == "default" else expected)
 
 
-@pytest.mark.parametrize("pass_name", ["all", "default", "product"])
+@pytest.mark.parametrize("pass_name", ["all", "default", "product", "cross"])
 def test_dylint_cli_selects_the_requested_pass(monkeypatch, pass_name):
     monkeypatch.setattr(lint, "validate_release_metadata", lambda: None)
     monkeypatch.setattr(lint.check_kernal_api_baseline, "check", lambda: [])
@@ -288,3 +288,64 @@ def test_lint_continues_to_cargo_when_the_dependency_guard_is_clean(monkeypatch)
 
     assert lint.main() == 0
     assert ran, "a clean guard must fall through to fmt and clippy"
+
+
+def test_cross_pass_leaves_the_host_pass_to_soldr_lint(monkeypatch):
+    """`soldr lint`'s built-in Dylint step runs the host pass; the extra
+    covers only the other OSes, never the product ratchet."""
+    monkeypatch.setattr(lint, "which", lambda _: "/tools/soldr")
+    monkeypatch.setattr(lint, "self_build_env", lambda: {})
+    monkeypatch.setattr(lint.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(
+        lint.subprocess, "run", lambda c, **_: calls.append(c) or SimpleNamespace(returncode=0)
+    )
+    monkeypatch.setattr(lint, "dylint_product_pass", lambda *_: pytest.fail("product ran"))
+    assert lint.lint_dylint_only("cross") == 0
+    analyses = [c for c in calls if "--all" in c]
+    assert [c[c.index("--target") + 1] for c in analyses] == [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ]
+
+
+def test_clippy_hosted_matches_the_clippy_workflow(monkeypatch):
+    import yaml
+
+    workflow = yaml.safe_load(
+        (lint.SCRIPT_DIR / ".github/workflows/clippy.yml").read_text(encoding="utf-8")
+    )
+    assert workflow["env"]["ZCCACHE_CLIPPY_FEATURES"] == ",".join(lint.CLIPPY_HOSTED_FEATURES)
+    steps = workflow["jobs"]["clippy"]["steps"]
+    ownership = next(s for s in steps if s.get("name", "").startswith("Enforce compiler spawn"))
+    commands = []
+    monkeypatch.setattr(lint, "cargo_command", lambda *args: ["soldr", "cargo", *args])
+    monkeypatch.setattr(
+        lint, "run_cmd", lambda c: commands.append(c) or SimpleNamespace(returncode=0)
+    )
+    assert lint.lint_clippy_hosted() == 0
+    assert [c[1:] for c in commands] == [
+        ["cargo", "clippy", "--workspace", "--all-targets", "--features",
+         ",".join(lint.CLIPPY_HOSTED_FEATURES), "--", "-D", "warnings"],
+        ownership["run"].split()[1:],
+    ]
+
+
+def test_dylint_fixture_requires_a_finding_for_every_os(monkeypatch):
+    monkeypatch.setattr(lint, "self_build_env", lambda: {})
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "violate" in command:
+            return SimpleNamespace(returncode=1, stdout=lint.DYLINT_FIXTURE_FINDING)
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(lint.subprocess, "run", fake_run)
+    assert lint.lint_dylint_fixture() == 0
+    assert len(calls) == 2 * len(lint.DYLINT_OS_TARGETS)
+
+    monkeypatch.setattr(
+        lint.subprocess, "run", lambda c, **_: SimpleNamespace(returncode=0, stdout="")
+    )
+    assert lint.lint_dylint_fixture() == 1

@@ -106,9 +106,9 @@ def test_both_dylint_jobs_require_the_complete_attested_lane() -> None:
     for name in ("dylint", "dylint-product"):
         key = f"ci.yml:{name}"
         assert key in trust["skip"]
-        assert trust["covered-by"][key] == ["dylint"]
+        assert trust["covered-by"][key] == ["rust-lint"]
         gates = attestations["jobs"][key]
-        assert gates and all(attestations["gates"][g]["lane"] == "dylint" for g in gates)
+        assert gates and all(attestations["gates"][g]["lane"] == "rust-lint" for g in gates)
         output = f"skip_{name}"
         mode = _job_block("ci.yml", "ci-mode")
         assert output in mode
@@ -121,7 +121,7 @@ def test_clippy_and_linux_skip_require_their_full_proofs() -> None:
     policy = yaml.safe_load((ROOT / "ci-attestations.yml").read_text())
     trust = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["trust"]
     mode = yaml.safe_load(_job_block("ci.yml", "ci-mode"))["ci-mode"]
-    for job, lanes in (("clippy", ["clippy"]), ("linux", ["check", "unit-tests"])):
+    for job, lanes in (("clippy", ["rust-lint"]), ("linux", ["check", "unit-tests"])):
         key = f"ci.yml:{job}"
         assert key in trust["skip"]
         assert trust["covered-by"][key] == lanes
@@ -192,15 +192,12 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     """
     isolated = [check for check in local_gate.checks() if check.bosn_workflow]
     by_job = {check.bosn_job: check for check in isolated}
-    assert len(isolated) == len(by_job) == 6
+    assert len(isolated) == len(by_job) == 3
     assert {
         job: (check.lane, check.bosn_workflow, check.selected_job)
         for job, check in by_job.items()
     } == {
         "msrv": ("check", ".github/workflows/ci.yml", "msrv"),
-        "dylint": ("dylint", ".github/workflows/ci.yml", "dylint"),
-        "dylint-product": ("dylint", ".github/workflows/ci.yml", "dylint-product"),
-        "clippy": ("clippy", ".github/workflows/clippy.yml", "clippy"),
         "test": ("unit-tests", ".github/workflows/ci-check.yml", "test"),
         "integration": ("tests", ".github/workflows/integration.yml", None),
     }
@@ -208,13 +205,6 @@ def test_isolated_lanes_replay_the_real_workflows() -> None:
     assert all("--wait" in check.argv and "--json" in check.argv for check in isolated)
     assert all(check.min_version == (0, 1, 12) for check in isolated)
     assert "Verify nested Dylint cache contract" in by_job["msrv"].required_steps
-    assert "Install compiler ownership Clippy" in by_job["msrv"].required_steps
-    assert by_job["dylint"].required_steps == (
-        "Run Dylint",
-        "Prove custom-lint selection for every OS",
-    )
-    assert by_job["dylint-product"].required_steps == ("Run Dylint product features",)
-    assert by_job["clippy"].required_steps == ("Run Clippy",)
     assert by_job["test"].required_steps == ("Build test binaries", "Test")
     assert "os=ubuntu-latest" in by_job["test"].argv
     assert by_job["test"].test_threads_env == "RUST_TEST_THREADS"
@@ -351,3 +341,45 @@ def test_integration_workflow_unknown_failure_is_explicit(tmp_path) -> None:
     subprocess.run(['bash', '-c', 'status=137\nif [ $status -ne 0 ]; then' + script], cwd=tmp_path,
                    env={**os.environ, 'GITHUB_STEP_SUMMARY': str(summary)}, timeout=10, check=True)
     assert 'unknown failure (exit 137)' in summary.read_text()
+
+
+def test_lint_never_runs_under_bosn() -> None:
+    """Lint runs on the host through `soldr lint`; no bosn lane or replay lints."""
+    lanes = tomllib.loads((ROOT / "local-gate.toml").read_text())["gate"]["lanes"]
+    for name, lane in lanes.items():
+        if "bosn" in lane["tools"]:
+            assert "lint" not in name and name not in ("dylint", "clippy"), name
+    assert lanes["rust-lint"]["tools"] == ["soldr", "uv"]
+    rust_lint = [c for c in local_gate.checks() if c.lane == "rust-lint"]
+    assert [c.argv[:4] for c in rust_lint] == [("soldr", "lint", "rust", "--check")]
+    assert not any(c.bosn_workflow for c in rust_lint)
+    for check in local_gate.checks():
+        if check.bosn_workflow:
+            block = _job_block(check.bosn_workflow.rsplit("/", 1)[-1], check.bosn_job)
+            assert "cargo clippy" not in block and "soldr dylint" not in block, check.name
+            assert "ci.lint" not in block and "cargo fmt" not in block, check.name
+
+
+def test_soldr_lint_covers_the_skipped_lint_jobs() -> None:
+    """ci.yml dylint/dylint-product and clippy.yml clippy skip on the
+    `rust-lint` proof, so `soldr lint` must run what they run."""
+    metadata = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["metadata"]
+    assert metadata["dylint"]["libraries"] == [{"path": "dylints/*"}]
+    config = metadata["soldr"]["lint"]
+    assert config["steps"] == ["fmt", "clippy", "dylint"]
+    extras = [" ".join(extra) for extra in config["extra"]]
+    for job, workflow, command in (
+        ("dylint", "ci.yml", "ci/check_dylint_wiring.py"),
+        ("dylint", "ci.yml", "ci.lint --dylint-libraries"),
+        ("dylint", "ci.yml", "ci.lint --dylint-only --pass cross"),
+        ("dylint", "ci.yml", "ci.lint --dylint-fixture"),
+        ("dylint-product", "ci.yml", "ci.lint --dylint-only --pass product"),
+        ("clippy", "clippy.yml", "ci.lint --clippy-hosted"),
+    ):
+        assert any(command in extra for extra in extras), command
+        assert _job_block(workflow, job)
+    clippy = _job_block("clippy.yml", "clippy")
+    assert "name: Enforce compiler spawn ownership (clippy disallowed-methods)" in clippy
+    assert "clippy" not in _job_block("ci.yml", "msrv").lower().replace(
+        "clippy.toml", ""
+    )

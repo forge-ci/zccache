@@ -11,7 +11,13 @@ def _write(root: Path, relative: str, text: str = "") -> None:
 
 def _scaffold(root: Path, *, excluded: bool = True, source: str = "") -> None:
     exclusion = '["dylints/example"]' if excluded else "[]"
-    _write(root, "Cargo" + ".toml", f"[workspace]\nexclude = {exclusion}\n")
+    _write(
+        root,
+        "Cargo" + ".toml",
+        f"[workspace]\nexclude = {exclusion}\n"
+        '[workspace.metadata.dylint]\nlibraries = [{ path = "dylints/*" }]\n'
+        '[workspace.metadata.soldr.lint]\nsteps = ["fmt", "clippy", "dylint"]\n',
+    )
     _write(root, "dylints/example/" + "Cargo.toml")
     _write(root, "dylints/example/README.md")
     _write(root, "dylints/example/rust-toolchain.toml")
@@ -217,3 +223,20 @@ def test_check_rejects_a_feature_hidden_from_the_product_pass(tmp_path: Path) ->
 
     errors = check_dylint_wiring.check(tmp_path)
     assert [error.split(":")[0] for error in errors] == ["app/hidden"]
+
+
+def test_check_requires_soldr_lint_to_run_every_library(tmp_path: Path) -> None:
+    """Lint never runs under bosn, so `soldr lint` must load each library."""
+    _scaffold(tmp_path)
+    _write(
+        tmp_path,
+        "Cargo" + ".toml",
+        '[workspace]\nexclude = ["dylints/example"]\n'
+        "[workspace.metadata.dylint]\nlibraries = []\n"
+        '[workspace.metadata.soldr.lint]\nsteps = ["fmt", "clippy"]\n',
+    )
+
+    errors = check_dylint_wiring.check(tmp_path)
+
+    assert any("steps must include" in error for error in errors)
+    assert "[workspace.metadata.dylint] libraries omits dylints/example/Cargo.toml" in errors

@@ -8,6 +8,14 @@ Usage:
     ./lint --dylint-only --pass default  # CI default-feature shard
     ./lint --dylint-only --pass product  # CI shipped-feature shard
     ./lint --clippy-only    # default and shipped-product clippy passes
+
+`soldr lint` (Cargo.toml [workspace.metadata.soldr.lint]) runs fmt, Clippy
+and the host Dylint pass itself, then these repo extras on the host. Lint
+never runs under bosn:
+    ./lint --clippy-hosted          # clippy.yml's feature set + spawn ownership
+    ./lint --dylint-libraries       # format and test every dylints/* library
+    ./lint --dylint-only --pass cross    # Dylint for every non-host OS
+    ./lint --dylint-fixture         # prove custom-lint selection for every OS
 """
 
 import argparse
@@ -64,6 +72,23 @@ DYLINT_EXCLUDED_FEATURES = {
     "zccache-daemon-core/tokio-console": "diagnostic build; requires --cfg tokio_unstable",
 }
 DYLINT_FEATURE_BASELINE = SCRIPT_DIR / "ci" / "dylint_feature_baseline.txt"
+# clippy.yml's ZCCACHE_CLIPPY_FEATURES (guarded by ci/tests/test_lint.py):
+# the selection that makes `--all-targets` compile the feature-gated tests.
+CLIPPY_HOSTED_FEATURES = [
+    "zccache/zccache-bin",
+    "zccache/daemon-bin",
+    "zccache/download-bin",
+    "zccache/download-daemon-bin",
+    "zccache/fingerprint-bin",
+    "zccache/stamp-bin",
+    "zccache/ci-bin",
+    "zccache/crash-tools",
+    "zccache/tokio-console",
+    "zccache/test-support",
+    "zccache/heap-profile",
+]
+DYLINT_FIXTURE = SCRIPT_DIR / "ci" / "dylint-target-fixture"
+DYLINT_FIXTURE_FINDING = "use zccache_core::path::NormalizedPath instead of std::path::PathBuf"
 _DIAGNOSTIC = re.compile(r"(?:^|\s)warning: (.+)$")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _LOCATION = re.compile(r"--> (\S+?):\d+:\d+")
@@ -355,7 +380,8 @@ def lint_dylint_only(pass_name: str = "all"):
     workspace = ["soldr", "dylint", "--all", "--", "--workspace", "--lib", "--bins"]
     cross_targets = dylint_cross_targets()
     commands = [["soldr", "dylint", "prepare"]]
-    if pass_name != "product":
+    # `cross`: `soldr lint`'s built-in Dylint step already ran the host pass.
+    if pass_name not in ("product", "cross"):
         commands.append(workspace)
     commands.append([
         "soldr", "rustup", "target", "add",
@@ -374,7 +400,138 @@ def lint_dylint_only(pass_name: str = "all"):
         )
         if result.returncode != 0:
             return result.returncode
-    return 0 if pass_name == "default" else dylint_product_pass(env, [None, *cross_targets])
+    if pass_name in ("default", "cross"):
+        return 0
+    return dylint_product_pass(env, [None, *cross_targets])
+
+
+def dylint_tool_env() -> dict[str, str]:
+    """The environment `lint_dylint_only` gives `soldr dylint`."""
+    env = self_build_env()
+    env.pop("RUSTFLAGS", None)
+    env.pop("RUSTUP_TOOLCHAIN", None)
+    if env.get("SOLDR_DYLINT_CONFIGURED_TOOLCHAIN"):
+        env.pop("SOLDR_DYLINT_TOOLCHAIN", None)
+    else:
+        env["SOLDR_DYLINT_TOOLCHAIN"] = DYLINT_TOOLCHAIN
+    env["SOLDR_FORCE_MANAGED_CARGO_SUBCOMMANDS"] = "1"
+    return env
+
+
+def lint_dylint_fixture() -> int:
+    """Prove custom-lint selection for every OS (ci.yml `dylint` job).
+
+    A violating fixture build must fail with the lint's finding for each OS
+    triple and a clean one must pass, so a Dylint run that silently loads no
+    library can never read as green.
+    """
+    env = dylint_tool_env()
+    base = ["soldr", "dylint", "--all", "--"]
+    for target in DYLINT_OS_TARGETS.values():
+        negative = subprocess.run(
+            [*base, "--features", "violate", "--target", target],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(DYLINT_FIXTURE),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        print(negative.stdout)
+        if negative.returncode == 0 or DYLINT_FIXTURE_FINDING not in negative.stdout:
+            print(
+                f"dylint fixture: {target}: violating build did not report the finding",
+                file=sys.stderr,
+            )
+            return 1
+        positive = subprocess.run(
+            [*base, "--target", target], cwd=str(DYLINT_FIXTURE), env=env
+        )
+        if positive.returncode != 0:
+            return positive.returncode
+    return 0
+
+
+def _dylint_cargo_shim(env: dict[str, str]) -> Path:
+    """A `cargo` that re-enters soldr on the pinned nightly (ci.yml shim).
+
+    Dylint's UI tests build their driver crate through whatever `cargo` is on
+    PATH; this one pins the nightly and routes the build through soldr.
+    """
+    shim_dir = SCRIPT_DIR / "target" / "dylint-cargo-shim"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    shim = shim_dir / "cargo"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "unset IN_SOLDR_PID\n"
+        f"export RUSTUP_TOOLCHAIN={DYLINT_TOOLCHAIN}\n"
+        f'exec soldr rustup run {DYLINT_TOOLCHAIN} cargo "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    env["PATH"] = os.pathsep.join([str(shim_dir), env.get("PATH", "")])
+    return shim_dir
+
+
+def lint_dylint_libraries() -> int:
+    """Format-check and test every dylints/* library (ci.yml `dylint` job)."""
+    if sys.platform == "win32":
+        print("dylint library tests need a POSIX shell for the Cargo shim", file=sys.stderr)
+        return 1
+    for manifest in dylint_manifests():
+        result = run_cmd(cargo_command("fmt", "--manifest-path", manifest, "--all", "--check"))
+        if result.returncode != 0:
+            print(f"Dylint library formatting issues found in {manifest}.", file=sys.stderr)
+            return result.returncode
+    env = dylint_tool_env()
+    env.pop("SOLDR_DYLINT_TOOLCHAIN", None)
+    # dylint_testing looks the driver up by the bare nightly name under
+    # DYLINT_DRIVER_PATH and otherwise builds dylint_driver from a git
+    # checkout. `soldr dylint prepare` fills this lane-owned root.
+    drivers = SCRIPT_DIR / "target" / "dylint-drivers"
+    drivers.mkdir(parents=True, exist_ok=True)
+    env["DYLINT_DRIVER_PATH"] = str(drivers)
+    prepare = subprocess.run(
+        ["soldr", "dylint", "prepare"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(SCRIPT_DIR),
+        env={**env, "SOLDR_DYLINT_TOOLCHAIN": DYLINT_TOOLCHAIN},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if prepare.returncode != 0:
+        print(prepare.stdout)
+        return prepare.returncode
+    marker = "soldr: dylint prepare: tool bin dir "
+    tool_dirs = [
+        line.split(marker, 1)[1].strip()
+        for line in prepare.stdout.splitlines()
+        if marker in line
+    ]
+    env["PATH"] = os.pathsep.join([*tool_dirs, env.get("PATH", "")])
+    _dylint_cargo_shim(env)
+    rustc = run_cmd_capture(
+        ["soldr", "rustup", "which", "--toolchain", DYLINT_TOOLCHAIN, "rustc"]
+    )
+    if rustc.returncode != 0:
+        sys.stderr.write(rustc.stderr)
+        return rustc.returncode
+    env["RUSTC"] = rustc.stdout.strip()
+    env["RUSTUP_TOOLCHAIN"] = DYLINT_TOOLCHAIN
+    env["CARGO_TARGET_DIR"] = str(SCRIPT_DIR / "target" / "dylint-library-tests")
+    for manifest in dylint_manifests():
+        result = subprocess.run(
+            ["soldr", "rustup", "run", DYLINT_TOOLCHAIN, "cargo", "test"],
+            cwd=str(SCRIPT_DIR / Path(manifest).parent),
+            env=env,
+        )
+        if result.returncode != 0:
+            print(f"Dylint library tests failed: {manifest}", file=sys.stderr)
+            return result.returncode
+    return 0
 
 
 def detect_crate(file_path):
@@ -424,6 +581,22 @@ def lint_clippy_only() -> int:
             "clippy", "--workspace", "--all-targets", *features,
             "--", "-D", "warnings",
         ))
+        if result.returncode != 0:
+            return result.returncode
+    return 0
+
+
+def lint_clippy_hosted() -> int:
+    """clippy.yml's Clippy job: hosted features, then spawn ownership."""
+    for args in (
+        ["--workspace", "--all-targets", "--features", ",".join(CLIPPY_HOSTED_FEATURES),
+         "--", "-D", "warnings"],
+        # #2027: crates/zccache-daemon-core/clippy.toml bans
+        # kernal_api::SpawnSpec::new outside daemon::server::compiler_spawn.
+        ["-p", "zccache-daemon-core", "--all-targets", "--features", "test-support",
+         "--", "-A", "clippy::all", "-D", "clippy::disallowed_methods"],
+    ):
+        result = run_cmd(cargo_command("clippy", *args))
         if result.returncode != 0:
             return result.returncode
     return 0
@@ -528,11 +701,20 @@ def main():
     if args and args[0] == "--dylint-only":
         parser = argparse.ArgumentParser(description="Dylint for every OS")
         parser.add_argument("--dylint-only", action="store_true")
-        parser.add_argument("--pass", dest="pass_name", choices=("all", "default", "product"), default="all")
+        parser.add_argument(
+            "--pass", dest="pass_name",
+            choices=("all", "default", "product", "cross"), default="all",
+        )
         return lint_dylint_only(parser.parse_args(args).pass_name)
 
     if args == ["--clippy-only"]:
         return lint_clippy_only()
+    if args == ["--clippy-hosted"]:
+        return lint_clippy_hosted()
+    if args == ["--dylint-libraries"]:
+        return lint_dylint_libraries()
+    if args == ["--dylint-fixture"]:
+        return lint_dylint_fixture()
 
     return lint_workspace()
 
