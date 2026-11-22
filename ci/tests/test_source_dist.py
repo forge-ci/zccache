@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,52 @@ def test_editable_tooling_install_needs_no_rust(tmp_path: Path) -> None:
         timeout=60,
     )
     assert list(tmp_path.glob("*-0.editable-py3-none-any.whl"))
+
+
+def test_wheel_packages_generated_cli_scripts(tmp_path: Path) -> None:
+    """Exercise setuptools' actual wheel assembly with native file fixtures."""
+    code = """
+import sys
+from pathlib import Path
+from setuptools import setup
+from ci.source_package import RustBuildExt, NATIVE_LIBRARIES, setup_options
+root = Path(sys.argv[1])
+def stage_native_files(self):
+    self.artifact_dir = root / 'native'
+    self.artifact_dir.mkdir(exist_ok=True)
+    for name in ('zccache', 'zccache-fp'):
+        (self.artifact_dir / name).write_bytes(b'native binary fixture')
+    for name in NATIVE_LIBRARIES:
+        destination = Path(self.get_ext_fullpath(name))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b'native extension fixture')
+RustBuildExt.run = stage_native_files
+setup(version='1.15.17', script_args=['build', '--build-base', str(root / 'build'),
+      'bdist_wheel', '--dist-dir', str(root / 'wheel')], **setup_options())
+"""
+    subprocess.run(
+        [
+            shutil.which("uv"),
+            "run",
+            "--no-project",
+            "--python",
+            sys.executable,
+            "--with",
+            "setuptools",
+            "--with",
+            "wheel",
+            "python",
+            "-c",
+            code,
+            str(tmp_path),
+        ],
+        cwd=Path(__file__).parents[2],
+        check=True,
+        timeout=60,
+    )
+    with zipfile.ZipFile(next((tmp_path / "wheel").glob("*.whl"))) as wheel:
+        for name in ("zccache", "zccache-fp"):
+            assert f"zccache-1.15.17.data/scripts/{name}" in wheel.namelist()
 
 
 def test_wheels_alone_do_not_complete_pypi(monkeypatch, tmp_path: Path) -> None:
