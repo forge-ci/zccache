@@ -1,3 +1,13 @@
+# Release 1.15.17
+
+- [x] Diagnose 1.15.16: initial wheel budget failure, then PyPI project quota;
+  crates.io skipped because it required PyPI success.
+- [x] Add failing regression coverage, then remove the PyPI success gate while
+  preserving ordering, release validation, dry-run and registry resume guards.
+- [x] Bump the workspace version; Python and the public crate inherit it.
+- [ ] Refresh Cargo.lock, validate release metadata, run host lint and local gate.
+- [ ] Push through ./push, merge when green, verify registry/release versions.
+
 # GATE-014 attested publishing
 
 - [ ] Guard the ci-lint pin and cover workspace Clippy and Linux unit tests.

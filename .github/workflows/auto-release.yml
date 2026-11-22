@@ -664,6 +664,8 @@ jobs:
   publish-crates:
     name: Publish crates.io
     runs-on: ubuntu-latest
+    # Preserve publish ordering, but PyPI quota/outage failures must not
+    # block the independent Rust artifact. always() handles failed needs.
     needs: [preflight, publish-release, publish-pypi]
     if: |
       always()
@@ -671,7 +673,6 @@ jobs:
       && needs.publish-release.result == 'success'
       && inputs['dry-run'] != true
       && needs.preflight.outputs.crates_complete != 'true'
-      && (needs.preflight.outputs.pypi_complete == 'true' || needs.publish-pypi.result == 'success')
     steps:
       - uses: actions/checkout@v6
         with:

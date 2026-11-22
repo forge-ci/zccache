@@ -1,10 +1,9 @@
 """Guards the release recovery contract documented in CLAUDE.md § Publishing.
 
-The claim that "a failed release run publishes nothing, so re-dispatching is
-safe" rests on three properties of `auto-release.yml`:
+Release validation and recovery rest on three properties of `auto-release.yml`:
 
-1. every publish job requires `result == 'success'` from each upstream, so the
-   `always()` in those conditions cannot make them permissive;
+1. every publish job requires `result == 'success'` from its artifact prerequisites;
+   crates.io remains independent of PyPI publication success;
 2. `dry-run` defaults to true, so an operator who accepts the defaults
    rehearses rather than ships;
 3. publishing is skipped for registries a version already reached, so a
@@ -110,11 +109,16 @@ def test_a_partially_published_version_resumes_instead_of_republishing() -> None
 
     crates = _if_condition("publish-crates")
     assert "needs.preflight.outputs.crates_complete != 'true'" in crates
-    # crates.io must still be reachable when PyPI was already done on an
-    # earlier attempt, otherwise a partial release could never be completed.
-    assert "needs.preflight.outputs.pypi_complete == 'true'" in crates, (
-        "publish-crates can no longer resume after an already-published PyPI"
-    )
+
+
+def test_crates_publish_is_independent_of_pypi_success() -> None:
+    """A PyPI quota failure must not block the independent Rust artifact."""
+    crates = _if_condition("publish-crates")
+    assert "always()" in crates
+    assert "needs.publish-pypi" not in crates
+    assert "needs.preflight.outputs.pypi_complete" not in crates
+    # Keep ordering without making the earlier registry's result a gate.
+    assert "needs: [preflight, publish-release, publish-pypi]" in _job_block("publish-crates")
 
 
 def test_manual_dispatch_proceeds_even_when_the_release_already_exists() -> None:
