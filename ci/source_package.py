@@ -15,6 +15,7 @@ from pathlib import Path
 
 from setuptools import Distribution, Extension
 from setuptools.command.build_ext import build_ext
+from setuptools.command.editable_wheel import editable_wheel
 
 from ci.soldr import cargo_command, rust_tool_command, self_build_env
 
@@ -28,7 +29,16 @@ NATIVE_LIBRARIES = {
 
 class SourceDistribution(Distribution):
     def has_scripts(self) -> bool:
-        return True
+        return bool(self.ext_modules)
+
+
+class DevelopmentEditableWheel(editable_wheel):
+    def run(self) -> None:
+        # Repo tooling uses uv's editable install before Rust is provisioned.
+        # Native development artifacts are staged by the existing build steps;
+        # ordinary source installs still build all native artifacts below.
+        self.distribution.ext_modules = []
+        super().run()
 
 
 class RustBuildExt(build_ext):
@@ -103,5 +113,9 @@ def setup_options() -> dict:
     return {
         "distclass": SourceDistribution,
         "ext_modules": [Extension(name, sources=[]) for name in NATIVE_LIBRARIES],
-        "cmdclass": {"build_ext": RustBuildExt, "build_scripts": RustBuildScripts},
+        "cmdclass": {
+            "build_ext": RustBuildExt,
+            "build_scripts": RustBuildScripts,
+            "editable_wheel": DevelopmentEditableWheel,
+        },
     }

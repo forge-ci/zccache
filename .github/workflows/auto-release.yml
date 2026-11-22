@@ -458,7 +458,11 @@ jobs:
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@v6
+      - name: Wait for current-main cache pre-prune
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/wait-cache-pre-prune
       - uses: zackees/setup-soldr@v0
+        # Read-only builds still wait for the common main-push cache barrier.
         with:
           toolchain: 1.95.0
           job-status: ${{ job.status }}

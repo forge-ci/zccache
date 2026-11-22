@@ -241,7 +241,7 @@ def test_release_tests_exec_cached_in_every_native_wheel_family() -> None:
     assert "python ci/test_exec_cached_wheel.py" in workflow
     assert "musllinux" not in workflow
     assert "alpine" not in workflow
-    assert "needs: [preflight, publish-release, build-wheels, test-wheels]" in workflow
+    assert "needs: [preflight, publish-release, build-wheels, test-wheels, build-sdist]" in workflow
     assert "needs.test-wheels.result == 'success'" in workflow
 
 

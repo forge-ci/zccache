@@ -1,5 +1,8 @@
 """Source release contracts, including recovery of wheel-only releases."""
 
+import shutil
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -7,6 +10,35 @@ import pytest
 
 from ci import release_workflow
 from ci.source_dist import MAX_SDIST_BYTES, check_sdist
+
+
+def test_editable_tooling_install_needs_no_rust(tmp_path: Path) -> None:
+    """Repo CI tooling must work before setup-soldr provisions the toolchain."""
+    code = (
+        "import os,sys; from setuptools.build_meta import build_editable; "
+        "os.environ['PATH']=''; build_editable(sys.argv[1])"
+    )
+    subprocess.run(
+        [
+            shutil.which("uv"),
+            "run",
+            "--no-project",
+            "--python",
+            sys.executable,
+            "--with",
+            "setuptools",
+            "--with",
+            "wheel",
+            "python",
+            "-c",
+            code,
+            str(tmp_path),
+        ],
+        cwd=Path(__file__).parents[2],
+        check=True,
+        timeout=60,
+    )
+    assert list(tmp_path.glob("*-0.editable-py3-none-any.whl"))
 
 
 def test_wheels_alone_do_not_complete_pypi(monkeypatch, tmp_path: Path) -> None:
