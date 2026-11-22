@@ -28,20 +28,6 @@ verify-exempt = ["cache-pre-prune", "cancel-superseded"]
 # heads are the norm (GATE-004).
 mode = "shadow"
 
-# zackees/ci.yml#168 (GATE-005): zccache's tests start zccache daemons and
-# touch zccache state roots, and zccache is the live compiler cache of every
-# soldr build on a developer host. The nextest run-wrapper refuses unless
-# CI=true or the marker is set; act sets CI=true inside its isolated jobs.
-# The Rust test lanes replay their actual Actions workflows.
-[gate.isolation]
-marker = "ZCCACHE_TEST_ISOLATED"
-runner = ["bosn", "ci", "run"]
-guard = "ci/nextest_isolation_guard.sh"
-# zackees/ci.yml#196 (GATE-009): the Bosn run receipt must match this
-# workspace and HEAD with dirty=null; actual
-# expected job steps must have completed. No ignored nonce is relied on.
-proves-tree = true
-
 # zackees/ci.yml#177 (GATE-007): lanes are cached on their own inputs (the
 # commit tree minus `exclude`, plus this file, ci/local_gate.py, Cargo.lock
 # and rust-toolchain.toml). Exclusions must be evidence-based (replay with
@@ -62,13 +48,6 @@ weight = "light"
 # The October 21 audit found 438 excluded-but-read paths under the original
 # broad exclusions, so this lane keeps all inputs rather than reuse stale tests.
 
-# Replay MSRV (workspace check plus its ignored cache regression tests,
-# including the nested Dylint *cache* test) through Bosn Actions. It runs no
-# lint: Clippy and Dylint live in the host `rust-lint` lane.
-[gate.lanes.check]
-run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "check"]
-tools = ["bosn"]
-
 # rustdoc, warnings denied.
 [gate.lanes.docs]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "docs"]
@@ -87,20 +66,6 @@ exclude = ["docs/**", ".github/**"]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "rust-lint"]
 tools = ["soldr", "uv"]
 
-# The Linux caller's default-feature lib/bin tests.
-# Keep the two test replays serial with each other and let Bosn's runner
-# queue admit them alongside the non-test checks.
-[gate.lanes.unit-tests]
-run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "unit-tests"]
-tools = ["bosn"]
-group = "tests"
-
-# The Integration (Linux) job's test commands.
-[gate.lanes.tests]
-run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "tests"]
-tools = ["bosn"]
-group = "tests"
-
 # zackees/ci.yml#190 (GATE-008) and #198 (GATE-010): an attested PR head
 # skips the remote jobs whose every gate (ci-attestations.yml) it attests.
 # CI decides with `ci-lint local-gate verify --trust`, from THIS file as
@@ -113,16 +78,11 @@ group = "tests"
 # release ignores attestations.
 [gate.trust]
 mode = "enforce"
-skip = ["ci.yml:fmt", "ci.yml:docs", "ci.yml:msrv", "ci.yml:dylint", "ci.yml:dylint-product", "ci.yml:clippy", "ci.yml:linux", "integration.yml:integration"]
-covered-by = { "ci.yml:docs" = ["docs"], "ci.yml:msrv" = ["check", "tests"], "ci.yml:dylint" = ["rust-lint"], "ci.yml:dylint-product" = ["rust-lint"], "ci.yml:clippy" = ["rust-lint"], "ci.yml:linux" = ["check", "unit-tests"], "integration.yml:integration" = ["tests"] }
-# What the isolated lane runs and how it is isolated, plus the scripts only
-# the skipped Integration job runs (its CI-only telemetry audit can only be
-# validated remotely).
+skip = ["ci.yml:fmt", "ci.yml:docs", "ci.yml:dylint", "ci.yml:dylint-product", "ci.yml:clippy"]
+covered-by = { "ci.yml:docs" = ["docs"], "ci.yml:dylint" = ["rust-lint"], "ci.yml:dylint-product" = ["rust-lint"], "ci.yml:clippy" = ["rust-lint"] }
 surfaces = [
-  "bosn.toml",
   "ci.toml",
   "push",
-  "ci/docker/gate/**",
   "ci/nextest_isolation_guard.sh",
   ".config/nextest.toml",
   "ci/clear_runtime_telemetry.py",

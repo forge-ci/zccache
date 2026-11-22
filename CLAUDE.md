@@ -75,14 +75,14 @@ heavy local lanes in that mode or claim a failed local gate passed. Apply the
 Runs `ci/local_gate.py` (lanes in `local-gate.toml`) on a clean committed
 feature branch, stamps and verifies HEAD, pushes with a lease, and opens a PR.
 Use `./push --prove-only` to stop after verification or `./push --no-pr` to
-push without opening a PR. Bosn replays the Rust test workflows in isolation.
-Lint never runs under bosn: the `rust-lint` lane runs `soldr lint rust --check`
-on the host (Cargo.toml `[workspace.metadata.soldr.lint]`).
-CI's `ci-mode` job can credit the proofs for Formatting, Documentation, MSRV,
-Clippy, both Dylint jobs, and Linux checks and unit tests on PRs and in the
-merge queue. Main pushes run those jobs in full. Add Formatting checks to the
-`lint` lane (GATE-001). Keep the recorded workflow and required step evidence
-in sync with the hosted jobs (`ci/tests/test_local_gate.py`).
+push without opening a PR. The local gate runs formatting, Python tests,
+rustdoc, and Rust lint. GitHub Actions runs MSRV, Linux unit tests, and
+Integration (Linux). Use Bosn for Docker tasks such as `bosn run --task
+gate-test` (see [the Docker runner](ci/docker/gate/README.md)).
+The `ci-mode` job can credit local proofs for Formatting, Documentation,
+Clippy, and both Dylint jobs. Main pushes run those jobs in full. Keep the
+recorded workflow and required step evidence in sync with the hosted jobs
+(`ci/tests/test_local_gate.py`).
 
 ## Temporary dependent subgit integration
 

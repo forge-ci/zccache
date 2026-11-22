@@ -36,7 +36,6 @@ jobs:
   linux:
     name: Linux
     needs: ci-mode
-    if: ${{ needs.ci-mode.outputs.skip_linux != 'true' }}
     permissions:
       actions: read
       contents: read
@@ -101,11 +100,9 @@ jobs:
       trusted: ${{ steps.gate.outputs.trusted }}
       skip_fmt: ${{ steps.gate.outputs.skip_fmt }}
       skip_docs: ${{ steps.gate.outputs.skip_docs }}
-      skip_msrv: ${{ steps.gate.outputs.skip_msrv }}
       skip_dylint: ${{ steps.gate.outputs.skip_dylint }}
       skip_dylint-product: ${{ steps.gate.outputs['skip_dylint-product'] }}
       skip_clippy: ${{ steps.gate.outputs.skip_clippy }}
-      skip_linux: ${{ steps.gate.outputs.skip_linux }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -547,8 +544,6 @@ jobs:
       SOLDR_S3_CACHE_SECRET_KEY: ${{ secrets.SOLDR_S3_CACHE_SECRET_KEY }}
     name: MSRV (1.95.0)
     needs: [cache-pre-prune, ci-mode]
-    # GATE-008/010: skipped only for an attested PR head (see ci-mode).
-    if: ${{ needs.ci-mode.outputs.skip_msrv != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # setup-soldr#347: opt this job into post-step cache eviction.

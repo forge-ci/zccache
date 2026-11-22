@@ -1,7 +1,6 @@
 # ci/docker/gate
 
-The isolated environment for the local gate's `tests` lane
-(`local-gate.toml`, zackees/ci.yml#168 GATE-005 and #196 GATE-009).
+The optional local Docker runner for zccache tests.
 
 zccache is live infrastructure on a developer host: soldr routes every
 compile through its daemon. The test suite starts zccache daemons and
@@ -19,5 +18,4 @@ touches zccache state roots, so it never runs on the host. The bosn task
   saw this worktree), then runs exactly the test commands of the
   Integration (Linux) job and the MSRV job's nested Dylint cache contract.
 
-Run it through the gate (`ci/local_gate.py --lane tests`) or directly with
-`bosn run --task gate-test`.
+Run it with `bosn run --task gate-test`. GitHub Actions owns CI workflow validation.
