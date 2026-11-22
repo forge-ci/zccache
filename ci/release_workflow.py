@@ -160,6 +160,10 @@ def expected_pypi_wheel_filenames(name: str, version: str) -> set[str]:
     }
 
 
+def expected_pypi_filenames(name: str, version: str) -> set[str]:
+    return expected_pypi_wheel_filenames(name, version) | {f"{name.replace('-', '_')}-{version}.tar.gz"}
+
+
 def check_pypi_version(name: str, version: str) -> set[str]:
     log(f"\n=== Pre-check PyPI for {name} {version} ===")
     try:
@@ -170,11 +174,11 @@ def check_pypi_version(name: str, version: str) -> set[str]:
         existing = set(data.get("releases", {}).keys())
         release_files = get_pypi_release_filenames(name, version)
         if release_files is not None:
-            expected_files = expected_pypi_wheel_filenames(name, version)
+            expected_files = expected_pypi_filenames(name, version)
             if latest_version == version and expected_files.issubset(release_files):
                 log(
                     f"  {version} is already the latest PyPI release and all "
-                    "expected wheels are present; PyPI publish will be skipped."
+                    "expected wheels and sdist are present; PyPI publish will be skipped."
                 )
                 return release_files
             log(
@@ -600,7 +604,7 @@ def publish_rust_crates(version: str, existing_crates: set[str] | None = None) -
 def command_check_registries(_: argparse.Namespace) -> None:
     name, version, *_ = read_project_meta()
     pypi_files = check_pypi_version(name, version)
-    expected_pypi_files = expected_pypi_wheel_filenames(name, version)
+    expected_pypi_files = expected_pypi_filenames(name, version)
     existing_crates = check_crates_versions(version)
     pypi_complete = expected_pypi_files.issubset(pypi_files)
     crates_complete = len(existing_crates) == len(RUST_PUBLISH_ORDER)
@@ -746,7 +750,7 @@ def command_verify_pypi(args: argparse.Namespace) -> None:
     wheels_dir = Path(args.wheels_dir).expanduser().resolve()
     if not wheels_dir.is_dir():
         raise SystemExit(f"ERROR: wheels directory does not exist: {wheels_dir}")
-    expected = sorted(p.name for p in wheels_dir.glob("*.whl"))
+    expected = sorted(p.name for pattern in ("*.whl", "*.tar.gz") for p in wheels_dir.glob(pattern))
     if not expected:
         raise SystemExit(f"ERROR: no *.whl files found in {wheels_dir}")
     log(

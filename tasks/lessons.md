@@ -476,3 +476,7 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - Release 1.15.17: registry publication is independent. Keep crates.io ordering
   after PyPI with `needs` plus `always()`, but gate only on its own artifact
   prerequisites; PyPI project quota failures must not strand Rust consumers.
+
+- Source releases must exercise the installed archive in a clean venv, including
+  native imports and the CLI. A Python-only setuptools sdist can build metadata
+  successfully while omitting the native artifacts users actually need.

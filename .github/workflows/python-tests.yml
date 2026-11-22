@@ -94,7 +94,7 @@ jobs:
     name: native Python suites (Linux)
     needs: cache-pre-prune
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - name: Wait for current-main cache pre-prune
@@ -200,6 +200,9 @@ jobs:
             python -m pytest \
             crates/zccache-fingerprint/python/tests \
             -q -rs --durations=10
+
+      - name: Build and install source distribution in a clean venv
+        run: uv run --no-project --python 3.13 python -m ci.source_dist --verify
 
       - name: Stop isolated native Python daemon
         if: always()

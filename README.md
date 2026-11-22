@@ -335,6 +335,11 @@ the native binaries directly onto your PATH. Pre-built wheels are available for:
 | macOS | x86_64, Apple Silicon |
 | Windows | x86_64 |
 
+Every PyPI release also includes a source distribution. To build the CLI and
+native Python extensions from it, install `uv` and `soldr`, plus a native C/C++
+linker and build tools, then run `uv pip install --no-binary zccache zccache`.
+All Rust compilation goes through soldr using `rust-toolchain.toml`.
+
 Verify the install:
 
 ```bash
