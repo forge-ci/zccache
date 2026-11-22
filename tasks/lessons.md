@@ -472,3 +472,7 @@ Preserve the immediate test-build/edit/check regression alongside primed-hit mat
 - A previously learned dependency closure is incomplete after input changes; do not advertise it as exhaustive.
 - Remote nonzero exits must bypass the rustc diagnostic cache as well as the successful artifact store.
 - Keep miss execution before local admission, and carry placement through task-local request context instead of changing IPC messages.
+
+- Release 1.15.17: registry publication is independent. Keep crates.io ordering
+  after PyPI with `needs` plus `always()`, but gate only on its own artifact
+  prerequisites; PyPI project quota failures must not strand Rust consumers.
