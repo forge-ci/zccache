@@ -4,15 +4,17 @@
 //! Published Rust crates can have the same shape without a large root file:
 //! zccache's release crate folds its internal workspace into one rustc unit.
 //! Ordinary compiles take shared admission; either kind of amalgamation takes
-//! exclusive admission immediately before the compiler child is spawned. The
-//! resource permit remains live through cache hashing/publication after the
-//! bounded compiler slot is returned, so post-compiler work cannot overlap a
-//! queued exclusive unit.
+//! a bounded chance at exclusive admission before the compiler child is spawned.
+//! If active work does not drain by the deadline, the unit waits for shared
+//! admission instead. The resource permit remains live through cache
+//! hashing/publication after the bounded compiler slot is returned, so
+//! post-compiler work cannot overlap a unit holding exclusive admission.
 
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::core::sync::{Barrier, ReadPermit, WritePermit};
 
@@ -20,6 +22,7 @@ use crate::compiler::CompilerFamily;
 
 use super::SharedState;
 
+const EXCLUSIVE_ADMISSION_WAIT: Duration = Duration::from_secs(30);
 const AMALGAMATION_BYTES: u64 = 1_000_000;
 const KNOWN_C_AMALGAMATIONS: &[&str] = &["sqlite3.c", "zstd.c", "rocksdb.cc"];
 const KNOWN_RUST_AMALGAMATIONS: &[&str] = &["zccache", "zccache_cli_core", "zccache_daemon_core"];
@@ -190,17 +193,19 @@ impl CompilerAdmission {
 impl CompileResourceGate {
     pub(super) async fn acquire(&self, exclusive: bool) -> CompileResourcePermit {
         if exclusive {
-            CompileResourcePermit::Exclusive {
-                _guard: Arc::clone(&self.inner)
-                    .write_for(crate::core::sync::OPERATION_TIMEOUT)
-                    .await,
+            match self.inner.try_write_for(EXCLUSIVE_ADMISSION_WAIT).await {
+                Ok(guard) => return CompileResourcePermit::Exclusive { _guard: guard },
+                Err(_) => tracing::warn!(
+                    wait_secs = EXCLUSIVE_ADMISSION_WAIT.as_secs(),
+                    "compiler exclusive admission expired; waiting for shared admission"
+                ),
             }
-        } else {
-            CompileResourcePermit::Shared {
-                _guard: Arc::clone(&self.inner)
-                    .read_for(crate::core::sync::OPERATION_TIMEOUT)
-                    .await,
-            }
+        }
+        CompileResourcePermit::Shared {
+            _guard: self
+                .inner
+                .read_for(crate::core::sync::OPERATION_TIMEOUT)
+                .await,
         }
     }
 }
@@ -638,6 +643,25 @@ mod tests {
             .expect("reader task should report acquisition");
         writer.await.expect("writer task");
         reader.await.expect("reader task");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exclusive_admission_falls_back_while_a_shared_compile_is_still_running() {
+        use std::time::Duration;
+
+        let gate = CompileResourceGate::default();
+        let running = gate.acquire(false).await;
+
+        let fallback = tokio::time::timeout(Duration::from_secs(31), gate.acquire(true))
+            .await
+            .expect("exclusive admission should fall back within 30 seconds");
+        assert!(matches!(fallback, CompileResourcePermit::Shared { .. }));
+
+        drop((running, fallback));
+        assert!(matches!(
+            gate.acquire(true).await,
+            CompileResourcePermit::Exclusive { .. }
+        ));
     }
 
     #[tokio::test]
