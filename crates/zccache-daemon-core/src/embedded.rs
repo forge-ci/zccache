@@ -31,6 +31,8 @@ pub(crate) mod executor;
 pub use executor::{
     CompileExecution, CompileExecutor, CompileInput, CompileJob, ExecutorFuture, ExecutorOutcome,
 };
+mod verification;
+pub use verification::{ExecutorFault, ExecutorFaultKind, VerificationPolicy};
 mod observed;
 mod reporting;
 mod termination;

@@ -294,11 +294,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     }
     let break_outputs_ns = t_break_outputs.elapsed().as_nanos() as u64;
 
-    if let Some(crate::embedded::ExecutorOutcome::Executed {
-        exit_code,
-        stdout,
-        stderr,
-    }) = super::remote_exec::offer(
+    let offer = super::remote_exec::offer(
         executor_manifest,
         &req,
         rsp_args,
@@ -306,28 +302,44 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         &depfile_strategy,
         private_header_trace.as_ref().map(|t| &t.path),
     )
-    .await
-    {
-        let (stdout, dependency_scan, stderr) = remote_output(
-            stdout,
-            stderr,
-            &depfile_strategy,
-            injected_show_includes,
-            stderr_header_trace,
-            private_header_trace.as_ref(),
-            &req,
-        );
-        let elapsed = t_exec.elapsed().as_nanos() as u64;
-        return remote_outcome(
+    .await;
+    let verification = match offer {
+        Some(super::verify_exec::Offer::Verify(verification)) => Some(verification),
+        Some(super::verify_exec::Offer::Outcome(crate::embedded::ExecutorOutcome::Faulted {
+            kind,
+            detail,
+        })) => {
+            return CompileExecResult::Error(Response::Error {
+                message: format!("distributed compiler {kind:?}: {detail}"),
+            });
+        }
+        Some(super::verify_exec::Offer::Outcome(crate::embedded::ExecutorOutcome::Executed {
             exit_code,
             stdout,
             stderr,
-            dependency_scan,
-            depfile_strategy,
-            staged_plan,
-            (pre_exec_ns, break_outputs_ns, elapsed),
-        );
-    }
+        })) => {
+            let (stdout, dependency_scan, stderr) = remote_output(
+                stdout,
+                stderr,
+                &depfile_strategy,
+                injected_show_includes,
+                stderr_header_trace,
+                private_header_trace.as_ref(),
+                &req,
+            );
+            let elapsed = t_exec.elapsed().as_nanos() as u64;
+            return remote_outcome(
+                exit_code,
+                stdout,
+                stderr,
+                dependency_scan,
+                depfile_strategy,
+                staged_plan,
+                (pre_exec_ns, break_outputs_ns, elapsed),
+            );
+        }
+        _ => None,
+    };
 
     let mut builder = crate::daemon::server::compiler_spawn::user_compile_spawn(
         compiler.as_path(),
@@ -627,6 +639,9 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
     // request's Rayon workers are still consuming CPU and memory. Exclusive
     // compiles already carry a ready map.
     let pre_hashed = finish_pre_hash(pre_hash_task, pre_hashed).await;
+    if let Some(verification) = verification {
+        (*verification).finish(exit_code).await;
+    }
     let resource_admission = compiler_admission.release_compiler_slot();
 
     // Drop the response-file guard now that the compiler has exited. The

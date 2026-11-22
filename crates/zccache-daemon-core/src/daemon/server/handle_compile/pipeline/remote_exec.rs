@@ -79,7 +79,7 @@ pub(super) async fn offer(
     outputs: &[NormalizedPath],
     strategy: &DepfileStrategy,
     trace: Option<&NormalizedPath>,
-) -> Option<ExecutorOutcome> {
+) -> Option<super::verify_exec::Offer> {
     let executor = crate::embedded::executor::current()?;
     let mut manifest = manifest?;
     // Journal privacy filters only the diagnostic/key subset. The trusted
@@ -112,13 +112,16 @@ pub(super) async fn offer(
         crate::embedded::executor::record(CompileExecution::Declined {
             reason: reason.clone(),
         });
-        return Some(ExecutorOutcome::Declined { reason });
+        return Some(super::verify_exec::Offer::Outcome(
+            ExecutorOutcome::Declined { reason },
+        ));
     }
     manifest
         .paths
         .extend(req.rustc_extern_paths.iter().cloned());
     manifest.paths.sort();
     manifest.paths.dedup();
+    let verification_outputs = outputs;
     let mut outputs = outputs.to_vec();
     match strategy {
         DepfileStrategy::Injected { path }
@@ -162,13 +165,16 @@ pub(super) async fn offer(
     job.inputs = inputs;
     job.inputs_complete &= complete;
     let outcome = executor.execute(&job).await;
-    crate::embedded::executor::record(match &outcome {
-        ExecutorOutcome::Executed { .. } => CompileExecution::Remote,
-        ExecutorOutcome::Declined { reason } => CompileExecution::Declined {
-            reason: reason.clone(),
-        },
-    });
-    Some(outcome)
+    Some(
+        super::verify_exec::complete_offer(
+            executor,
+            job,
+            outcome,
+            verification_outputs,
+            req.state_arc,
+        )
+        .await,
+    )
 }
 
 fn input(path: NormalizedPath) -> std::io::Result<CompileInput> {
