@@ -429,7 +429,9 @@ pub(in crate::daemon::server) async fn complete_context(
         .search_paths
         .iter()
         .filter(|path| path.kind == "dependency" || path.kind == "all")
-        .filter_map(|path| seen.insert(&path.path).then(|| path.path.clone()))
+        .map(|path| &path.path)
+        .filter(|path| seen.insert(*path))
+        .cloned()
         .collect::<Vec<_>>();
     let compiler = super::rustc_identity_path(compilation, cwd);
     let compiler_hash = rustc_ctx.compiler_hash;
