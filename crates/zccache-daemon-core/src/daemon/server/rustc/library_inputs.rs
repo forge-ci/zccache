@@ -18,22 +18,46 @@ use super::BuildContextResult;
 const INPUT_PREFIX: &str = "__zccache_rust_library__:";
 const INVENTORY_MIN_EXTERNS: usize = 8;
 
-fn candidates(stem: &str, dirs: &[NormalizedPath]) -> Result<Vec<NormalizedPath>, &'static str> {
+type SearchDirectory = (NormalizedPath, Option<HashSet<String>>);
+
+fn indexed_names(path: &NormalizedPath) -> Option<HashSet<String>> {
+    // Preserve direct lookup on directories that cannot be traversed.
+    std::fs::metadata(path.as_path().join(".")).ok()?;
+    let paths = super::library_inventory::directory(path).ok()??;
+    paths
+        .iter()
+        .map(|path| {
+            let name = path.file_name()?.to_str()?;
+            name.is_ascii().then(|| name.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath>, &'static str> {
     let mut selected = Vec::new();
     let mut selected_directory = None;
-    for dir in dirs {
+    let names = [
+        format!("lib{stem}.rmeta"),
+        format!("lib{stem}.rlib"),
+        format!("lib{stem}.so"),
+        format!("lib{stem}.dylib"),
+        format!("{stem}.dll"),
+        format!("lib{stem}.dll"),
+        format!("{stem}.dll.lib"),
+        format!("lib{stem}.dll.lib"),
+        format!("lib{stem}.dll.a"),
+    ];
+    let folded_names = names.each_ref().map(|name| name.to_ascii_lowercase());
+    for (dir, inventory) in dirs {
         let mut files = Vec::new();
-        for name in [
-            format!("lib{stem}.rmeta"),
-            format!("lib{stem}.rlib"),
-            format!("lib{stem}.so"),
-            format!("lib{stem}.dylib"),
-            format!("{stem}.dll"),
-            format!("lib{stem}.dll"),
-            format!("{stem}.dll.lib"),
-            format!("lib{stem}.dll.lib"),
-            format!("lib{stem}.dll.a"),
-        ] {
+        for (name, folded) in names.iter().zip(&folded_names) {
+            if name.is_ascii()
+                && inventory
+                    .as_ref()
+                    .is_some_and(|names| !names.contains(folded))
+            {
+                continue;
+            }
             let path = dir.join(name);
             match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => files.push(path),
@@ -64,7 +88,7 @@ fn candidates(stem: &str, dirs: &[NormalizedPath]) -> Result<Vec<NormalizedPath>
 
 fn resolve(
     dependency: &Dependency,
-    dirs: &[NormalizedPath],
+    dirs: &[SearchDirectory],
     compiler: &NormalizedPath,
     compiler_hash: ContentHash,
     files: &MetadataCache,
@@ -144,6 +168,7 @@ fn named_inputs(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut inspected = HashSet::new();
+    let mut searches = std::collections::HashMap::new();
     for metadata in &roots {
         // Each root carries the complete closure. Workspace links often repeat
         // the same sysroot crates in dozens of roots: verify each identity once
@@ -162,16 +187,36 @@ fn named_inputs(
         if dependencies.is_empty() {
             continue;
         }
-        let sysroot = library_metadata::target_directory(
-            compiler,
-            compiler_hash,
-            Some(&metadata.triple),
-            probe_dir,
-        )?;
-        let mut search = dirs.to_vec();
-        if !search.contains(&sysroot) {
-            search.push(sysroot);
-        }
+        let search = match searches.entry(metadata.triple.as_str()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let sysroot = library_metadata::target_directory(
+                    compiler,
+                    compiler_hash,
+                    Some(&metadata.triple),
+                    probe_dir,
+                )?;
+                let mut paths = dirs.to_vec();
+                if !paths.contains(&sysroot) {
+                    paths.push(sysroot);
+                }
+                entry.insert(
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            // The index only rules out absent names. Always stat
+                            // candidates so symlinks and permissions retain their
+                            // normal semantics. Fold ASCII names for casefold mounts.
+                            let inventory = (cfg!(target_os = "linux")
+                                && dependencies.len() >= INVENTORY_MIN_EXTERNS)
+                                .then(|| indexed_names(&path))
+                                .flatten();
+                            (path, inventory)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
         // rustc's crate-number table includes the complete external crate
         // closure, not only the producer's direct --extern declarations.
         let groups = dependencies
@@ -181,7 +226,7 @@ fn named_inputs(
                 // lookup. Resolve each named dependency through its search paths.
                 resolve(
                     dependency,
-                    &search,
+                    search,
                     compiler,
                     compiler_hash,
                     files,
@@ -250,11 +295,12 @@ pub(in crate::daemon::server) async fn complete_context(
     if externs.is_empty() {
         return Ok(());
     }
+    let mut seen = HashSet::new();
     let dirs = rustc_args
         .search_paths
         .iter()
         .filter(|path| path.kind == "dependency" || path.kind == "all")
-        .map(|path| path.path.clone())
+        .filter_map(|path| seen.insert(&path.path).then(|| path.path.clone()))
         .collect::<Vec<_>>();
     let compiler = super::rustc_identity_path(compilation, cwd);
     let compiler_hash = rustc_ctx.compiler_hash;

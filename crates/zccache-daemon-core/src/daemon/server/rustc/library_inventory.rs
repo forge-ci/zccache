@@ -40,7 +40,9 @@ pub(super) fn candidate(path: &std::path::Path) -> bool {
     .any(|suffix| name.ends_with(suffix))
 }
 
-fn directory(path: &NormalizedPath) -> Result<Option<Arc<Vec<NormalizedPath>>>, &'static str> {
+pub(super) fn directory(
+    path: &NormalizedPath,
+) -> Result<Option<Arc<Vec<NormalizedPath>>>, &'static str> {
     let observed_at = SystemTime::now();
     let stamp = MetadataCache::stat_file(path).map_err(|_| "unreadable Rust search directory")?;
     let cache = DIRECTORIES.get_or_init(|| State::new(HashMap::new()));

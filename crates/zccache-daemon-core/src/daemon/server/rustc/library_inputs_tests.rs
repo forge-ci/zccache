@@ -89,14 +89,17 @@ fn named_candidates_include_metadata_and_codegen_but_not_unrelated_files() {
         std::fs::write(one.join(name), b"fixture").unwrap();
     }
     assert_eq!(
-        candidates("choice", std::slice::from_ref(&one))
-            .unwrap()
-            .len(),
+        candidates("choice", &[(one.clone(), None)]).unwrap().len(),
         2
     );
-    assert!(candidates("missing", std::slice::from_ref(&one)).is_err());
+    let inventory = Some(indexed_names(&one).unwrap());
+    assert_eq!(
+        candidates("choice", &[(one.clone(), inventory)]).unwrap(),
+        candidates("choice", &[(one.clone(), None)]).unwrap()
+    );
+    assert!(candidates("missing", &[(one.clone(), None)]).is_err());
     std::fs::write(two.join("libchoice.rlib"), b"other").unwrap();
-    assert!(candidates("choice", &[one, two]).is_err());
+    assert!(candidates("choice", &[(one, None), (two, None)]).is_err());
 }
 
 #[test]
