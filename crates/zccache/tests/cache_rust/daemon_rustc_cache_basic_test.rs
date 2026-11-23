@@ -872,9 +872,13 @@ async fn test_rustc_restores_prior_module_version() {
             }
         }
 
-        std::fs::write(&module, second).unwrap();
-        let (exit, _) = compile(&mut client, &session_id, &compiler_arg, &args, temp.path()).await;
+        // Install a fresh dependency snapshot so the following reversion
+        // exercises historical replay, not the current snapshot's fast path.
+        std::fs::write(&module, "pub const VALUE: u32 = 54321;").unwrap();
+        let (exit, cached) =
+            compile(&mut client, &session_id, &compiler_arg, &args, temp.path()).await;
         assert_eq!(exit, 0);
+        assert!(!cached);
         let alternate = temp.path().join("value");
         std::fs::create_dir(&alternate).unwrap();
         std::fs::write(alternate.join("mod.rs"), first).unwrap();
