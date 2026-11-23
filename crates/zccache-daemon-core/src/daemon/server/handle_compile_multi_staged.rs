@@ -226,6 +226,7 @@ pub(super) async fn try_handle_staged_misses(
                 &compiler_args,
                 Some(miss.source_path.as_path()),
                 built_in_exclusive,
+                client_env.as_deref(),
             )
             .await
             {

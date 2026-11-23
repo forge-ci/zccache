@@ -197,6 +197,7 @@ pub(super) async fn run_compiler_direct_with_family(
         args,
         None,
         built_in_exclusive,
+        client_env.as_deref(),
     )
     .await
     {
