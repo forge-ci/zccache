@@ -89,14 +89,83 @@ fn named_candidates_include_metadata_and_codegen_but_not_unrelated_files() {
         std::fs::write(one.join(name), b"fixture").unwrap();
     }
     assert_eq!(
-        candidates("choice", std::slice::from_ref(&one))
-            .unwrap()
-            .len(),
+        candidates("choice", &[(one.clone(), None)]).unwrap().len(),
         2
     );
-    assert!(candidates("missing", std::slice::from_ref(&one)).is_err());
+    #[cfg(target_os = "linux")]
+    {
+        let inventory = Some(indexed_names(&one).unwrap());
+        assert_eq!(
+            candidates("choice", &[(one.clone(), inventory)]).unwrap(),
+            candidates("choice", &[(one.clone(), None)]).unwrap()
+        );
+    }
+    assert!(candidates("missing", &[(one.clone(), None)]).is_err());
     std::fs::write(two.join("libchoice.rlib"), b"other").unwrap();
-    assert!(candidates("choice", &[one, two]).is_err());
+    assert!(candidates("choice", &[(one, None), (two, None)]).is_err());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn rejects_inventory_after_an_exact_candidate_is_published() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root: NormalizedPath = fixture.path().into();
+    let search = [(root.clone(), indexed_names(&root))];
+    assert!(search[0].1.is_some());
+    verify_directory_inventories(&search).unwrap();
+    std::fs::write(root.join("libchoice-exact.rmeta"), b"published").unwrap();
+    assert_eq!(
+        verify_directory_inventories(&search),
+        Err("Rust search directory changed after inventory")
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn perf_indexed_candidates_stat_only_present_library_names() {
+    const DIRS: usize = 24;
+    const LIBRARIES: usize = 32;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let directories = (0..DIRS)
+        .map(|index| {
+            let directory = fixture.path().join(format!("dependency-{index}"));
+            std::fs::create_dir(&directory).unwrap();
+            NormalizedPath::from(directory)
+        })
+        .collect::<Vec<_>>();
+    let library_dir = directories.last().unwrap();
+    for index in 0..LIBRARIES {
+        std::fs::write(
+            library_dir.join(format!("libchoice-{index}.rmeta")),
+            b"fixture",
+        )
+        .unwrap();
+    }
+
+    let start = std::time::Instant::now();
+    let search = directories
+        .into_iter()
+        .map(|path| {
+            let inventory = indexed_names(&path).unwrap();
+            (path, Some(inventory))
+        })
+        .collect::<Vec<_>>();
+    CANDIDATE_PROBES.with(|probes| probes.set(0));
+    for index in 0..LIBRARIES {
+        assert_eq!(
+            candidates(&format!("choice-{index}"), &search)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    assert_eq!(CANDIDATE_PROBES.with(std::cell::Cell::get), LIBRARIES);
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(100),
+        "indexing and candidate lookup took {:?}",
+        start.elapsed()
+    );
 }
 
 #[test]
@@ -104,14 +173,19 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     let compiler = crate::test_support::find_rustc().expect("real rustc required");
     let fixture = tempfile::tempdir().unwrap();
     let source = fixture.path().join("probe.rs");
-    let library: NormalizedPath = fixture.path().join("libprobe.rmeta").into();
+    let library: NormalizedPath = fixture.path().join("libprobe-before.rmeta").into();
     std::fs::write(&source, "pub fn value() -> u32 { 17 }").unwrap();
     let mut command = std::process::Command::new(compiler.as_path());
     command
-        .args(["--crate-type=rlib", "--crate-name=probe", "--emit=metadata"])
+        .args([
+            "--crate-type=rlib",
+            "--crate-name=probe",
+            "--emit=metadata",
+            "-Cextra-filename=-before",
+        ])
         .arg(&source)
-        .arg("-o")
-        .arg(library.as_path());
+        .arg("--out-dir")
+        .arg(fixture.path());
     let output = zccache_test_support::test_child::TestChild::spawn(command)
         .unwrap()
         .finish(std::time::Duration::from_secs(30))
@@ -187,5 +261,103 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     assert!(
         best_ns < std::time::Duration::from_millis(30).as_nanos(),
         "shared Rust library closure took {best_ns}ns; resolve it once per request"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn resolves_renamed_metadata_used_by_a_transitive_compiler_request() {
+    let compiler = crate::test_support::find_rustc().expect("real rustc required");
+    let fixture = tempfile::tempdir().unwrap();
+    let compile = |name: &str, source: &str, extra: &[String]| {
+        let path = fixture.path().join(format!("{name}.rs"));
+        std::fs::write(&path, source).unwrap();
+        let mut command = std::process::Command::new(compiler.as_path());
+        command
+            .args([
+                "--edition=2021",
+                "--crate-type=rlib",
+                "--emit=metadata,link",
+                "--crate-name",
+                name,
+            ])
+            .arg(path)
+            .arg("--out-dir")
+            .arg(fixture.path())
+            .args(extra);
+        let output = zccache_test_support::test_child::TestChild::spawn(command)
+            .unwrap()
+            .finish(std::time::Duration::from_secs(30))
+            .unwrap();
+        assert_eq!(output.code, Some(0), "{}", output.stderr_text());
+    };
+    let original: NormalizedPath = fixture.path().join("libprobe-before.rmeta").into();
+    compile(
+        "probe",
+        "pub struct Value;",
+        &["-Cextra-filename=-before".into()],
+    );
+    compile(
+        "umbrella",
+        "pub fn value() -> probe::Value { probe::Value }",
+        &[
+            "--extern".into(),
+            format!("probe={}", original.as_path().display()),
+        ],
+    );
+
+    let held = tempfile::tempdir().unwrap();
+    let held_rlib = held.path().join("libprobe-before.rlib");
+    std::fs::rename(fixture.path().join("libprobe-before.rlib"), &held_rlib).unwrap();
+    let renamed: NormalizedPath = fixture.path().join("libprobe-after.rmeta").into();
+    std::fs::rename(&original, &renamed).unwrap();
+    compile(
+        "probe",
+        "pub struct Wrong;",
+        &["-Cextra-filename=-other".into()],
+    );
+    compile(
+        "consumer",
+        "pub fn run() { let _value = umbrella::value(); }",
+        &[
+            "--extern".into(),
+            format!(
+                "umbrella={}",
+                fixture.path().join("libumbrella.rmeta").display()
+            ),
+            "-L".into(),
+            format!("dependency={}", fixture.path().display()),
+        ],
+    );
+    let files = MetadataCache::new();
+    let compiler_hash = crate::hash::hash_bytes(b"relocated crate metadata fixture");
+    let first =
+        library_metadata::inspect(&compiler, compiler_hash, &renamed, &files, fixture.path())
+            .unwrap();
+    assert_eq!(first.stem, "probe-before");
+    let root: NormalizedPath = fixture.path().into();
+    let lookup = |dependency: &Dependency| {
+        let dirs = [(root.clone(), indexed_names(&root))];
+        resolve(
+            dependency,
+            &dirs,
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+        )
+    };
+    let mut identity = Dependency {
+        stem: first.stem.clone(),
+        hash: first.hash,
+    };
+    assert_eq!(lookup(&identity).unwrap(), vec![renamed.clone()]);
+    identity.hash ^= 1;
+    assert!(lookup(&identity).is_err());
+    identity.hash ^= 1;
+    std::fs::copy(&held_rlib, fixture.path().join("libprobe.rlib")).unwrap();
+    assert_eq!(
+        lookup(&identity),
+        Err("ambiguous relocated Rust dependency search")
     );
 }

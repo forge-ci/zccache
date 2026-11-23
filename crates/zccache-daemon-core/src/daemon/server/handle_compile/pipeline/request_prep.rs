@@ -488,55 +488,55 @@ pub(super) async fn parse_single_compile_request(
         &state.compiler_hash_cache,
     )
     .await;
-    let rust_inputs_complete = crate::daemon::server::rustc::library_inputs::complete_context(
-        state_arc,
-        &compilation,
-        &mut build_result,
-        cwd,
-    )
-    .await;
-    if let BuildContextResult::Rustc {
-        rustc_args,
-        native_inputs_complete,
-        ..
-    } = &build_result
-    {
-        if !native_inputs_complete
-            || !rust_inputs_complete
-            || (rustc_args.crate_types == ["cdylib"]
-                && !dylint_cdylib_has_complete_output_identity(
-                    rustc_args,
-                    output_path.as_path(),
-                    cwd,
-                    client_env.as_deref(),
-                ))
-        {
-            record_passthrough_reason(
-                "library inputs or Dylint output identity is incomplete".into(),
-            );
-            state.stats.record_non_cacheable();
-            test_harness_admission::observe_bypass();
-            record_session_stat(&state.sessions, sid, |tracker| {
-                tracker.record_non_cacheable()
-            });
-            write_session_log(
-                &state.sessions,
-                sid,
-                "non-cacheable: library inputs or Dylint output identity is incomplete",
-            );
-            return Err(run_compiler_direct(
-                state,
-                compiler,
-                raw_args,
+    // Check known bypass conditions before scanning the transitive library closure.
+    let reason = match &build_result {
+        BuildContextResult::Rustc {
+            native_inputs_complete: false,
+            ..
+        } => Some("native Rust library inputs are incomplete".to_string()),
+        BuildContextResult::Rustc { rustc_args, .. }
+            if !dylint_cdylib_has_complete_output_identity(
+                rustc_args,
+                output_path.as_path(),
                 cwd,
-                &state.sessions,
-                sid,
-                &client_env,
-                &stdin,
-                state.depfile_tmpdir.as_path(),
-            )
-            .await);
+                client_env.as_deref(),
+            ) =>
+        {
+            Some("Dylint cdylib output identity is incomplete".to_string())
         }
+        BuildContextResult::Rustc { .. } => {
+            crate::daemon::server::rustc::library_inputs::complete_context(
+                state_arc,
+                &compilation,
+                &mut build_result,
+                cwd,
+            )
+            .await
+            .err()
+            .map(|reason| format!("transitive Rust library inputs: {reason}"))
+        }
+        _ => None,
+    };
+    if let Some(reason) = reason {
+        write_session_log(&state.sessions, sid, &format!("non-cacheable: {reason}"));
+        record_passthrough_reason(reason);
+        state.stats.record_non_cacheable();
+        test_harness_admission::observe_bypass();
+        record_session_stat(&state.sessions, sid, |tracker| {
+            tracker.record_non_cacheable()
+        });
+        return Err(run_compiler_direct(
+            state,
+            compiler,
+            raw_args,
+            cwd,
+            &state.sessions,
+            sid,
+            &client_env,
+            &stdin,
+            state.depfile_tmpdir.as_path(),
+        )
+        .await);
     }
 
     Ok(ParsedSingleRequest {

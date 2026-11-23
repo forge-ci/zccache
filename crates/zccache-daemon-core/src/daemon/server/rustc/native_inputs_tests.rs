@@ -110,6 +110,27 @@ fn native_archive_failure_does_not_publish_a_partial_extern_set() {
 }
 
 #[test]
+fn metadata_only_does_not_scan_unrelated_files_in_native_search_directories() {
+    let temp = tempfile::tempdir().expect("fixture");
+    let explicit = archive(temp.path(), "native", "libprobe.a");
+    std::fs::write(temp.path().join("native/flag_check.c"), b"int main() {}\n")
+        .expect("build-script output");
+    let metadata = [
+        "-Lnative=native",
+        "-lstatic=probe",
+        "--emit=dep-info,metadata",
+    ];
+    let (args, raw) = parsed(&metadata, temp.path());
+    let resolved = inputs(&args, &raw, temp.path()).expect("resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].path, explicit);
+
+    let link = [metadata[0], metadata[1], "--emit=dep-info,metadata,link"];
+    let (args, raw) = parsed(&link, temp.path());
+    assert!(inputs(&args, &raw, temp.path()).is_err());
+}
+
+#[test]
 fn native_products_hash_libraries_without_explicit_l_flags() {
     let temp = tempfile::tempdir().expect("fixture");
     let first = archive(temp.path(), "native", "libfoo.a");
