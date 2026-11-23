@@ -277,7 +277,7 @@ fn resolves_renamed_metadata_used_by_a_transitive_compiler_request() {
             .args([
                 "--edition=2021",
                 "--crate-type=rlib",
-                "--emit=metadata",
+                "--emit=metadata,link",
                 "--crate-name",
                 name,
             ])
@@ -306,6 +306,9 @@ fn resolves_renamed_metadata_used_by_a_transitive_compiler_request() {
         ],
     );
 
+    let held = tempfile::tempdir().unwrap();
+    let held_rlib = held.path().join("libprobe-before.rlib");
+    std::fs::rename(fixture.path().join("libprobe-before.rlib"), &held_rlib).unwrap();
     let renamed: NormalizedPath = fixture.path().join("libprobe-after.rmeta").into();
     std::fs::rename(&original, &renamed).unwrap();
     compile(
@@ -352,7 +355,7 @@ fn resolves_renamed_metadata_used_by_a_transitive_compiler_request() {
     identity.hash ^= 1;
     assert!(lookup(&identity).is_err());
     identity.hash ^= 1;
-    std::fs::copy(&renamed, fixture.path().join("libprobe-duplicate.rmeta")).unwrap();
+    std::fs::copy(&held_rlib, fixture.path().join("libprobe-duplicate.rlib")).unwrap();
     assert_eq!(
         lookup(&identity),
         Err("ambiguous relocated Rust dependency search")

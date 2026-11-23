@@ -198,7 +198,7 @@ fn relocated_candidates(
     probe_dir: &Path,
 ) -> Result<Vec<NormalizedPath>, &'static str> {
     let (crate_name, _) = dependency.stem.rsplit_once('-').ok_or(UNRESOLVED_LIBRARY)?;
-    let prefix = format!("lib{crate_name}-");
+    let prefix = format!("{crate_name}-");
     let mut stems = std::collections::BTreeSet::new();
     for (_, inventory) in dirs {
         let inventory = inventory.as_ref().ok_or(UNRESOLVED_LIBRARY)?;
@@ -206,9 +206,18 @@ fn relocated_candidates(
             let Some(stem) = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .filter(|name| name.starts_with(&prefix))
-                .and_then(|name| name.strip_prefix("lib"))
-                .and_then(|name| name.strip_suffix(".rmeta"))
+                .and_then(|name| name.rsplit_once('.'))
+                .filter(|(_, extension)| {
+                    matches!(*extension, "rmeta" | "rlib" | "so" | "dylib" | "dll")
+                })
+                .and_then(|(stem, extension)| {
+                    if extension == "dll" && stem.starts_with(&prefix) {
+                        Some(stem)
+                    } else {
+                        stem.strip_prefix("lib")
+                    }
+                })
+                .filter(|stem| stem.starts_with(&prefix))
             else {
                 continue;
             };
