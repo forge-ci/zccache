@@ -146,9 +146,17 @@ fn inputs(
             )?,
         });
     }
-    // Source #[link(kind="static")] can bundle an archive in an rlib
-    // without any argv -l. Use the same native input owner for every product.
-    add_transitive_archives(&dirs, cwd, &mut inputs)?;
+    // Codegen can bundle a source-declared static library without an argv -l.
+    // A metadata-only invocation records that declaration without opening the
+    // archive. Keep explicit -l and linker operands on their usual path.
+    let metadata_only = parsed.emit_types.iter().any(|kind| kind == "metadata")
+        && parsed
+            .emit_types
+            .iter()
+            .all(|kind| matches!(kind.as_str(), "metadata" | "dep-info"));
+    if !metadata_only {
+        add_transitive_archives(&dirs, cwd, &mut inputs)?;
+    }
     add_link_arg_files(&parsed.linker_args, cwd, &mut inputs)?;
     Ok(inputs)
 }
