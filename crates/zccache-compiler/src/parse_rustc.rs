@@ -93,7 +93,7 @@ pub const RUSTC_TEST_HARNESS_REASON: &str = "test harness link product not cache
 
 #[cfg(feature = "native")]
 impl CacheableCompilation {
-    /// True when this admitted compilation is a rustc `--test` harness link.
+    /// True when this admitted compilation checks or links a rustc `--test` harness.
     ///
     /// Reads the canonical parser's own record: `--test` is kept in
     /// `unknown_flags` (cache-key material) precisely so it is visible here.
@@ -106,9 +106,8 @@ impl CacheableCompilation {
 
 #[cfg(feature = "native")]
 impl ParsedInvocation {
-    /// True when this invocation is a rustc `--test` harness link, whether the
-    /// request's [`zccache_core::config::TestHarnessAdmission`] admitted it or
-    /// refused it.
+    /// True for an admitted rustc `--test` check or link, or when the
+    /// request's [`zccache_core::config::TestHarnessAdmission`] refused the link.
     #[must_use]
     pub fn is_rustc_test_harness(&self) -> bool {
         match self {
@@ -751,19 +750,14 @@ pub fn parse_rustc_plan_with_syntax(
         }
     }
 
-    // Sibling gate to the crate-type check above: refuse `--test` harness
-    // links. See RUSTC_TEST_HARNESS_REASON for the full rationale.
-    //
-    // Decision on `--test` PLUS an explicit `--crate-type` (zccache#1525):
-    // the exclusion applies there too. `rustc --crate-type lib --test
-    // src/lib.rs` — a unit-test harness for a lib — is checked here, AFTER
-    // the crate-type loop has already accepted `lib`, and is still refused.
-    // `--test` overrides what rustc emits: the product is a test executable
-    // that statically links the dependency graph no matter which crate type
-    // was declared, so the identical volatility-times-size argument holds.
-    // Keying the exclusion on the crate type instead would have missed the
-    // real-world cargo shape entirely, which passes no `--crate-type` at all.
-    if is_test_harness && !cache_test_bins {
+    // Only metadata and dep-info are produced by check-style `--test`
+    // invocations. The linked-harness policy still applies to default
+    // emits, mixed outputs, and every request that produces an executable.
+    let metadata_check = emit_types.iter().any(|kind| kind == "metadata")
+        && emit_types
+            .iter()
+            .all(|kind| matches!(kind.as_str(), "metadata" | "dep-info"));
+    if is_test_harness && !cache_test_bins && !metadata_check {
         return RustcPlan::NonCacheable {
             reason: RUSTC_TEST_HARNESS_REASON.to_string(),
         };

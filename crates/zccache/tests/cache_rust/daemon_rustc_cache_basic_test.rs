@@ -398,6 +398,59 @@ async fn test_rustc_emit_metadata_cached() {
     .await;
 }
 
+/// A check of a test target writes an empty .rmeta and its depfile, no runner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // integration-level: starts real daemon with IPC + rustc
+async fn test_rustc_test_check_restores_empty_metadata_and_depfile() {
+    let Some(rustc) = zccache::test_support::find_rustc() else {
+        return;
+    };
+
+    zccache::test_support::test_timeout(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("lib.rs");
+        let metadata = tmp.path().join("libchecked_tests.rmeta");
+        let depfile = tmp.path().join("checked_tests.d");
+        std::fs::write(&src, "#[test] fn passes() {}\n").unwrap();
+
+        let (endpoint, server_handle, shutdown) = start_daemon().await;
+        let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
+        let session_id = start_session(&mut client).await;
+        let args = &[
+            "--edition=2021",
+            "--crate-name",
+            "checked_tests",
+            "--test",
+            "--emit=dep-info,metadata",
+            "--out-dir",
+            tmp.path().to_str().unwrap(),
+            src.to_str().unwrap(),
+        ];
+        let compiler = rustc.to_string_lossy();
+        let first = compile(&mut client, &session_id, &compiler, args, tmp.path()).await;
+        assert_eq!(first, (0, false));
+        let expected_depfile = std::fs::read(&depfile).unwrap();
+        let expected_metadata = std::fs::read(&metadata).unwrap();
+        assert!(
+            expected_metadata.is_empty(),
+            "fixture must exercise zero-byte restoration"
+        );
+        assert!(!tmp.path().join("checked_tests").exists());
+        assert!(!tmp.path().join("checked_tests.exe").exists());
+        std::fs::remove_file(&metadata).unwrap();
+        std::fs::remove_file(&depfile).unwrap();
+
+        let replay = compile(&mut client, &session_id, &compiler, args, tmp.path()).await;
+        assert_eq!(replay, (0, true));
+        assert_eq!(std::fs::read(&depfile).unwrap(), expected_depfile);
+        assert_eq!(std::fs::read(&metadata).unwrap(), expected_metadata);
+
+        shutdown.notify_one();
+        server_handle.await.unwrap();
+    })
+    .await;
+}
+
 /// Test multi-output caching: --emit=dep-info,metadata,link produces 3 files.
 /// This is what cargo actually passes to rustc.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
