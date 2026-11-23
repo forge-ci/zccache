@@ -40,6 +40,35 @@ fn shared_only_refuses_the_harness_and_classifies_it() {
 }
 
 #[test]
+fn shared_only_admits_test_metadata_without_a_link_product() {
+    let mut input = cargo_harness_args();
+    let emit = input
+        .iter_mut()
+        .find(|arg| arg.starts_with("--emit="))
+        .unwrap();
+    *emit = "--emit=dep-info,metadata".into();
+    let parsed = parse_invocation_with_admission("rustc", &input, TestHarnessAdmission::SharedOnly);
+    let ParsedInvocation::Cacheable(compilation) = &parsed else {
+        panic!("check-style test metadata must be admitted: {parsed:?}");
+    };
+    assert!(compilation.is_rustc_test_harness());
+    assert_eq!(
+        compilation.output_file.file_name().unwrap(),
+        "libzccache_core-0123456789abcdef.rmeta"
+    );
+
+    let emit = input
+        .iter_mut()
+        .find(|arg| arg.starts_with("--emit="))
+        .unwrap();
+    *emit = "--emit=dep-info,metadata,link".into();
+    assert!(matches!(
+        parse_invocation_with_admission("rustc", &input, TestHarnessAdmission::SharedOnly),
+        ParsedInvocation::NonCacheable { .. }
+    ));
+}
+
+#[test]
 fn all_admits_the_harness_with_test_in_the_key_material() {
     let parsed =
         parse_invocation_with_admission("rustc", &cargo_harness_args(), TestHarnessAdmission::All);
