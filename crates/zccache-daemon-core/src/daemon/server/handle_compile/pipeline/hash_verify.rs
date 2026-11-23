@@ -217,29 +217,31 @@ pub(super) fn hash_and_verify(input: HashVerifyInput<'_>) -> HashSourceOutcome {
             diag_reason = "fast_key_match".to_string();
         } else {
             let t4 = std::time::Instant::now();
-            let result = {
-                let is_fresh = |p: &Path| {
-                    let path = NormalizedPath::new(p);
-                    journal_proves_fresh(state.cache_system.journal(), &path, snap_clock)
-                };
-                let get_hash = |p: &Path| {
-                    let path = NormalizedPath::new(p);
-                    hash_map.get(&path).copied()
-                };
-                state.dep_graph.load().check_diagnostic_with_env(
-                    &context_key,
-                    is_fresh,
-                    get_hash,
-                    |name| {
-                        rustc_env_dep_lookup_value(
-                            recorded_out_dir.as_deref(),
-                            client_env,
-                            name,
-                            source_path,
-                            &includes,
-                        )
-                    },
-                )
+            let is_fresh = |p: &Path| {
+                let path = NormalizedPath::new(p);
+                journal_proves_fresh(state.cache_system.journal(), &path, snap_clock)
+            };
+            let get_hash = |p: &Path| {
+                let path = NormalizedPath::new(p);
+                hash_map.get(&path).copied()
+            };
+            let graph = state.dep_graph.load();
+            let result =
+                graph.check_diagnostic_with_env(&context_key, is_fresh, get_hash, env_value);
+            let result = if matches!(
+                result.0,
+                crate::depgraph::CacheVerdict::HeadersChanged { .. }
+            ) {
+                let prior_key = graph.prior_rustc_snapshot_key(&context_key, get_hash, env_value);
+                prior_key.map_or(result, |artifact_key| {
+                    (
+                        crate::depgraph::CacheVerdict::SourceChanged { artifact_key },
+                        "dependency content changed; looking up the complete Rust snapshot key"
+                            .to_string(),
+                    )
+                })
+            } else {
+                result
             };
             depgraph_check_ns = t4.elapsed().as_nanos() as u64;
             verdict = result.0;
