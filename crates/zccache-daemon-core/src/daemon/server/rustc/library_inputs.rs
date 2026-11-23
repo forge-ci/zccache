@@ -17,20 +17,28 @@ use super::BuildContextResult;
 
 const INPUT_PREFIX: &str = "__zccache_rust_library__:";
 const INVENTORY_MIN_EXTERNS: usize = 8;
+const MAX_RELOCATED_STEMS: usize = 16;
+const UNRESOLVED_LIBRARY: &str = "unresolved transitive Rust library";
 
-type SearchDirectory = (NormalizedPath, Option<HashSet<String>>);
+struct DirectoryInventory {
+    names: HashSet<String>,
+    paths: Arc<Vec<NormalizedPath>>,
+}
 
-fn indexed_names(path: &NormalizedPath) -> Option<HashSet<String>> {
+type SearchDirectory = (NormalizedPath, Option<DirectoryInventory>);
+
+fn indexed_names(path: &NormalizedPath) -> Option<DirectoryInventory> {
     // Preserve direct lookup on directories that cannot be traversed.
     std::fs::metadata(path.as_path().join(".")).ok()?;
     let paths = super::library_inventory::directory(path).ok()??;
-    paths
+    let names = paths
         .iter()
         .map(|path| {
             let name = path.file_name()?.to_str()?;
             name.is_ascii().then(|| name.to_ascii_lowercase())
         })
-        .collect()
+        .collect::<Option<_>>()?;
+    Some(DirectoryInventory { names, paths })
 }
 
 fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath>, &'static str> {
@@ -54,7 +62,7 @@ fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath
             if name.is_ascii()
                 && inventory
                     .as_ref()
-                    .is_some_and(|names| !names.contains(folded))
+                    .is_some_and(|inventory| !inventory.names.contains(folded))
             {
                 continue;
             }
@@ -81,7 +89,7 @@ fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath
     selected.sort();
     selected.dedup();
     if selected.is_empty() {
-        return Err("unresolved transitive Rust library");
+        return Err(UNRESOLVED_LIBRARY);
     }
     Ok(selected)
 }
@@ -94,30 +102,110 @@ fn resolve(
     files: &MetadataCache,
     probe_dir: &Path,
 ) -> Result<Vec<NormalizedPath>, &'static str> {
-    let candidates = candidates(&dependency.stem, dirs)?;
+    let paths = match candidates(&dependency.stem, dirs) {
+        Ok(paths) => paths,
+        Err(UNRESOLVED_LIBRARY) => {
+            return relocated_candidates(
+                dependency,
+                dirs,
+                compiler,
+                compiler_hash,
+                files,
+                probe_dir,
+            );
+        }
+        Err(reason) => return Err(reason),
+    };
+    if !matches_identity(
+        dependency,
+        &paths,
+        compiler,
+        compiler_hash,
+        files,
+        probe_dir,
+    )? {
+        return Err("transitive Rust crate identity does not match");
+    }
+    Ok(paths)
+}
+
+fn matches_identity(
+    dependency: &Dependency,
+    paths: &[NormalizedPath],
+    compiler: &NormalizedPath,
+    compiler_hash: ContentHash,
+    files: &MetadataCache,
+    probe_dir: &Path,
+) -> Result<bool, &'static str> {
     // Prefer metadata for inspection: shipped sysroot rlibs may deliberately
     // omit their embedded metadata. Hash all co-located flavors below because
     // rustc can read rmeta for type checking and rlib/dylib bytes for codegen.
-    let selected = candidates
+    let selected = paths
         .iter()
         .find(|path| path.extension().is_some_and(|ext| ext == "rmeta"))
         .or_else(|| {
-            candidates
+            paths
                 .iter()
                 .find(|path| path.extension().is_some_and(|ext| ext == "rlib"))
         })
         .or_else(|| {
-            candidates.iter().find(|path| {
+            paths.iter().find(|path| {
                 path.extension()
                     .is_some_and(|ext| matches!(ext.to_str(), Some("so" | "dylib" | "dll")))
             })
         })
         .ok_or("missing dependency metadata")?;
     let metadata = library_metadata::inspect(compiler, compiler_hash, selected, files, probe_dir)?;
-    if metadata.stem != dependency.stem || metadata.hash != dependency.hash {
-        return Err("transitive Rust crate identity does not match");
+    Ok(metadata.stem == dependency.stem && metadata.hash == dependency.hash)
+}
+
+/// A cache hit may materialize metadata under a different Cargo filename.
+/// Rustc can locate those files by crate name and exact embedded hash.
+fn relocated_candidates(
+    dependency: &Dependency,
+    dirs: &[SearchDirectory],
+    compiler: &NormalizedPath,
+    compiler_hash: ContentHash,
+    files: &MetadataCache,
+    probe_dir: &Path,
+) -> Result<Vec<NormalizedPath>, &'static str> {
+    let (crate_name, _) = dependency.stem.rsplit_once('-').ok_or(UNRESOLVED_LIBRARY)?;
+    let prefix = format!("lib{crate_name}-");
+    let mut stems = std::collections::BTreeSet::new();
+    for (_, inventory) in dirs {
+        let inventory = inventory.as_ref().ok_or(UNRESOLVED_LIBRARY)?;
+        for path in inventory.paths.iter() {
+            let Some(stem) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| name.starts_with(&prefix))
+                .and_then(|name| name.strip_prefix("lib"))
+                .and_then(|name| name.strip_suffix(".rmeta"))
+            else {
+                continue;
+            };
+            stems.insert(stem);
+            if stems.len() > MAX_RELOCATED_STEMS {
+                return Err(UNRESOLVED_LIBRARY);
+            }
+        }
     }
-    Ok(candidates)
+    let mut selected = None;
+    for stem in stems {
+        let paths = candidates(stem, dirs)?;
+        if matches_identity(
+            dependency,
+            &paths,
+            compiler,
+            compiler_hash,
+            files,
+            probe_dir,
+        )? && selected.replace(paths).is_some()
+        {
+            return Err("ambiguous relocated Rust dependency search");
+        }
+    }
+    selected.ok_or(UNRESOLVED_LIBRARY)
 }
 
 fn inputs(

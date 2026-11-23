@@ -107,14 +107,19 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     let compiler = crate::test_support::find_rustc().expect("real rustc required");
     let fixture = tempfile::tempdir().unwrap();
     let source = fixture.path().join("probe.rs");
-    let library: NormalizedPath = fixture.path().join("libprobe.rmeta").into();
+    let library: NormalizedPath = fixture.path().join("libprobe-before.rmeta").into();
     std::fs::write(&source, "pub fn value() -> u32 { 17 }").unwrap();
     let mut command = std::process::Command::new(compiler.as_path());
     command
-        .args(["--crate-type=rlib", "--crate-name=probe", "--emit=metadata"])
+        .args([
+            "--crate-type=rlib",
+            "--crate-name=probe",
+            "--emit=metadata",
+            "-Cextra-filename=-before",
+        ])
         .arg(&source)
-        .arg("-o")
-        .arg(library.as_path());
+        .arg("--out-dir")
+        .arg(fixture.path());
     let output = zccache_test_support::test_child::TestChild::spawn(command)
         .unwrap()
         .finish(std::time::Duration::from_secs(30))
@@ -190,5 +195,33 @@ fn perf_library_metadata_warm_lookup_reuses_probes_and_shared_closure() {
     assert!(
         best_ns < std::time::Duration::from_millis(30).as_nanos(),
         "shared Rust library closure took {best_ns}ns; resolve it once per request"
+    );
+
+    let renamed: NormalizedPath = fixture.path().join("libprobe-after.rmeta").into();
+    std::fs::rename(&library, &renamed).unwrap();
+    let root: NormalizedPath = fixture.path().into();
+    let lookup = |dependency: &Dependency| {
+        let dirs = [(root.clone(), indexed_names(&root))];
+        resolve(
+            dependency,
+            &dirs,
+            &compiler,
+            compiler_hash,
+            &files,
+            fixture.path(),
+        )
+    };
+    let mut identity = Dependency {
+        stem: first.stem.clone(),
+        hash: first.hash,
+    };
+    assert_eq!(lookup(&identity).unwrap(), vec![renamed.clone()]);
+    identity.hash ^= 1;
+    assert!(lookup(&identity).is_err());
+    identity.hash ^= 1;
+    std::fs::copy(&renamed, fixture.path().join("libprobe-duplicate.rmeta")).unwrap();
+    assert_eq!(
+        lookup(&identity),
+        Err("ambiguous relocated Rust dependency search")
     );
 }
