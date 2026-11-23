@@ -232,14 +232,14 @@ pub(in crate::daemon::server) async fn complete_context(
     compilation: &crate::compiler::CacheableCompilation,
     result: &mut BuildContextResult,
     cwd: &Path,
-) -> bool {
+) -> Result<(), &'static str> {
     let BuildContextResult::Rustc {
         rustc_args,
         rustc_ctx,
         ..
     } = result
     else {
-        return true;
+        return Ok(());
     };
     let externs: Vec<_> = rustc_args
         .externs
@@ -248,7 +248,7 @@ pub(in crate::daemon::server) async fn complete_context(
         .cloned()
         .collect();
     if externs.is_empty() {
-        return true;
+        return Ok(());
     }
     let dirs = rustc_args
         .search_paths
@@ -283,14 +283,12 @@ pub(in crate::daemon::server) async fn complete_context(
                 rustc_args.externs.push(input);
             }
             rustc_ctx.extern_crates.sort();
-            true
+            Ok(())
         }
-        failure => {
-            tracing::debug!(
-                ?failure,
-                "transitive Rust library resolution refused caching"
-            );
-            false
+        Ok(Err(reason)) => Err(reason),
+        Err(error) => {
+            tracing::debug!(?error, "transitive Rust library inspection task failed");
+            Err("Rust library inspection task failed")
         }
     }
 }
