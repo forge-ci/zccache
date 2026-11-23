@@ -393,13 +393,12 @@ mod tests {
             ("SOLDR_QUEUE".to_string(), "compile".to_string()),
             ("SOLDR_QUEUE".to_string(), "lint".to_string()),
         ];
-        let request = HostCompilerRequest::new(CompilerFamily::Rustc, &[], None)
-            .with_environment(Some(&env));
+        let request =
+            HostCompilerRequest::new(CompilerFamily::Rustc, &[], None).with_environment(Some(&env));
         assert_eq!(request.env_value("SOLDR_QUEUE"), Some("lint"));
         assert_eq!(request.env_value("UNSET"), None);
         assert!(!format!("{request:?}").contains("SOLDR_QUEUE"));
     }
-
 
     #[test]
     fn the_published_zccache_crate_is_a_rust_amalgamation() {
