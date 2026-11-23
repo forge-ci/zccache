@@ -380,6 +380,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             effective_args,
             Some(source_path.as_path()),
             built_in_exclusive,
+            client_env.as_deref(),
         )
         .await
         {

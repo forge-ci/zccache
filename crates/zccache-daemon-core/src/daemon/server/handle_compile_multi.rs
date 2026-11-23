@@ -440,6 +440,7 @@ pub(super) async fn handle_compile_multi(
             &compiler_args,
             None,
             built_in_exclusive,
+            client_env.as_deref(),
         )
         .await
         {

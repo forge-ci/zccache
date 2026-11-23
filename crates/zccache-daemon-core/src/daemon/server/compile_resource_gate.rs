@@ -29,11 +29,23 @@ const KNOWN_RUST_AMALGAMATIONS: &[&str] = &["zccache", "zccache_cli_core", "zcca
 /// This deliberately exposes neither the daemon's semaphore nor its resource
 /// lock. The host can classify the child zccache is about to spawn, but only
 /// zccache can acquire its canonical admission in the safe order.
-#[derive(Debug)]
+#[derive(Clone, Copy)]
 pub struct HostCompilerRequest<'a> {
     family: CompilerFamily,
     args: &'a [String],
     source: Option<&'a Path>,
+    env: &'a [(String, String)],
+}
+
+impl std::fmt::Debug for HostCompilerRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostCompilerRequest")
+            .field("family", &self.family)
+            .field("args", &self.args)
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> HostCompilerRequest<'a> {
@@ -42,7 +54,22 @@ impl<'a> HostCompilerRequest<'a> {
             family,
             args,
             source,
+            env: &[],
         }
+    }
+
+    fn with_environment(mut self, env: Option<&'a [(String, String)]>) -> Self {
+        self.env = env.unwrap_or_default();
+        self
+    }
+
+    /// Read a request-local compiler variable before the child is spawned.
+    #[must_use]
+    pub fn env_value(&self, name: &str) -> Option<&'a str> {
+        self.env
+            .iter()
+            .rev()
+            .find_map(|(key, value)| (key == name).then_some(value.as_str()))
     }
 
     #[must_use]
@@ -329,12 +356,13 @@ pub(super) async fn host_admission(
     args: &[String],
     source: Option<&Path>,
     built_in: bool,
+    client_env: Option<&[(String, String)]>,
 ) -> Result<(bool, HostAdmissionPermit), HostAdmissionError> {
-    let request = HostCompilerRequest::new(family, args, source);
+    let request = HostCompilerRequest::new(family, args, source).with_environment(client_env);
     let exclusive = combines_exclusive_admission(
         built_in,
         state.host_admission_classifier.as_deref(),
-        HostCompilerRequest::new(family, args, source),
+        request,
     )?;
     let permit = match state.host_admission_classifier.as_deref() {
         Some(classifier) => classifier.acquire(request).await?,
@@ -358,6 +386,20 @@ fn combines_exclusive_admission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_policy_reads_request_environment_without_logging_values() {
+        let env = [
+            ("SOLDR_QUEUE".to_string(), "compile".to_string()),
+            ("SOLDR_QUEUE".to_string(), "lint".to_string()),
+        ];
+        let request = HostCompilerRequest::new(CompilerFamily::Rustc, &[], None)
+            .with_environment(Some(&env));
+        assert_eq!(request.env_value("SOLDR_QUEUE"), Some("lint"));
+        assert_eq!(request.env_value("UNSET"), None);
+        assert!(!format!("{request:?}").contains("SOLDR_QUEUE"));
+    }
+
 
     #[test]
     fn the_published_zccache_crate_is_a_rust_amalgamation() {
