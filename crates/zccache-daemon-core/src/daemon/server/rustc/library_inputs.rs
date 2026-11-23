@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use crate::core::NormalizedPath;
 use crate::depgraph::{ExternCrate, NATIVE_INPUT_PREFIX};
-use crate::fscache::MetadataCache;
+use crate::fscache::{FileMetadata, MetadataCache};
 use crate::hash::ContentHash;
 
 use super::super::SharedState;
@@ -20,7 +20,13 @@ const INVENTORY_MIN_EXTERNS: usize = 8;
 const MAX_RELOCATED_STEMS: usize = 16;
 const UNRESOLVED_LIBRARY: &str = "unresolved transitive Rust library";
 
+#[cfg(test)]
+thread_local! {
+    static CANDIDATE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 struct DirectoryInventory {
+    stamp: FileMetadata,
     names: HashSet<String>,
     paths: Arc<Vec<NormalizedPath>>,
 }
@@ -29,7 +35,10 @@ type SearchDirectory = (NormalizedPath, Option<DirectoryInventory>);
 
 fn indexed_names(path: &NormalizedPath) -> Option<DirectoryInventory> {
     // Preserve direct lookup on directories that cannot be traversed.
-    std::fs::metadata(path.as_path().join(".")).ok()?;
+    let stamp = MetadataCache::stat_file(&path.as_path().join(".")).ok()?;
+    if stamp.identity.file_id == 0 || stamp.identity.change_ns == 0 {
+        return None;
+    }
     let paths = super::library_inventory::directory(path).ok()??;
     let names = paths
         .iter()
@@ -38,7 +47,24 @@ fn indexed_names(path: &NormalizedPath) -> Option<DirectoryInventory> {
             name.is_ascii().then(|| name.to_ascii_lowercase())
         })
         .collect::<Option<_>>()?;
-    Some(DirectoryInventory { names, paths })
+    Some(DirectoryInventory {
+        stamp,
+        names,
+        paths,
+    })
+}
+
+fn verify_directory_inventories(search: &[SearchDirectory]) -> Result<(), &'static str> {
+    for (directory, inventory) in search {
+        if let Some(inventory) = inventory {
+            let fresh = MetadataCache::stat_file(&directory.as_path().join("."))
+                .map_err(|_| "Rust search directory disappeared after inventory")?;
+            if !inventory.stamp.same_stamp(&fresh) {
+                return Err("Rust search directory changed after inventory");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath>, &'static str> {
@@ -67,6 +93,8 @@ fn candidates(stem: &str, dirs: &[SearchDirectory]) -> Result<Vec<NormalizedPath
                 continue;
             }
             let path = dir.join(name);
+            #[cfg(test)]
+            CANDIDATE_PROBES.with(|probes| probes.set(probes.get() + 1));
             match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => files.push(path),
                 Ok(_) => {}
@@ -240,6 +268,28 @@ fn inputs(
     named_inputs(externs, dirs, compiler, compiler_hash, files, probe_dir)
 }
 
+fn search_directories(
+    dirs: &[NormalizedPath],
+    sysroot: NormalizedPath,
+    use_inventory: bool,
+) -> Vec<SearchDirectory> {
+    let mut paths = dirs.to_vec();
+    if !paths.contains(&sysroot) {
+        paths.push(sysroot);
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            // The index only rules out absent names. Always stat candidates
+            // so symlinks and permissions retain their normal semantics.
+            let inventory = (cfg!(target_os = "linux") && use_inventory)
+                .then(|| indexed_names(&path))
+                .flatten();
+            (path, inventory)
+        })
+        .collect()
+}
+
 fn named_inputs(
     externs: &[ExternCrate],
     dirs: &[NormalizedPath],
@@ -284,25 +334,11 @@ fn named_inputs(
                     Some(&metadata.triple),
                     probe_dir,
                 )?;
-                let mut paths = dirs.to_vec();
-                if !paths.contains(&sysroot) {
-                    paths.push(sysroot);
-                }
-                entry.insert(
-                    paths
-                        .into_iter()
-                        .map(|path| {
-                            // The index only rules out absent names. Always stat
-                            // candidates so symlinks and permissions retain their
-                            // normal semantics. Fold ASCII names for casefold mounts.
-                            let inventory = (cfg!(target_os = "linux")
-                                && dependencies.len() >= INVENTORY_MIN_EXTERNS)
-                                .then(|| indexed_names(&path))
-                                .flatten();
-                            (path, inventory)
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                entry.insert(search_directories(
+                    dirs,
+                    sysroot,
+                    dependencies.len() >= INVENTORY_MIN_EXTERNS,
+                ))
             }
         };
         // rustc's crate-number table includes the complete external crate
@@ -352,6 +388,11 @@ fn named_inputs(
                 });
             }
         }
+    }
+    // A parallel Cargo job can publish a preferred name after the snapshot.
+    // Refuse cache reuse if any directory used for a negative lookup changed.
+    for search in searches.values() {
+        verify_directory_inventories(search)?;
     }
     resolved.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(resolved)
