@@ -355,7 +355,7 @@ fn resolves_renamed_metadata_used_by_a_transitive_compiler_request() {
     identity.hash ^= 1;
     assert!(lookup(&identity).is_err());
     identity.hash ^= 1;
-    std::fs::copy(&held_rlib, fixture.path().join("libprobe-duplicate.rlib")).unwrap();
+    std::fs::copy(&held_rlib, fixture.path().join("libprobe.rlib")).unwrap();
     assert_eq!(
         lookup(&identity),
         Err("ambiguous relocated Rust dependency search")
