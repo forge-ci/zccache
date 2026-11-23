@@ -15,7 +15,7 @@ use super::super::context::{
 use super::super::snapshot::now_unix_ms;
 use super::{
     collect_rustc_env_hashes, collect_rustc_extern_hashes, drifted_paths, format_drift_for_log,
-    CacheVerdict, ContextState, DepGraph,
+    CacheVerdict, ContextEntry, ContextState, DepGraph,
 };
 
 fn input_matches(
@@ -789,6 +789,43 @@ impl DepGraph {
             return None;
         }
 
+        let computed =
+            self.hash_snapshot_key(&entry, rustc_externs.as_deref(), &get_hash, &env_value)?;
+
+        if computed == *stored_key {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            Some(computed)
+        } else {
+            None
+        }
+    }
+
+    /// Probe a Rust artifact for a previously compiled input snapshot.
+    /// The caller must still find and restore the resulting artifact. Its
+    /// key covers the compiler context, exact dependency path set, current
+    /// content hashes, resolved externs and recorded environment dependencies.
+    pub fn prior_rustc_snapshot_key(
+        &self,
+        key: &ContextKey,
+        get_hash: impl Fn(&Path) -> Option<ContentHash>,
+        env_value: impl Fn(&str) -> Option<String>,
+    ) -> Option<ArtifactKey> {
+        let key = self.resolve_instance_key(key)?;
+        let externs = self.rustc_extern_inputs(&key)?;
+        let entry = self.contexts.get(&key)?;
+        if entry.state == ContextState::Cold || entry.has_computed_includes {
+            return None;
+        }
+        self.hash_snapshot_key(&entry, Some(&externs), &get_hash, &env_value)
+    }
+
+    fn hash_snapshot_key(
+        &self,
+        entry: &ContextEntry,
+        rustc_externs: Option<&[(String, NormalizedPath)]>,
+        get_hash: &impl Fn(&Path) -> Option<ContentHash>,
+        env_value: &impl Fn(&str) -> Option<String>,
+    ) -> Option<ArtifactKey> {
         // Build file_hashes using references — zero NormalizedPath clones.
         let cap = 1 + entry.resolved_includes.len() + entry.context.force_includes.len();
         let mut file_hashes: Vec<(&Path, ContentHash)> = Vec::with_capacity(cap);
@@ -804,8 +841,8 @@ impl DepGraph {
             file_hashes.push((fi.as_path(), get_hash(fi)?));
         }
 
-        let computed = if let Some(externs) = rustc_externs.as_deref() {
-            let mut extern_hashes = collect_rustc_extern_hashes(externs, &get_hash)?;
+        Some(if let Some(externs) = rustc_externs {
+            let mut extern_hashes = collect_rustc_extern_hashes(externs, get_hash)?;
             let base = compute_rustc_artifact_key_with_root_with(
                 &entry.logical_key,
                 &mut file_hashes,
@@ -813,7 +850,7 @@ impl DepGraph {
                 entry.key_root.as_deref(),
                 |path, key_root| self.cached_normalize_key_path(path, key_root),
             );
-            let mut env_hashes = collect_rustc_env_hashes(&entry.rustc_env_deps, &env_value);
+            let mut env_hashes = collect_rustc_env_hashes(&entry.rustc_env_deps, env_value);
             fold_rustc_env_deps_into_artifact_key(base, &mut env_hashes)
         } else {
             compute_artifact_key_with(
@@ -822,13 +859,6 @@ impl DepGraph {
                 entry.key_root.as_deref(),
                 |path, key_root| self.cached_normalize_key_path(path, key_root),
             )
-        };
-
-        if computed == *stored_key {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            Some(computed)
-        } else {
-            None
-        }
+        })
     }
 }

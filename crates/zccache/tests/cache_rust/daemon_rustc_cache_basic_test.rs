@@ -814,3 +814,66 @@ async fn test_rustc_extern_change_invalidates() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore] // integration-level: starts a real daemon and compiler
+async fn test_rustc_restores_prior_module_version() {
+    let Some(compiler) = zccache::test_support::find_rustc() else {
+        return;
+    };
+    zccache::test_support::test_timeout(async move {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("lib.rs");
+        let module = temp.path().join("value.rs");
+        let output = temp.path().join("libreplay.rmeta");
+        std::fs::write(&source, "pub mod value;").unwrap();
+        let first = "pub const VALUE: u32 = 1;";
+        let second = "pub const VALUE: u32 = 12345;";
+        let new_dependency = "pub const VALUE: u32 = include!(\"extra.in\");";
+        std::fs::write(temp.path().join("extra.in"), "999").unwrap();
+
+        let (endpoint, server_handle, shutdown) = start_daemon().await;
+        let mut client = zccache::ipc::connect(&endpoint).await.unwrap();
+        let session_id = start_session(&mut client).await;
+        let source_arg = source.to_string_lossy();
+        let out_dir = temp.path().to_string_lossy();
+        let compiler_arg = compiler.to_string_lossy();
+        let args = [
+            "--crate-name=replay",
+            "--crate-type=lib",
+            "--emit=dep-info,metadata",
+            &source_arg,
+            "--out-dir",
+            &out_dir,
+        ];
+
+        let mut original = Vec::new();
+        for (contents, expected_hit) in [
+            (first, false),
+            (second, false),
+            (first, true),
+            (new_dependency, false),
+            (new_dependency, true),
+            (first, false),
+            (first, true),
+        ] {
+            std::fs::write(&module, contents).unwrap();
+            let (exit, cached) =
+                compile(&mut client, &session_id, &compiler_arg, &args, temp.path()).await;
+            assert_eq!(exit, 0);
+            assert_eq!(cached, expected_hit, "module contents: {contents}");
+            let actual = std::fs::read(&output).unwrap();
+            if original.is_empty() {
+                original = actual;
+            } else if contents == first {
+                assert_eq!(actual, original);
+            } else {
+                assert_ne!(actual, original);
+            }
+        }
+
+        shutdown.notify_one();
+        server_handle.await.unwrap();
+    })
+    .await;
+}
