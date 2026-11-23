@@ -872,6 +872,18 @@ async fn test_rustc_restores_prior_module_version() {
             }
         }
 
+        std::fs::write(&module, second).unwrap();
+        let (exit, _) = compile(&mut client, &session_id, &compiler_arg, &args, temp.path()).await;
+        assert_eq!(exit, 0);
+        let alternate = temp.path().join("value");
+        std::fs::create_dir(&alternate).unwrap();
+        std::fs::write(alternate.join("mod.rs"), first).unwrap();
+        std::fs::write(&module, first).unwrap();
+        let (exit, cached) =
+            compile(&mut client, &session_id, &compiler_arg, &args, temp.path()).await;
+        assert_ne!(exit, 0, "rustc must report the ambiguous module");
+        assert!(!cached, "a new alternative module must prevent replay");
+
         shutdown.notify_one();
         server_handle.await.unwrap();
     })

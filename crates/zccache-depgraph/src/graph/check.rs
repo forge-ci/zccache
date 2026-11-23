@@ -18,6 +18,26 @@ use super::{
     CacheVerdict, ContextEntry, ContextState, DepGraph,
 };
 
+fn rust_module_alternative_may_exist(path: &Path) -> bool {
+    if path.extension() != Some(std::ffi::OsStr::new("rs")) {
+        return false;
+    }
+    let alternative = if path.file_name() == Some(std::ffi::OsStr::new("mod.rs")) {
+        let Some(directory) = path.parent().filter(|parent| parent.file_name().is_some()) else {
+            return true;
+        };
+        let mut name = directory.file_name().unwrap_or_default().to_os_string();
+        name.push(".rs");
+        directory.with_file_name(name)
+    } else {
+        path.with_extension("").join("mod.rs")
+    };
+    !matches!(
+        std::fs::symlink_metadata(alternative),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 fn input_matches(
     path: &NormalizedPath,
     recorded: &[(NormalizedPath, ContentHash)],
@@ -814,6 +834,15 @@ impl DepGraph {
         let externs = self.rustc_extern_inputs(&key)?;
         let entry = self.contexts.get(&key)?;
         if entry.state == ContextState::Cold || entry.has_computed_includes {
+            return None;
+        }
+        // Rust's dep-info lists the chosen module file, but omits the
+        // alternative spelling that must remain absent for that resolution.
+        if entry
+            .resolved_includes
+            .iter()
+            .any(|include| rust_module_alternative_may_exist(include.as_path()))
+        {
             return None;
         }
         self.hash_snapshot_key(&entry, Some(&externs), &get_hash, &env_value)
