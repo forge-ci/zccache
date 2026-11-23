@@ -277,14 +277,13 @@ fn search_directories(
     if !paths.contains(&sysroot) {
         paths.push(sysroot);
     }
+    let use_inventory = use_inventory && kernal_api::platform::host::target_is_linux();
     paths
         .into_iter()
         .map(|path| {
             // The index only rules out absent names. Always stat candidates
             // so symlinks and permissions retain their normal semantics.
-            let inventory = (cfg!(target_os = "linux") && use_inventory)
-                .then(|| indexed_names(&path))
-                .flatten();
+            let inventory = use_inventory.then(|| indexed_names(&path)).flatten();
             (path, inventory)
         })
         .collect()
