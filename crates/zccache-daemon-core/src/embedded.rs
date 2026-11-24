@@ -746,6 +746,7 @@ impl ZccacheService {
             env: Some(request.env),
             stdin: request.stdin,
             test_harness_admission: options.test_harness_admission,
+            host_admission_class: options.host_admission_class,
         });
         let outcome = self
             .await_compile(executor::scope(self.executor.clone(), compile_future))

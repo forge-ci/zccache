@@ -222,7 +222,7 @@ pub(super) async fn run_compiler_direct_with_family(
             }
         }
     };
-    if exclusive {
+    if compiler_admission.is_exclusive() {
         tracing::info!(
             event = "compile_exclusive",
             "direct amalgamated compiler unit acquired exclusive build access"

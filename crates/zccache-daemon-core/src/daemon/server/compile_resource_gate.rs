@@ -4,15 +4,17 @@
 //! Published Rust crates can have the same shape without a large root file:
 //! zccache's release crate folds its internal workspace into one rustc unit.
 //! Ordinary compiles take shared admission; either kind of amalgamation takes
-//! exclusive admission immediately before the compiler child is spawned. The
-//! resource permit remains live through cache hashing/publication after the
-//! bounded compiler slot is returned, so post-compiler work cannot overlap a
-//! queued exclusive unit.
+//! a bounded chance at exclusive admission before the compiler child is spawned.
+//! If active work does not drain by the deadline, the unit waits for shared
+//! admission instead. The resource permit remains live through cache
+//! hashing/publication after the bounded compiler slot is returned, so
+//! post-compiler work cannot overlap a unit holding exclusive admission.
 
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::core::sync::{Barrier, ReadPermit, WritePermit};
 
@@ -20,11 +22,17 @@ use crate::compiler::CompilerFamily;
 
 use super::SharedState;
 
+const EXCLUSIVE_ADMISSION_WAIT: Duration = Duration::from_secs(30);
+
+kernal_api::task_local! {
+    pub(super) static HOST_ADMISSION_CLASS: Option<u32> = HOST_ADMISSION_CLASS_TLS;
+}
+
 const AMALGAMATION_BYTES: u64 = 1_000_000;
 const KNOWN_C_AMALGAMATIONS: &[&str] = &["sqlite3.c", "zstd.c", "rocksdb.cc"];
 const KNOWN_RUST_AMALGAMATIONS: &[&str] = &["zccache", "zccache_cli_core", "zccache_daemon_core"];
 
-/// Stable compiler facts supplied to an embedded host admission policy.
+/// Compiler facts and request context supplied to an embedded host policy.
 ///
 /// This deliberately exposes neither the daemon's semaphore nor its resource
 /// lock. The host can classify the child zccache is about to spawn, but only
@@ -35,6 +43,8 @@ pub struct HostCompilerRequest<'a> {
     args: &'a [String],
     source: Option<&'a Path>,
     env: &'a [(String, String)],
+    host_admission_class: Option<u32>,
+    exclusive: bool,
 }
 
 impl std::fmt::Debug for HostCompilerRequest<'_> {
@@ -55,6 +65,8 @@ impl<'a> HostCompilerRequest<'a> {
             args,
             source,
             env: &[],
+            host_admission_class: HOST_ADMISSION_CLASS.try_with(|class| *class).ok().flatten(),
+            exclusive: false,
         }
     }
 
@@ -85,6 +97,19 @@ impl<'a> HostCompilerRequest<'a> {
     #[must_use]
     pub fn source(&self) -> Option<&'a Path> {
         self.source
+    }
+
+    /// Scheduling class set by the embedded host for this request.
+    #[must_use]
+    pub fn host_admission_class(&self) -> Option<u32> {
+        self.host_admission_class
+    }
+
+    /// Effective exclusivity after combining the built-in and host
+    /// classifiers. Populated for the host's `acquire` callback.
+    #[must_use]
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive
     }
 }
 
@@ -167,17 +192,21 @@ pub(super) enum CompileResourcePermit {
 /// while also ensuring nobody holds the resource gate while waiting for a
 /// scarce compile slot.
 pub(super) struct CompilerAdmission {
-    _resource: CompileResourcePermit,
+    resource: CompileResourcePermit,
     _compile: super::compile_progress::CompileGateGuard,
     _host: HostAdmissionPermit,
 }
 
 impl CompilerAdmission {
+    pub(super) fn is_exclusive(&self) -> bool {
+        matches!(self.resource, CompileResourcePermit::Exclusive { .. })
+    }
+
     /// Return scarce compiler capacity while preserving build-wide resource
     /// ownership for the request's hashing and publication phases.
     pub(super) fn release_compiler_slot(self) -> CompileResourcePermit {
         let Self {
-            _resource: resource,
+            resource,
             _compile: compile,
             _host: host,
         } = self;
@@ -190,17 +219,19 @@ impl CompilerAdmission {
 impl CompileResourceGate {
     pub(super) async fn acquire(&self, exclusive: bool) -> CompileResourcePermit {
         if exclusive {
-            CompileResourcePermit::Exclusive {
-                _guard: Arc::clone(&self.inner)
-                    .write_for(crate::core::sync::OPERATION_TIMEOUT)
-                    .await,
+            match self.inner.try_write_for(EXCLUSIVE_ADMISSION_WAIT).await {
+                Ok(guard) => return CompileResourcePermit::Exclusive { _guard: guard },
+                Err(_) => tracing::warn!(
+                    wait_secs = EXCLUSIVE_ADMISSION_WAIT.as_secs(),
+                    "compiler exclusive admission expired; waiting for shared admission"
+                ),
             }
-        } else {
-            CompileResourcePermit::Shared {
-                _guard: Arc::clone(&self.inner)
-                    .read_for(crate::core::sync::OPERATION_TIMEOUT)
-                    .await,
-            }
+        }
+        CompileResourcePermit::Shared {
+            _guard: self
+                .inner
+                .read_for(crate::core::sync::OPERATION_TIMEOUT)
+                .await,
         }
     }
 }
@@ -220,7 +251,7 @@ pub(super) async fn acquire_compiler_admission(
     let resource = state.compile_resource_gate.acquire(exclusive).await;
     Ok((
         CompilerAdmission {
-            _resource: resource,
+            resource,
             _compile: compile,
             _host: host,
         },
@@ -358,12 +389,13 @@ pub(super) async fn host_admission(
     built_in: bool,
     client_env: Option<&[(String, String)]>,
 ) -> Result<(bool, HostAdmissionPermit), HostAdmissionError> {
-    let request = HostCompilerRequest::new(family, args, source).with_environment(client_env);
+    let mut request = HostCompilerRequest::new(family, args, source).with_environment(client_env);
     let exclusive = combines_exclusive_admission(
         built_in,
         state.host_admission_classifier.as_deref(),
         request,
     )?;
+    request.exclusive = exclusive;
     let permit = match state.host_admission_classifier.as_deref() {
         Some(classifier) => classifier.acquire(request).await?,
         None => HostAdmissionPermit::default(),
@@ -640,6 +672,25 @@ mod tests {
         reader.await.expect("reader task");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn exclusive_admission_falls_back_while_a_shared_compile_is_still_running() {
+        use std::time::Duration;
+
+        let gate = CompileResourceGate::default();
+        let running = gate.acquire(false).await;
+
+        let fallback = tokio::time::timeout(Duration::from_secs(31), gate.acquire(true))
+            .await
+            .expect("exclusive admission should fall back within 30 seconds");
+        assert!(matches!(fallback, CompileResourcePermit::Shared { .. }));
+
+        drop((running, fallback));
+        assert!(matches!(
+            gate.acquire(true).await,
+            CompileResourcePermit::Exclusive { .. }
+        ));
+    }
+
     #[tokio::test]
     async fn ordinary_units_can_hold_shared_admission_together() {
         use std::time::Duration;
@@ -673,7 +724,7 @@ mod tests {
         }
         let host_live = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let admission = CompilerAdmission {
-            _resource: resource_gate.acquire(false).await,
+            resource: resource_gate.acquire(false).await,
             _compile: compile,
             _host: HostAdmissionPermit::new(DropProbe(Arc::clone(&host_live))),
         };

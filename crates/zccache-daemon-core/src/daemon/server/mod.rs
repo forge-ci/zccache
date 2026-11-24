@@ -112,6 +112,7 @@ pub(crate) struct EmbeddedCompileRequest {
     /// The host's explicit `--test` harness policy (zccache#1550); `None`
     /// resolves from `env`, then the service default.
     pub(crate) test_harness_admission: Option<crate::core::config::TestHarnessAdmission>,
+    pub(crate) host_admission_class: Option<u32>,
 }
 
 pub(crate) struct EmbeddedCompileResult {
