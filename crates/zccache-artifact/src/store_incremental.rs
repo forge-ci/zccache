@@ -55,10 +55,30 @@ impl ArtifactStore {
             &self.journal_state,
         )
     }
+    pub(super) fn acquire_flush_permit(
+        &self,
+        budget: std::time::Duration,
+    ) -> std::io::Result<zccache_core::sync::GatePermit> {
+        // Checkpoints hold the permit across filesystem I/O. An admission
+        // timeout must leave the writer and service alive.
+        self.flush_lock
+            .try_blocking_acquire_for(budget)
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "waiting for the artifact index checkpoint",
+                )
+            })
+    }
+
     pub fn flush_incremental(&self) -> std::io::Result<()> {
-        let _guard = self
-            .flush_lock
-            .blocking_acquire_for(zccache_core::sync::STATE_TIMEOUT);
+        self.flush_incremental_with_admission_budget(zccache_core::sync::OPERATION_TIMEOUT)
+    }
+    fn flush_incremental_with_admission_budget(
+        &self,
+        budget: std::time::Duration,
+    ) -> std::io::Result<()> {
+        let _guard = self.acquire_flush_permit(budget)?;
         self.flush_incremental_locked()
     }
     fn legacy_rows(&self) -> std::io::Result<Vec<(String, ArtifactIndex)>> {
@@ -174,6 +194,36 @@ mod tests {
 
     fn meta() -> ArtifactIndex {
         ArtifactIndex::new(vec!["result.o".into()], vec![4], vec![], vec![], 0)
+    }
+
+    #[test]
+    fn flush_timeout_preserves_full_and_incremental_updates_for_retry() {
+        for incremental in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("index.bin");
+            let store = ArtifactStore::open_empty(&path);
+            store.insert("pending", &meta());
+            let active_checkpoint = store.flush_lock.try_acquire().unwrap();
+            let budget = std::time::Duration::from_millis(10);
+
+            let error = if incremental {
+                store.flush_incremental_with_admission_budget(budget)
+            } else {
+                store.flush_with_admission_budget(budget)
+            }
+            .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            assert!(store.is_dirty());
+            assert!(store.has_pending_entries());
+
+            drop(active_checkpoint);
+            if incremental {
+                store.flush_incremental().unwrap();
+            } else {
+                store.flush().unwrap();
+            }
+            assert!(ArtifactStore::open(&path).unwrap().get("pending").is_some());
+        }
     }
 
     #[test]

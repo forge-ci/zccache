@@ -109,17 +109,25 @@ impl std::task::Wake for ThreadWake {
 /// unparks this blocking worker, and park_timeout supplies the deadline.
 #[track_caller]
 pub(super) fn blocking_for<F: std::future::Future>(future: F, bound: Duration) -> F::Output {
+    let site = std::panic::Location::caller();
+    try_blocking_for(future, bound).unwrap_or_else(|error| synchronization_failed(site, error))
+}
+
+pub(super) fn try_blocking_for<F: std::future::Future>(
+    future: F,
+    bound: Duration,
+) -> Result<F::Output, LockTimeout> {
     let started = Instant::now();
     let waker = std::task::Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut context = std::task::Context::from_waker(&waker);
     let mut future = std::pin::pin!(future);
     loop {
         if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
-            return value;
+            return Ok(value);
         }
         let remaining = bound.saturating_sub(started.elapsed());
         if remaining.is_zero() {
-            synchronization_failed(std::panic::Location::caller(), LockTimeout(bound));
+            return Err(LockTimeout(bound));
         }
         std::thread::park_timeout(remaining);
     }

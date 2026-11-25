@@ -503,9 +503,11 @@ impl ArtifactStore {
     /// some serialisation of in-flight inserts (acceptable for the
     /// crash-recovery contract).
     pub fn flush(&self) -> std::io::Result<()> {
-        let _flush_guard = self
-            .flush_lock
-            .blocking_acquire_for(zccache_core::sync::STATE_TIMEOUT);
+        self.flush_with_admission_budget(zccache_core::sync::OPERATION_TIMEOUT)
+    }
+
+    fn flush_with_admission_budget(&self, budget: std::time::Duration) -> std::io::Result<()> {
+        let _flush_guard = self.acquire_flush_permit(budget)?;
         // Clear dirty BEFORE taking the snapshot, not after: a mutation that
         // lands concurrently (even mid-snapshot, per the fuzzy-snapshot note
         // below) calls `mark_dirty()` again and correctly leaves the flag set
