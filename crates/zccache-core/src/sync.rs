@@ -219,13 +219,22 @@ impl Gate {
     /// Acquire on a blocking worker, preserving FIFO admission and ownership.
     #[track_caller]
     pub fn blocking_acquire_for(self: &Arc<Self>, bound: Duration) -> GatePermit {
-        match super::sync_barrier::blocking_for(Arc::clone(&self.inner).acquire_owned(), bound) {
-            Ok(permit) => GatePermit {
+        let site = std::panic::Location::caller();
+        self.try_blocking_acquire_for(bound)
+            .unwrap_or_else(|error| synchronization_failed(site, error))
+    }
+
+    /// Attempt FIFO admission on a blocking worker within the specified budget.
+    pub fn try_blocking_acquire_for(
+        self: &Arc<Self>,
+        bound: Duration,
+    ) -> Result<GatePermit, LockTimeout> {
+        super::sync_barrier::try_blocking_for(Arc::clone(&self.inner).acquire_owned(), bound)?
+            .map(|permit| GatePermit {
                 _permit: permit,
                 _gate: Arc::clone(self),
-            },
-            Err(_) => synchronization_failed(std::panic::Location::caller(), LockTimeout(bound)),
-        }
+            })
+            .map_err(|_| LockTimeout(bound))
     }
 }
 
