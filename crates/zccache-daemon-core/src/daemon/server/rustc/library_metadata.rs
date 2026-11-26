@@ -5,7 +5,10 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use crate::core::{sync::State, NormalizedPath};
+use crate::core::{
+    sync::{Gate, State},
+    NormalizedPath,
+};
 use crate::fscache::MetadataCache;
 use crate::hash::ContentHash;
 
@@ -27,7 +30,13 @@ pub(super) struct Metadata {
     pub dependencies: Vec<Dependency>,
 }
 
-type ParsedCache = HashMap<(ContentHash, ContentHash), Arc<Metadata>>;
+#[derive(Default)]
+struct ParsedEntry {
+    probe_gate: Arc<Gate>,
+    metadata: OnceLock<Arc<Metadata>>,
+}
+
+type ParsedCache = HashMap<(ContentHash, ContentHash), Arc<ParsedEntry>>;
 type DirectoryCache = HashMap<(NormalizedPath, ContentHash, Option<String>), NormalizedPath>;
 static PARSED: OnceLock<State<ParsedCache>> = OnceLock::new();
 static DIRECTORIES: OnceLock<State<DirectoryCache>> = OnceLock::new();
@@ -145,7 +154,10 @@ fn snapshot(
             std::fs::File::create(&snapshot).map_err(|_| "metadata snapshot file failed")?;
         std::io::copy(&mut source, &mut target).map_err(|_| "metadata snapshot copy failed")?;
     }
-    if crate::hash::hash_file(&snapshot).ok() != Some(digest) {
+    // This runs under a per-key gate on a Rayon worker. Parallel hashing can
+    // let that worker run a waiter for its own gate before the hash returns.
+    let snapshot_digest = std::fs::File::open(&snapshot).and_then(crate::hash::hash_reader);
+    if snapshot_digest.ok() != Some(digest) {
         return Err("Rust library changed while snapshotting metadata");
     }
     Ok((snapshot_dir, snapshot.into()))
@@ -185,46 +197,77 @@ pub(super) fn inspect(
     let digest = files
         .lookup_normalized(library)
         .map_err(|_| "unreadable Rust library")?;
-    let key = (compiler_hash, digest);
-    if let Some(metadata) =
-        parsed_cache().with_blocking_for(STATE_WAIT, |cache| cache.get(&key).map(Arc::clone))
-    {
-        return Ok(metadata);
-    }
-    // Inspect an immutable private copy whose digest is the memo key. Merely
-    // hashing the original before/after a child would allow an ABA replacement
-    // to memoize another file's metadata under the original digest.
-    let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
-    if library
-        .extension()
-        .is_some_and(|extension| extension == "rlib")
-    {
-        super::native_inputs::require_regular_archive(&snapshot)?;
-    }
-    let spec = super::super::compiler_spawn::rustc_library_metadata_probe_spawn(
-        compiler.as_path(),
-        &snapshot,
-        probe_dir,
-    );
-    let metadata = Arc::new(parse(&probe(spec, compiler.as_path())?)?);
-    if files.lookup_normalized(library).ok() != Some(digest) {
+    let (metadata, recheck_digest) =
+        cached_probe(parsed_cache(), (compiler_hash, digest), PROBE_WAIT, || {
+            // Inspect an immutable private copy whose digest is the memo key. Merely
+            // hashing the original before/after a child would allow an ABA replacement
+            // to memoize another file's metadata under the original digest.
+            let (_snapshot_dir, snapshot) = snapshot(library, digest, probe_dir)?;
+            if library
+                .extension()
+                .is_some_and(|extension| extension == "rlib")
+            {
+                super::native_inputs::require_regular_archive(&snapshot)?;
+            }
+            let spec = super::super::compiler_spawn::rustc_library_metadata_probe_spawn(
+                compiler.as_path(),
+                &snapshot,
+                probe_dir,
+            );
+            parse(&probe(spec, compiler.as_path())?)
+        })?;
+    // The shared result describes the verified snapshot. Each caller that
+    // probed or waited still checks that its own path has the expected bytes.
+    if recheck_digest && files.lookup_normalized(library).ok() != Some(digest) {
         return Err("Rust library changed during metadata inspection");
     }
-    let retired = parsed_cache().with_blocking_for(STATE_WAIT, |cache| {
+    Ok(metadata)
+}
+
+fn cached_probe(
+    cache: &State<ParsedCache>,
+    key: (ContentHash, ContentHash),
+    wait: Duration,
+    inspect: impl FnOnce() -> Result<Metadata, &'static str>,
+) -> Result<(Arc<Metadata>, bool), &'static str> {
+    let (entry, retired) = cache.with_blocking_for(STATE_WAIT, |cache| {
+        if let Some(entry) = cache.get(&key) {
+            return (Arc::clone(entry), None);
+        }
+
         let retired = if cache.len() >= MAX_ENTRIES {
+            // An active reader or producer may still be inspecting this key.
+            // Keep its entry reachable so other callers can join the flight.
             cache
-                .keys()
-                .next()
-                .copied()
+                .iter()
+                .find_map(|(key, entry)| (Arc::strong_count(entry) == 1).then_some(*key))
                 .and_then(|old| cache.remove(&old))
         } else {
             None
         };
-        cache.insert(key, Arc::clone(&metadata));
-        retired
+        let entry = Arc::new(ParsedEntry::default());
+        if cache.len() < MAX_ENTRIES {
+            cache.insert(key, Arc::clone(&entry));
+        }
+        (entry, retired)
     });
     drop(retired);
-    Ok(metadata)
+
+    if let Some(metadata) = entry.metadata.get() {
+        return Ok((Arc::clone(metadata), false));
+    }
+    let _permit = entry
+        .probe_gate
+        .try_blocking_acquire_for(wait)
+        .map_err(|_| "timed out waiting for Rust library metadata inspection")?;
+    let metadata = match entry.metadata.get() {
+        Some(metadata) => Arc::clone(metadata),
+        None => {
+            let metadata = Arc::new(inspect()?);
+            Arc::clone(entry.metadata.get_or_init(|| metadata))
+        }
+    };
+    Ok((metadata, true))
 }
 
 pub(super) fn target_directory(
@@ -257,4 +300,48 @@ pub(super) fn target_directory(
         cache.insert(key, path.clone());
     });
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn perf_concurrent_metadata_inspections_share_a_probe() {
+        let cache = State::new(HashMap::new());
+        let key = (
+            crate::hash::hash_bytes(b"compiler"),
+            crate::hash::hash_bytes(b"rlib"),
+        );
+        let deadline = Duration::from_secs(2);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let cache = &cache;
+            let leader = scope.spawn(move || {
+                cached_probe(cache, key, PROBE_WAIT, || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv_timeout(deadline).unwrap();
+                    Ok(Metadata {
+                        stem: "test".into(),
+                        hash: 0,
+                        triple: "test".into(),
+                        dependencies: Vec::new(),
+                    })
+                })
+            });
+            started_rx.recv_timeout(deadline).unwrap();
+            let duplicate = || Err("duplicate probe");
+            let while_busy = cached_probe(cache, key, Duration::ZERO, duplicate);
+            release_tx.send(()).unwrap();
+            let (original, _) = leader.join().unwrap().unwrap();
+            assert!(matches!(
+                while_busy,
+                Err("timed out waiting for Rust library metadata inspection")
+            ));
+            let (reused, _) = cached_probe(cache, key, Duration::ZERO, duplicate).unwrap();
+            assert!(Arc::ptr_eq(&original, &reused));
+        });
+    }
 }
