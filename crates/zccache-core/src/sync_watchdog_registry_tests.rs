@@ -127,9 +127,9 @@ fn holder_report_child() {
 #[test]
 fn lock_watchdog_kill_switch_values() {
     for off in ["off", "OFF", "0", "false", "no", " off "] {
-        assert!(watchdog_disabled_by(Some(off)), "{off}");
+        assert!(crate::config::lock_watchdog_disabled_by(Some(off)), "{off}");
     }
     for on in [None, Some("on"), Some("1"), Some("")] {
-        assert!(!watchdog_disabled_by(on), "{on:?}");
+        assert!(!crate::config::lock_watchdog_disabled_by(on), "{on:?}");
     }
 }

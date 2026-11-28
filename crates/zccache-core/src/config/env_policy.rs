@@ -51,6 +51,11 @@ const DIAG_CWD_ENV: &str = "ZCCACHE_DIAG_CWD";
 const SUMMARY_VERBOSE_ENV: &str = "ZCCACHE_SUMMARY_VERBOSE";
 /// Set this to restore fail-fast behaviour for lost link requests.
 const LINK_RETRY_DISABLE_ENV: &str = "ZCCACHE_DISABLE_LINK_RETRY";
+/// Default-on lock-hold watchdog; `off`/`0`/`false`/`no` disables it.
+pub const LOCK_WATCHDOG_ENV: &str = "ZCCACHE_LOCK_WATCHDOG";
+/// soldr-facing alias of [`LOCK_WATCHDOG_ENV`] so one runner environment
+/// configures soldr's embedded zccache.
+pub const SOLDR_LOCK_WATCHDOG_ENV: &str = "SOLDR_LOCK_WATCHDOG";
 
 /// The complete registry for zccache-owned boolean switches.
 ///
@@ -117,6 +122,16 @@ pub const ENVIRONMENT_VARIABLES: &[EnvironmentVariableDeclaration] = &[
         name: LINK_RETRY_DISABLE_ENV,
         kind: EnvironmentVariableKind::OwnedBoolean,
         help: "Fail fast instead of retrying a lost link request.",
+    },
+    EnvironmentVariableDeclaration {
+        name: LOCK_WATCHDOG_ENV,
+        kind: EnvironmentVariableKind::DefaultOnBoolean,
+        help: "Disable the lock-hold watchdog thread with off, 0, false or no.",
+    },
+    EnvironmentVariableDeclaration {
+        name: SOLDR_LOCK_WATCHDOG_ENV,
+        kind: EnvironmentVariableKind::DefaultOnBoolean,
+        help: "soldr alias of ZCCACHE_LOCK_WATCHDOG.",
     },
 ];
 
@@ -290,6 +305,27 @@ pub fn native_crash_capture_enabled() -> bool {
 
 fn native_crash_capture_from_env_value(value: Option<&str>) -> bool {
     value.is_none_or(|raw| raw.trim() != "0")
+}
+
+/// True unless [`LOCK_WATCHDOG_ENV`] or [`SOLDR_LOCK_WATCHDOG_ENV`] turns the
+/// lock-hold watchdog off.
+#[must_use]
+pub fn lock_watchdog_enabled() -> bool {
+    ![LOCK_WATCHDOG_ENV, SOLDR_LOCK_WATCHDOG_ENV]
+        .iter()
+        .any(|name| lock_watchdog_disabled_by(std::env::var(name).ok().as_deref()))
+}
+
+/// Testable core of [`lock_watchdog_enabled`]: `off`, `0`, `false` or `no`
+/// (case-insensitive, trimmed) disables the watchdog.
+#[must_use]
+pub(crate) fn lock_watchdog_disabled_by(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| {
+        let trimmed = raw.trim();
+        ["0", "false", "no", "off"]
+            .iter()
+            .any(|off| trimmed.eq_ignore_ascii_case(off))
+    })
 }
 
 /// Testable core of [`daemon_spawn_disabled`] — no environment access.

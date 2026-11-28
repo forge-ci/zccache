@@ -71,15 +71,18 @@ pub const COLOCATE_ENV: &str = "ZCCACHE_COLOCATE";
 // ---------------------------------------------------------------------------
 
 pub use cleanup::{cleanup_legacy_temp_root_state, cleanup_stale_depfile_dirs};
+#[cfg(test)]
+pub(crate) use env_policy::lock_watchdog_disabled_by;
 #[allow(deprecated)]
 pub use env_policy::owned_env_flag_enabled;
 pub use env_policy::{
     cache_test_binaries_enabled, colocate_requested, daemon_spawn_disabled, diag_cwd_enabled,
-    link_retry_disabled, mtime_floor_disable_requested, native_crash_capture_enabled,
-    no_spawn_error, owned_flag_enabled, pack_artifacts_enabled, probe_bypass_enabled,
-    quiet_enabled, summary_verbose_enabled, zccache_disabled, EnvironmentVariableDeclaration,
-    EnvironmentVariableKind, CACHE_TEST_BINS_ENV, ENVIRONMENT_VARIABLES, NATIVE_CRASH_CAPTURE_ENV,
-    NO_SPAWN_ENV,
+    link_retry_disabled, lock_watchdog_enabled, mtime_floor_disable_requested,
+    native_crash_capture_enabled, no_spawn_error, owned_flag_enabled, pack_artifacts_enabled,
+    probe_bypass_enabled, quiet_enabled, summary_verbose_enabled, zccache_disabled,
+    EnvironmentVariableDeclaration, EnvironmentVariableKind, CACHE_TEST_BINS_ENV,
+    ENVIRONMENT_VARIABLES, LOCK_WATCHDOG_ENV, NATIVE_CRASH_CAPTURE_ENV, NO_SPAWN_ENV,
+    SOLDR_LOCK_WATCHDOG_ENV,
 };
 pub use materialization_mode::{
     materialization_mode_from_client_env, materialization_mode_from_env,

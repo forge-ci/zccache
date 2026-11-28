@@ -217,33 +217,11 @@ fn decision(entries: &mut [Entry], now: Instant) -> Option<(bool, Vec<Entry>)> {
     notify.then(|| (holding, entries.to_vec()))
 }
 
-/// Operator kill switch for the holder watchdog thread. `off`, `0`, `false`
-/// or `no` in either variable skips the monitor (and its diagnostics I/O).
-/// `SOLDR_LOCK_WATCHDOG` is honored so soldr's embedded zccache can be
-/// configured from one runner environment.
-pub(crate) const LOCK_WATCHDOG_ENV_VARS: [&str; 2] =
-    ["ZCCACHE_LOCK_WATCHDOG", "SOLDR_LOCK_WATCHDOG"];
-
-fn watchdog_disabled_by(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        let value = value.trim();
-        value.eq_ignore_ascii_case("off")
-            || value == "0"
-            || value.eq_ignore_ascii_case("false")
-            || value.eq_ignore_ascii_case("no")
-    })
-}
-
-fn watchdog_disabled() -> bool {
-    LOCK_WATCHDOG_ENV_VARS
-        .iter()
-        .any(|name| watchdog_disabled_by(std::env::var(name).ok().as_deref()))
-}
-
 fn start() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        if watchdog_disabled() {
+        // Operator kill switch: ZCCACHE_LOCK_WATCHDOG / SOLDR_LOCK_WATCHDOG=off.
+        if !crate::config::lock_watchdog_enabled() {
             return;
         }
         let sender = reporter().clone();
