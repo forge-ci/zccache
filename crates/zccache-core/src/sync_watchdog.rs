@@ -179,9 +179,9 @@ impl Drop for Ticket {
 }
 
 /// Formatting and stderr writes run outside the registry mutex.
-fn report(entries: &[Entry], now: Instant, abort: bool) -> String {
+fn report(entries: &[Entry], now: Instant, holding: bool) -> String {
     use std::fmt::Write;
-    let phase = if abort { "hold" } else { "wait" };
+    let phase = if holding { "hold" } else { "wait" };
     let mut text = format!("zccache: lock {phase} exceeded its budget. Registered sites:\n");
     for entry in entries {
         let _ = writeln!(
@@ -199,26 +199,53 @@ fn report(entries: &[Entry], now: Instant, abort: bool) -> String {
     text
 }
 
+/// Overdue holders and waiters are reported once each and never terminate the
+/// process. A holder stuck in a kernel filesystem wait (for example a btrfs
+/// log commit during a host I/O stall) cannot be cancelled by aborting; doing
+/// so only adds a core dump to the stalled disk and drops warm daemon state.
 fn decision(entries: &mut [Entry], now: Instant) -> Option<(bool, Vec<Entry>)> {
-    let mut abort = false;
+    let mut holding = false;
     let mut notify = false;
     for entry in entries.iter_mut() {
-        if now.saturating_duration_since(entry.since) < entry.limit {
+        if entry.reported || now.saturating_duration_since(entry.since) < entry.limit {
             continue;
         }
-        if entry.phase == Phase::Holding {
-            abort = true;
-        } else if !entry.reported {
-            entry.reported = true;
-            notify = true;
-        }
+        entry.reported = true;
+        notify = true;
+        holding |= entry.phase == Phase::Holding;
     }
-    (abort || notify).then(|| (abort, entries.to_vec()))
+    notify.then(|| (holding, entries.to_vec()))
+}
+
+/// Operator kill switch for the holder watchdog thread. `off`, `0`, `false`
+/// or `no` in either variable skips the monitor (and its diagnostics I/O).
+/// `SOLDR_LOCK_WATCHDOG` is honored so soldr's embedded zccache can be
+/// configured from one runner environment.
+pub(crate) const LOCK_WATCHDOG_ENV_VARS: [&str; 2] =
+    ["ZCCACHE_LOCK_WATCHDOG", "SOLDR_LOCK_WATCHDOG"];
+
+fn watchdog_disabled_by(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        value.eq_ignore_ascii_case("off")
+            || value == "0"
+            || value.eq_ignore_ascii_case("false")
+            || value.eq_ignore_ascii_case("no")
+    })
+}
+
+fn watchdog_disabled() -> bool {
+    LOCK_WATCHDOG_ENV_VARS
+        .iter()
+        .any(|name| watchdog_disabled_by(std::env::var(name).ok().as_deref()))
 }
 
 fn start() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
+        if watchdog_disabled() {
+            return;
+        }
         let sender = reporter().clone();
         if let Err(error) = std::thread::Builder::new()
             .name("zccache-lock-watchdog".into())
@@ -226,11 +253,8 @@ fn start() {
                 std::thread::sleep(Duration::from_millis(100));
                 let now = Instant::now();
                 let observation = with_entries(|entries| decision(entries, now));
-                if let Some((abort, entries)) = observation {
-                    let text = report(&entries, now, abort);
-                    if abort {
-                        abort_after_report(&sender, text);
-                    }
+                if let Some((holding, entries)) = observation {
+                    let text = report(&entries, now, holding);
                     let _ = sender.try_send(Diagnostic {
                         text,
                         complete: None,

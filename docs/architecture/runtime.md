@@ -94,16 +94,19 @@ The private `sync_watchdog` owner registers waiters and short critical-section
 holders with RAII tickets. `State` callbacks and native guards have a 15-second
 hold budget, independent of their acquisition argument. A dedicated OS thread
 checks every 100 milliseconds, so a blocked async executor cannot suppress the
-check. An overdue holder queues every registered holder/waiter site, owner
-identity, thread and nanosecond timing, then aborts after allowing at most 250 ms
-for diagnostic delivery. Overdue waiters are reported once without aborting:
-a queue behind legitimate work is not a broken holder.
+check. An overdue holder or waiter queues every registered holder/waiter site,
+owner identity, thread and nanosecond timing once, and the process keeps
+running. A hold overrun is a diagnostic, never a termination: the observed
+overruns are holders blocked in kernel filesystem waits (a btrfs log commit
+during a host I/O stall), which an abort cannot interrupt, and the resulting
+core dump only adds I/O to the stalled disk and discards warm daemon state.
+A queue behind legitimate work is likewise not a broken holder.
 Acquisition expiry retains its existing recoverable or essential failure
 contract. Essential expiry also dumps the registry. Direct stderr writes bypass
 libtest print capture. A separate process-lifetime writer and a one-entry queue
 keep blocked stderr or logging locks off the monitor/termination path. Reports
 are best effort when that bounded sink is unavailable; termination still runs.
-No tracing callback runs before abort. Formatting runs outside the registry lock.
+No tracing callback runs before an essential-acquisition abort. Formatting runs outside the registry lock.
 Cancellation, normal guard release, recovered poison and panic unwinding remove
 their tickets. Failure to start the watchdog aborts rather than silently disabling it.
 
@@ -151,8 +154,7 @@ Watchdog regressions use `bosn run --task lock-watchdog-test` and
 120-second materialization hold limit in an isolated child process.
 
 These boundaries prevent data guards from spanning awaits and require budgets
-for the covered lock/wait APIs. The holder watchdog terminates the process on
-observed overruns; it does not cancel arbitrary callbacks in place, guarantee a
+for the covered lock/wait APIs. The holder watchdog reports observed overruns; it does not terminate the process, cancel arbitrary callbacks in place, guarantee a
 hard real-time deadline, interrupt an uninterruptible kernel syscall, or establish
 a global order between operation permits.
 
