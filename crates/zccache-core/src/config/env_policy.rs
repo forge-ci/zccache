@@ -351,10 +351,22 @@ mod tests {
 
     #[test]
     fn registry_records_native_capture_as_default_on() {
-        assert_eq!(ENVIRONMENT_VARIABLES.len(), OWNED_BOOLEAN_COUNT + 1);
+        let default_on = [
+            NATIVE_CRASH_CAPTURE_ENV,
+            LOCK_WATCHDOG_ENV,
+            SOLDR_LOCK_WATCHDOG_ENV,
+        ];
+        assert_eq!(
+            ENVIRONMENT_VARIABLES.len(),
+            OWNED_BOOLEAN_COUNT + default_on.len()
+        );
         assert!(ENVIRONMENT_VARIABLES
             .iter()
-            .filter(|declaration| declaration.name != NATIVE_CRASH_CAPTURE_ENV)
+            .filter(|declaration| default_on.contains(&declaration.name))
+            .all(|declaration| declaration.kind == EnvironmentVariableKind::DefaultOnBoolean));
+        assert!(ENVIRONMENT_VARIABLES
+            .iter()
+            .filter(|declaration| !default_on.contains(&declaration.name))
             .all(|declaration| declaration.kind == EnvironmentVariableKind::OwnedBoolean));
         assert_eq!(
             ENVIRONMENT_VARIABLES[4].kind,
