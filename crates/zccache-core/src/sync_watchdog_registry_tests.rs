@@ -23,16 +23,21 @@ fn long_wait_reports_once_without_terminating_legitimate_holder() {
             ..entry
         },
     ];
-    let (abort, snapshot) = decision(&mut entries, now).unwrap();
-    assert!(!abort);
-    let text = report(&snapshot, now, abort);
+    let (holding, snapshot) = decision(&mut entries, now).unwrap();
+    assert!(!holding);
+    let text = report(&snapshot, now, holding);
     assert!(text.contains("Waiting") && text.contains("Holding"));
     assert!(decision(&mut entries, now).is_none(), "wait reported twice");
+    let later = now + Duration::from_secs(91);
+    let (holding, snapshot) = decision(&mut entries, later).unwrap();
     assert!(
-        decision(&mut entries, now + Duration::from_secs(91))
-            .unwrap()
-            .0,
-        "an exclusive copy must terminate after its longer hold budget"
+        holding,
+        "an overdue exclusive copy must be reported as a hold"
+    );
+    assert!(report(&snapshot, later, holding).contains("lock hold exceeded"));
+    assert!(
+        decision(&mut entries, later + Duration::from_secs(600)).is_none(),
+        "an overdue holder is reported once, never escalated to termination"
     );
 }
 
@@ -116,5 +121,15 @@ fn holder_report_child() {
             .unwrap()
             .block_on(state.with_for(Duration::from_secs(5), operation)),
         _ => panic!("unexpected holder diagnostic child case"),
+    }
+}
+
+#[test]
+fn lock_watchdog_kill_switch_values() {
+    for off in ["off", "OFF", "0", "false", "no", " off "] {
+        assert!(crate::config::lock_watchdog_disabled_by(Some(off)), "{off}");
+    }
+    for on in [None, Some("on"), Some("1"), Some("")] {
+        assert!(!crate::config::lock_watchdog_disabled_by(on), "{on:?}");
     }
 }

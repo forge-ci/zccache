@@ -5,7 +5,7 @@
 use super::*;
 use std::time::Duration;
 
-fn assert_terminates(case: &str, budget: Duration, kind: &str) {
+fn assert_reports_without_abort(case: &str, budget: Duration, kind: &str) {
     let output = zccache_core::wait::output_for(
         kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
             .args([
@@ -13,11 +13,13 @@ fn assert_terminates(case: &str, budget: Duration, kind: &str) {
                 "daemon::spawn_exclusion::watchdog_tests::watchdog_child",
             ])
             .env("ZCCACHE_SPAWN_WATCHDOG_TEST_CASE", case),
-        budget + Duration::from_secs(5),
+        budget + Duration::from_secs(20),
     )
-    .expect("spawn/materialization holder must terminate within its hold budget");
-    assert_ne!(output.exit.raw_code(), 0);
+    .expect("an overdue spawn/materialization holder must be allowed to finish");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Overrunning the hold budget is reported, never fatal: the holder may be
+    // blocked in a stalled filesystem syscall that an abort cannot cancel.
+    assert_eq!(output.exit.raw_code(), 0, "{stderr}");
     assert!(stderr.contains("lock hold exceeded"), "{stderr}");
     let holding = stderr
         .lines()
@@ -37,14 +39,14 @@ fn assert_terminates(case: &str, budget: Duration, kind: &str) {
 }
 
 #[test]
-fn watchdog_terminates_wedged_spawn_holder() {
-    assert_terminates("spawn", zccache_core::sync::STATE_TIMEOUT, "RwLock(read)");
+fn watchdog_reports_slow_spawn_holder_without_abort() {
+    assert_reports_without_abort("spawn", zccache_core::sync::STATE_TIMEOUT, "RwLock(read)");
 }
 
 #[test]
-fn watchdog_terminates_wedged_materialization_holder() {
+fn watchdog_reports_slow_materialization_holder_without_abort() {
     // Exercise the actual production copy budget, without a test-only override.
-    assert_terminates(
+    assert_reports_without_abort(
         "materialize",
         zccache_core::sync::STATE_TIMEOUT * 8,
         "RwLock(write)",
@@ -77,6 +79,16 @@ fn park_forever() -> ! {
     }
 }
 
+/// Hold past `budget` (plus the monitor period and report delivery), release
+/// and exit cleanly. The watchdog must have reported, not aborted, by then.
+fn overrun_then_release<G>(holder: G, budget: Duration) {
+    std::thread::sleep(budget + Duration::from_secs(2));
+    drop(holder);
+    // Let the waiter take the lock and register before the process exits.
+    std::thread::sleep(Duration::from_millis(200));
+    std::process::exit(0);
+}
+
 #[test]
 fn watchdog_child() {
     let Ok(case) = std::env::var("ZCCACHE_SPAWN_WATCHDOG_TEST_CASE") else {
@@ -101,24 +113,24 @@ fn watchdog_child() {
                 .unwrap();
         }
         "spawn" => {
-            let _holder = spawn_shared();
+            let holder = spawn_shared();
             std::thread::spawn(|| {
                 let _waiter = SPAWN_MATERIALIZE_LOCK
                     .write_for(zccache_core::sync::OPERATION_TIMEOUT)
                     .unwrap();
                 park_forever();
             });
-            park_forever();
+            overrun_then_release(holder, zccache_core::sync::STATE_TIMEOUT);
         }
         "materialize" => {
-            let _holder = materialize_exclusive();
+            let holder = materialize_exclusive();
             std::thread::spawn(|| {
                 let _waiter = SPAWN_MATERIALIZE_LOCK
                     .read_for(zccache_core::sync::OPERATION_TIMEOUT)
                     .unwrap();
                 park_forever();
             });
-            park_forever();
+            overrun_then_release(holder, zccache_core::sync::STATE_TIMEOUT * 8);
         }
         _ => panic!("unknown spawn watchdog case"),
     }

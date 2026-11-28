@@ -49,11 +49,13 @@ fn assert_holder_report(case: &str) {
     }
 }
 
-fn assert_holder_is_terminated(case: &str) {
-    // Diagnostic delivery includes filesystem I/O and is best effort within
-    // the production 250 ms abort grace. Acknowledge it independently, then
-    // prove the real wedged callback still terminates with unchanged budgets.
+fn assert_slow_holder_survives(case: &str) {
+    // Diagnostic delivery is still acknowledged independently.
     assert_holder_report(case);
+    // A holder that overruns its hold budget (as one blocked in a stalled
+    // fsync does) is reported, then allowed to finish. The watchdog must not
+    // abort the process: aborting cannot interrupt the kernel wait and adds a
+    // core dump to the already stalled disk.
     let cache = tempfile::tempdir().unwrap();
     let output = crate::wait::output_for(
         kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
@@ -61,31 +63,32 @@ fn assert_holder_is_terminated(case: &str) {
             .env("ZCCACHE_CACHE_DIR", cache.path())
             .env("ZCCACHE_DAEMON_STATE_DIR", cache.path())
             .env("ZCCACHE_WATCHDOG_TEST_CASE", case),
-        STATE_TIMEOUT + Duration::from_secs(5),
+        STATE_TIMEOUT + Duration::from_secs(20),
     )
-    .expect("a wedged holder must terminate before the parent deadline");
-    assert_ne!(
+    .expect("a slow holder must finish before the parent deadline");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
         output.exit.raw_code(),
         0,
-        "wedged holder exited successfully"
+        "slow holder must not be terminated: {stderr}"
     );
-    #[cfg(unix)]
-    assert_eq!(output.exit.raw_code(), -6, "wedged holder must abort");
+    assert!(stderr.contains("lock hold exceeded"), "{stderr}");
+    assert!(stderr.contains("Holding"), "{stderr}");
 }
 
 #[test]
-fn watchdog_terminates_blocked_state_callback() {
-    assert_holder_is_terminated("blocking-state");
+fn watchdog_reports_slow_state_callback_without_abort() {
+    assert_slow_holder_survives("blocking-state");
 }
 
 #[test]
-fn watchdog_terminates_blocked_async_callback() {
-    assert_holder_is_terminated("async-state");
+fn watchdog_reports_slow_async_callback_without_abort() {
+    assert_slow_holder_survives("async-state");
 }
 
 #[test]
-fn watchdog_terminates_native_guard_holder() {
-    assert_holder_is_terminated("native");
+fn watchdog_reports_slow_native_guard_holder_without_abort() {
+    assert_slow_holder_survives("native");
 }
 
 fn assert_termination_with_unread_stderr(case: &str) {
@@ -125,11 +128,6 @@ fn assert_termination_with_unread_stderr(case: &str) {
     assert!(
         report.contains("bounded synchronization failed") || report.contains("lock hold exceeded")
     );
-}
-
-#[test]
-fn blocked_stderr_cannot_disable_holder_termination() {
-    assert_termination_with_unread_stderr("blocked-stderr");
 }
 
 #[test]
@@ -229,12 +227,6 @@ fn watchdog_child() {
     let Ok(case) = std::env::var("ZCCACHE_WATCHDOG_TEST_CASE") else {
         return;
     };
-    if case == "blocked-stderr" {
-        let lock = crate::blocking_sync::Mutex::new(0);
-        let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
-        block_stderr();
-        park_forever();
-    }
     if case == "blocked-acquisition-stderr" {
         let lock = crate::blocking_sync::Mutex::with_hold_limit(0, Duration::from_secs(60));
         let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
@@ -267,24 +259,16 @@ fn watchdog_child() {
         std::thread::sleep(STATE_TIMEOUT + Duration::from_millis(250));
         return;
     }
+    // Outlive the hold budget, plus the monitor period and report delivery.
+    let overrun = STATE_TIMEOUT + Duration::from_secs(2);
     if case == "native" {
-        let lock = Arc::new(crate::blocking_sync::Mutex::new(0));
+        let lock = crate::blocking_sync::Mutex::new(0);
         let _holder = lock.lock_for(Duration::from_secs(60)).unwrap();
-        let waiter = Arc::clone(&lock);
-        std::thread::spawn(move || {
-            let _waiter = waiter.lock_for(Duration::from_secs(60)).unwrap();
-            park_forever();
-        });
-        park_forever();
+        std::thread::sleep(overrun);
+        return;
     }
-    let state = Arc::new(State::new(0));
-    let waiter = Arc::clone(&state);
-    let operation = move |_: &mut i32| {
-        std::thread::spawn(move || {
-            waiter.with_blocking_for(Duration::from_secs(60), |_| ());
-        });
-        park_forever();
-    };
+    let state = State::new(0);
+    let operation = move |_: &mut i32| std::thread::sleep(overrun);
     match case.as_str() {
         "blocking-state" => state.with_blocking_for(Duration::from_secs(60), operation),
         "async-state" => tokio::runtime::Builder::new_current_thread()
